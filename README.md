@@ -67,6 +67,7 @@ exe downloads.
 - Navigate restaurants with mouse wheel, header buttons, or `Left/Right` (`A`/`D`)
 - Toggle allergens, diet highlights, and price groups
 - Themes: dark, light, blue, green, ...
+- Highlight favorite dishes
 - Automatic/manual refresh
 - Run at startup
 

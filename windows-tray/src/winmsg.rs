@@ -10,9 +10,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DefWindowProcW, DestroyWindow, GetCursorPos, GetWindowLongPtrW, GetWindowRect, KillTimer,
     LoadCursorW, PostQuitMessage, RegisterClassExW, SetForegroundWindow, SetTimer,
     SetWindowLongPtrW, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, IDC_ARROW,
-    WM_ACTIVATE, WM_APP, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_KEYDOWN, WM_LBUTTONUP,
-    WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_PAINT, WM_RBUTTONUP, WM_TIMER,
-    WNDCLASSEXW,
+    WM_ACTIVATE, WM_APP, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_KEYDOWN, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_PAINT, WM_RBUTTONUP,
+    WM_TIMER, WNDCLASSEXW,
 };
 
 pub const TRAY_WND_CLASS: &str = "CompassLunchTrayWindow";
@@ -242,6 +242,7 @@ pub unsafe extern "system" fn popup_wndproc(
         WM_ACTIVATE => {
             let app = app_from_hwnd(hwnd);
             if wparam.0 == 0 {
+                popup::cancel_text_selection(hwnd);
                 if !app.is_null() {
                     let app = &*(app);
                     app.persist_settings();
@@ -250,6 +251,15 @@ pub unsafe extern "system" fn popup_wndproc(
                 } else {
                     popup::hide_popup(hwnd);
                 }
+            }
+            LRESULT(0)
+        }
+        WM_LBUTTONDOWN => {
+            let x = (lparam.0 as u32 & 0xFFFF) as i16 as i32;
+            let y = ((lparam.0 as u32 >> 16) & 0xFFFF) as i16 as i32;
+            if popup::header_button_at(hwnd, x, y).is_none() && popup::begin_text_selection(hwnd, x, y)
+            {
+                return LRESULT(0);
             }
             LRESULT(0)
         }
@@ -262,6 +272,7 @@ pub unsafe extern "system" fn popup_wndproc(
             let key = wparam.0 as u32;
             match key {
                 0x1B => {
+                    popup::cancel_text_selection(hwnd);
                     app.persist_settings();
                     let state = app.snapshot();
                     popup::begin_close_animation(hwnd, &state);
@@ -276,6 +287,12 @@ pub unsafe extern "system" fn popup_wndproc(
             }
             LRESULT(0)
         }
+        WM_MOUSEMOVE => {
+            let x = (lparam.0 as u32 & 0xFFFF) as i16 as i32;
+            let y = ((lparam.0 as u32 >> 16) & 0xFFFF) as i16 as i32;
+            popup::update_text_selection(hwnd, x, y);
+            LRESULT(0)
+        }
         WM_LBUTTONUP => {
             let app = app_from_hwnd(hwnd);
             if app.is_null() {
@@ -284,6 +301,10 @@ pub unsafe extern "system" fn popup_wndproc(
             let app = &*(app);
             let x = (lparam.0 as u32 & 0xFFFF) as i16 as i32;
             let y = ((lparam.0 as u32 >> 16) & 0xFFFF) as i16 as i32;
+            if popup::text_selection_active(hwnd) {
+                let _ = popup::finish_text_selection(hwnd, x, y);
+                return LRESULT(0);
+            }
             if let Some(action) = popup::header_button_at(hwnd, x, y) {
                 match action {
                     popup::HeaderButtonAction::Prev => {
@@ -303,6 +324,7 @@ pub unsafe extern "system" fn popup_wndproc(
             LRESULT(0)
         }
         WM_RBUTTONUP => {
+            popup::cancel_text_selection(hwnd);
             let app = app_from_hwnd(hwnd);
             if !app.is_null() {
                 let app = &*(app);

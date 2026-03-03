@@ -1,6 +1,7 @@
 use crate::api;
 use crate::app::{AppState, FetchStatus};
 use crate::cache;
+use crate::favorites;
 use crate::format::{
     date_and_time_line, menu_heading, normalize_text, split_component_suffix, student_price_eur,
     text_for, PriceGroups,
@@ -9,6 +10,7 @@ use crate::model::TodayMenu;
 use crate::restaurant::{available_restaurants, Provider, Restaurant};
 use crate::settings::Settings;
 use crate::util::to_wstring;
+use std::cmp::{max, min};
 use std::sync::{Mutex, OnceLock};
 use time::{OffsetDateTime, UtcOffset};
 use windows::core::PCWSTR;
@@ -42,9 +44,13 @@ const POPUP_OPEN_ANIM_MS: i64 = 120;
 const POPUP_CLOSE_ANIM_MS: i64 = 90;
 const POPUP_SWITCH_ANIM_MS: i64 = 120;
 const POPUP_SWITCH_OFFSET_PX: i32 = 6;
+const FAVORITES_RELOAD_INTERVAL_MS: i64 = 1000;
+const BULLET_PREFIX: &str = "▸ ";
 
 static POPUP_LINE_BUDGET_CACHE: OnceLock<Mutex<Option<PopupLineBudgetCache>>> = OnceLock::new();
 static POPUP_ANIMATION: OnceLock<Mutex<Option<PopupAnimation>>> = OnceLock::new();
+static FAVORITES_CACHE: OnceLock<Mutex<FavoritesCache>> = OnceLock::new();
+static POPUP_SELECTION_STATE: OnceLock<Mutex<PopupSelectionState>> = OnceLock::new();
 
 pub const POPUP_ANIM_TIMER_ID: usize = 100;
 
@@ -84,11 +90,80 @@ struct PopupLineBudgetCache {
 enum Line {
     Heading(String),
     Text(String),
-    TextWithSuffixSegments {
+    MenuItem {
         main: String,
-        segments: Vec<(String, bool)>,
+        suffix_segments: Vec<(String, bool)>,
     },
     Spacer,
+}
+
+#[derive(Debug, Clone)]
+struct WrappedRow {
+    text: String,
+    start: usize,
+    end: usize,
+}
+
+#[derive(Debug, Clone)]
+struct SelectableBoundary {
+    byte_index: usize,
+    x_offset: i32,
+}
+
+#[derive(Debug, Clone)]
+struct SelectableRow {
+    item_id: usize,
+    start: usize,
+    end: usize,
+    left: i32,
+    top: i32,
+    bottom: i32,
+    boundaries: Vec<SelectableBoundary>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct SelectableLayout {
+    hwnd: HWND,
+    items: Vec<String>,
+    rows: Vec<SelectableRow>,
+}
+
+#[derive(Debug, Clone)]
+struct DrawCapture {
+    layout: SelectableLayout,
+}
+
+#[derive(Debug, Clone)]
+struct SelectionDrag {
+    item_id: usize,
+    anchor: usize,
+    current: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SelectionRange {
+    item_id: usize,
+    start: usize,
+    end: usize,
+}
+
+#[derive(Debug, Clone, Default)]
+struct PopupSelectionState {
+    layout: Option<SelectableLayout>,
+    drag: Option<SelectionDrag>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct FavoritesSnapshot {
+    snippets_lower: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct FavoritesCache {
+    loaded: bool,
+    mtime_ms: i64,
+    next_check_epoch_ms: i64,
+    snapshot: FavoritesSnapshot,
 }
 
 #[derive(Debug, Clone)]
@@ -215,6 +290,7 @@ pub fn resize_popup_keep_position(hwnd: HWND, state: &AppState) {
 pub fn hide_popup(hwnd: HWND) {
     unsafe {
         clear_animation_state(hwnd);
+        clear_selection_state(hwnd);
         let _ = KillTimer(hwnd, POPUP_ANIM_TIMER_ID);
         ShowWindow(hwnd, SW_HIDE);
     }
@@ -297,6 +373,7 @@ pub fn begin_close_animation(hwnd: HWND, state: &AppState) {
     if !is_visible(hwnd) {
         return;
     }
+    clear_selection_state(hwnd);
     start_animation(
         hwnd,
         POPUP_CLOSE_ANIM_MS,
@@ -313,6 +390,7 @@ pub fn begin_switch_animation(
     new_state: &AppState,
     direction: i32,
 ) {
+    clear_selection_state(hwnd);
     start_animation(
         hwnd,
         POPUP_SWITCH_ANIM_MS,
@@ -390,6 +468,130 @@ pub fn header_button_at(hwnd: HWND, x: i32, y: i32) -> Option<HeaderButtonAction
     }
 }
 
+pub fn begin_text_selection(hwnd: HWND, x: i32, y: i32) -> bool {
+    let mut state = match selection_state().lock() {
+        Ok(value) => value,
+        Err(_) => return false,
+    };
+    let layout = match state.layout.as_ref() {
+        Some(value) if value.hwnd == hwnd => value,
+        _ => return false,
+    };
+    let Some((row, anchor_index)) = hit_test_row(layout, x, y) else {
+        return false;
+    };
+    state.drag = Some(SelectionDrag {
+        item_id: row.item_id,
+        anchor: anchor_index,
+        current: anchor_index,
+    });
+    unsafe {
+        InvalidateRect(hwnd, None, true);
+    }
+    true
+}
+
+pub fn update_text_selection(hwnd: HWND, x: i32, y: i32) {
+    let mut state = match selection_state().lock() {
+        Ok(value) => value,
+        Err(_) => return,
+    };
+    let layout = match state.layout.as_ref() {
+        Some(value) if value.hwnd == hwnd => value.clone(),
+        _ => return,
+    };
+    let Some(drag) = state.drag.as_mut() else {
+        return;
+    };
+    let Some((row, next_index)) = hit_test_row_for_item(&layout, drag.item_id, x, y) else {
+        return;
+    };
+    if row.item_id != drag.item_id {
+        return;
+    }
+    if drag.current != next_index {
+        drag.current = next_index;
+        unsafe {
+            InvalidateRect(hwnd, None, true);
+        }
+    }
+}
+
+pub fn finish_text_selection(hwnd: HWND, x: i32, y: i32) -> bool {
+    let snippet = {
+        let mut state = match selection_state().lock() {
+            Ok(value) => value,
+            Err(_) => return false,
+        };
+        let layout = match state.layout.as_ref() {
+            Some(value) if value.hwnd == hwnd => value.clone(),
+            _ => return false,
+        };
+        let Some(mut drag) = state.drag.take() else {
+            return false;
+        };
+        if let Some((_, next_index)) = hit_test_row_for_item(&layout, drag.item_id, x, y) {
+            drag.current = next_index;
+        }
+        let selected = selected_range(drag.anchor, drag.current);
+        if selected.0 == selected.1 {
+            None
+        } else {
+            let item = layout.items.get(drag.item_id);
+            item.and_then(|text| {
+                text.get(selected.0..selected.1)
+                    .map(|value| favorites::normalize_snippet(value))
+                    .filter(|value| !value.is_empty())
+            })
+        }
+    };
+
+    let Some(value) = snippet else {
+        unsafe {
+            InvalidateRect(hwnd, None, true);
+        }
+        return false;
+    };
+
+    if favorites::toggle_snippet(&value).is_err() {
+        unsafe {
+            InvalidateRect(hwnd, None, true);
+        }
+        return false;
+    }
+
+    invalidate_favorites_cache();
+    unsafe {
+        InvalidateRect(hwnd, None, true);
+    }
+    true
+}
+
+pub fn cancel_text_selection(hwnd: HWND) {
+    let mut state = match selection_state().lock() {
+        Ok(value) => value,
+        Err(_) => return,
+    };
+    if state.drag.is_some() {
+        state.drag = None;
+        unsafe {
+            InvalidateRect(hwnd, None, true);
+        }
+    }
+}
+
+pub fn text_selection_active(hwnd: HWND) -> bool {
+    let state = match selection_state().lock() {
+        Ok(value) => value,
+        Err(_) => return false,
+    };
+    state
+        .layout
+        .as_ref()
+        .is_some_and(|layout| layout.hwnd == hwnd)
+        && state.drag.is_some()
+}
+
 pub fn paint_popup(hwnd: HWND, state: &AppState) {
     unsafe {
         let mut ps = PAINTSTRUCT::default();
@@ -415,6 +617,7 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
         let line_height = metrics.tmHeight as i32 + LINE_GAP;
         let content_width = (width - PADDING_X * 2).max(40);
         let animation = current_animation_frame(hwnd);
+        let favorites = current_favorites_snapshot();
 
         let header_rect = RECT {
             left: rect.left,
@@ -463,6 +666,7 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
         DeleteObject(divider_brush);
 
         if let Some(frame) = animation {
+            clear_selection_layout(hwnd);
             match frame {
                 PopupAnimationFrame::Open {
                     lines,
@@ -480,6 +684,8 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
                     let layer_suffix = lerp_color(palette.bg_color, palette.suffix_color, progress);
                     let layer_suffix_highlight =
                         lerp_color(palette.bg_color, palette.suffix_highlight_color, progress);
+                    let layer_favorites =
+                        lerp_color(palette.bg_color, palette.favorite_highlight_color, progress);
                     draw_content_layer(
                         hdc,
                         &title,
@@ -492,6 +698,8 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
                             header_title_color: layer_title,
                             suffix_color: layer_suffix,
                             suffix_highlight_color: layer_suffix_highlight,
+                            favorite_highlight_color: layer_favorites,
+                            selection_bg_color: palette.selection_bg_color,
                             layout: &layout,
                             metrics: &metrics,
                             line_height,
@@ -499,6 +707,9 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
                             bold_font,
                             small_font,
                             small_bold_font,
+                            favorites: &favorites,
+                            selection: None,
+                            capture: None,
                             y_offset,
                         },
                     );
@@ -522,6 +733,11 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
                         palette.suffix_highlight_color,
                         1.0 - progress,
                     );
+                    let layer_favorites = lerp_color(
+                        palette.bg_color,
+                        palette.favorite_highlight_color,
+                        1.0 - progress,
+                    );
                     draw_content_layer(
                         hdc,
                         &title,
@@ -534,6 +750,8 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
                             header_title_color: layer_title,
                             suffix_color: layer_suffix,
                             suffix_highlight_color: layer_suffix_highlight,
+                            favorite_highlight_color: layer_favorites,
+                            selection_bg_color: palette.selection_bg_color,
                             layout: &layout,
                             metrics: &metrics,
                             line_height,
@@ -541,6 +759,9 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
                             bold_font,
                             small_font,
                             small_bold_font,
+                            favorites: &favorites,
+                            selection: None,
+                            capture: None,
                             y_offset,
                         },
                     );
@@ -571,6 +792,11 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
                         palette.suffix_highlight_color,
                         1.0 - progress,
                     );
+                    let old_favorites = lerp_color(
+                        palette.bg_color,
+                        palette.favorite_highlight_color,
+                        1.0 - progress,
+                    );
                     let new_body_text =
                         lerp_color(palette.bg_color, palette.body_text_color, progress);
                     let new_heading = lerp_color(palette.bg_color, palette.heading_color, progress);
@@ -579,6 +805,8 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
                     let new_suffix = lerp_color(palette.bg_color, palette.suffix_color, progress);
                     let new_suffix_highlight =
                         lerp_color(palette.bg_color, palette.suffix_highlight_color, progress);
+                    let new_favorites =
+                        lerp_color(palette.bg_color, palette.favorite_highlight_color, progress);
                     draw_content_layer(
                         hdc,
                         &old_title,
@@ -591,6 +819,8 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
                             header_title_color: old_title_color,
                             suffix_color: old_suffix,
                             suffix_highlight_color: old_suffix_highlight,
+                            favorite_highlight_color: old_favorites,
+                            selection_bg_color: palette.selection_bg_color,
                             layout: &layout,
                             metrics: &metrics,
                             line_height,
@@ -598,6 +828,9 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
                             bold_font,
                             small_font,
                             small_bold_font,
+                            favorites: &favorites,
+                            selection: None,
+                            capture: None,
                             y_offset: old_offset,
                         },
                     );
@@ -613,6 +846,8 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
                             header_title_color: new_title_color,
                             suffix_color: new_suffix,
                             suffix_highlight_color: new_suffix_highlight,
+                            favorite_highlight_color: new_favorites,
+                            selection_bg_color: palette.selection_bg_color,
                             layout: &layout,
                             metrics: &metrics,
                             line_height,
@@ -620,6 +855,9 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
                             bold_font,
                             small_font,
                             small_bold_font,
+                            favorites: &favorites,
+                            selection: None,
+                            capture: None,
                             y_offset: new_offset,
                         },
                     );
@@ -628,6 +866,13 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
         } else {
             let lines = build_lines(state);
             let title = header_title(state);
+            let selection = current_selection_range(hwnd);
+            let mut capture = DrawCapture {
+                layout: SelectableLayout {
+                    hwnd,
+                    ..Default::default()
+                },
+            };
             draw_content_layer(
                 hdc,
                 &title,
@@ -640,6 +885,8 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
                     header_title_color: palette.header_title_color,
                     suffix_color: palette.suffix_color,
                     suffix_highlight_color: palette.suffix_highlight_color,
+                    favorite_highlight_color: palette.favorite_highlight_color,
+                    selection_bg_color: palette.selection_bg_color,
                     layout: &layout,
                     metrics: &metrics,
                     line_height,
@@ -647,9 +894,13 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
                     bold_font,
                     small_font,
                     small_bold_font,
+                    favorites: &favorites,
+                    selection: selection.as_ref(),
+                    capture: Some(&mut capture),
                     y_offset: 0,
                 },
             );
+            store_selection_layout(capture.layout);
         }
 
         SelectObject(hdc, _old_font);
@@ -669,6 +920,8 @@ struct DrawLayerParams<'a> {
     header_title_color: COLORREF,
     suffix_color: COLORREF,
     suffix_highlight_color: COLORREF,
+    favorite_highlight_color: COLORREF,
+    selection_bg_color: COLORREF,
     layout: &'a HeaderLayout,
     metrics: &'a TEXTMETRICW,
     line_height: i32,
@@ -676,6 +929,9 @@ struct DrawLayerParams<'a> {
     bold_font: HFONT,
     small_font: HFONT,
     small_bold_font: HFONT,
+    favorites: &'a FavoritesSnapshot,
+    selection: Option<&'a SelectionRange>,
+    capture: Option<&'a mut DrawCapture>,
     y_offset: i32,
 }
 
@@ -695,7 +951,11 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
     let title_y = ((HEADER_HEIGHT - params.metrics.tmHeight as i32) / 2 - 1) + params.y_offset;
     draw_text_line(hdc, &clipped_title, title_x, title_y);
 
+    let bullet_width = text_width_with_font(hdc, params.normal_font, BULLET_PREFIX);
+    let main_wrap_width = (params.content_width - bullet_width).max(24);
+
     let mut y = HEADER_HEIGHT + PADDING_Y + params.y_offset;
+    let mut capture = params.capture;
     for line in lines {
         match line {
             Line::Heading(text) => {
@@ -728,22 +988,37 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                     }
                 }
             }
-            Line::TextWithSuffixSegments { main, segments } => {
+            Line::MenuItem {
+                main,
+                suffix_segments,
+            } => {
                 unsafe {
                     SelectObject(hdc, params.normal_font);
                     SetTextColor(hdc, params.body_text_color);
                 }
+                let favorite_ranges = favorite_match_ranges(main, params.favorites);
                 let styled_width = text_with_suffix_width(
                     hdc,
                     params.normal_font,
                     params.small_font,
                     params.small_bold_font,
                     main,
-                    segments,
+                    suffix_segments,
+                    bullet_width,
                 );
+                let item_id = if let Some(ref mut draw_capture) = capture {
+                    let id = draw_capture.layout.items.len();
+                    draw_capture.layout.items.push(main.clone());
+                    Some(id)
+                } else {
+                    None
+                };
+                let selected_item_range = item_id
+                    .and_then(|id| params.selection.filter(|sel| sel.item_id == id).copied());
+
                 if styled_width <= params.content_width {
                     let mut suffix_width = 0;
-                    for (segment, bold) in segments {
+                    for (segment, bold) in suffix_segments {
                         let font = if *bold {
                             params.small_bold_font
                         } else {
@@ -754,19 +1029,65 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                         }
                         suffix_width += text_width(hdc, segment);
                     }
-                    let max_main = (params.content_width - suffix_width - 4).max(24);
+                    let max_main = (params.content_width - bullet_width - suffix_width - 4).max(24);
                     unsafe {
                         SelectObject(hdc, params.normal_font);
+                        SetTextColor(hdc, params.body_text_color);
                     }
                     let clipped_main = fit_text_to_width(hdc, main, max_main);
-                    let main_width = text_width(hdc, &clipped_main);
-                    draw_text_line(hdc, &clipped_main, PADDING_X, y);
-                    if !segments.is_empty() {
-                        let suffix_x = PADDING_X + main_width + 4;
+                    let line_x = PADDING_X + bullet_width;
+                    let row = WrappedRow {
+                        start: 0,
+                        end: clipped_main.len(),
+                        text: clipped_main.clone(),
+                    };
+                    let row_segments = segments_for_row(
+                        &clipped_main,
+                        row.start,
+                        row.end,
+                        &favorite_ranges,
+                    );
+                    draw_text_line(hdc, BULLET_PREFIX, PADDING_X, y);
+                    if let Some(selection) = selected_item_range {
+                        draw_selection_bg_for_row(
+                            hdc,
+                            line_x,
+                            y,
+                            params.line_height,
+                            &row,
+                            selection.start,
+                            selection.end,
+                            params.selection_bg_color,
+                        );
+                    }
+                    draw_main_segments(
+                        hdc,
+                        &row_segments,
+                        line_x,
+                        y,
+                        params.normal_font,
+                        params.body_text_color,
+                        params.favorite_highlight_color,
+                    );
+                    if let Some(ref mut draw_capture) = capture {
+                        add_selectable_row(
+                            &mut draw_capture.layout,
+                            item_id.unwrap_or(0),
+                            &row,
+                            line_x,
+                            y,
+                            params.line_height,
+                            hdc,
+                            params.normal_font,
+                        );
+                    }
+                    if !suffix_segments.is_empty() {
+                        let main_width = text_width_with_font(hdc, params.normal_font, &clipped_main);
+                        let suffix_x = line_x + main_width + 4;
                         if suffix_x < (PADDING_X + params.content_width) {
                             draw_text_segments(
                                 hdc,
-                                segments,
+                                suffix_segments,
                                 suffix_x,
                                 y + 1,
                                 params.small_font,
@@ -779,21 +1100,58 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                     y += params.line_height;
                     continue;
                 }
-                unsafe {
-                    SelectObject(hdc, params.normal_font);
-                }
-                let wrapped_main = wrap_text_to_width(hdc, main, params.content_width);
+
+                let wrapped_main =
+                    wrap_text_to_width_with_font_rows(hdc, params.normal_font, main, main_wrap_width);
                 if wrapped_main.is_empty() {
                     y += params.line_height;
                 } else {
-                    for row in wrapped_main {
-                        draw_text_line(hdc, &row, PADDING_X, y);
+                    for (idx, row) in wrapped_main.iter().enumerate() {
+                        let line_x = PADDING_X + bullet_width;
+                        if idx == 0 {
+                            draw_text_line(hdc, BULLET_PREFIX, PADDING_X, y);
+                        }
+                        if let Some(selection) = selected_item_range {
+                            draw_selection_bg_for_row(
+                                hdc,
+                                line_x,
+                                y,
+                                params.line_height,
+                                row,
+                                selection.start,
+                                selection.end,
+                                params.selection_bg_color,
+                            );
+                        }
+                        let row_segments =
+                            segments_for_row(main, row.start, row.end, &favorite_ranges);
+                        draw_main_segments(
+                            hdc,
+                            &row_segments,
+                            line_x,
+                            y,
+                            params.normal_font,
+                            params.body_text_color,
+                            params.favorite_highlight_color,
+                        );
+                        if let Some(ref mut draw_capture) = capture {
+                            add_selectable_row(
+                                &mut draw_capture.layout,
+                                item_id.unwrap_or(0),
+                                row,
+                                line_x,
+                                y,
+                                params.line_height,
+                                hdc,
+                                params.normal_font,
+                            );
+                        }
                         y += params.line_height;
                     }
                 }
 
-                if !segments.is_empty() {
-                    let suffix_plain = flatten_suffix_segments(segments);
+                if !suffix_segments.is_empty() {
+                    let suffix_plain = flatten_suffix_segments(suffix_segments);
                     if !suffix_plain.is_empty() {
                         let wrapped_suffix = wrap_text_to_width_with_font(
                             hdc,
@@ -804,8 +1162,8 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                         if wrapped_suffix.len() == 1 {
                             draw_text_segments(
                                 hdc,
-                                segments,
-                                PADDING_X,
+                                suffix_segments,
+                                PADDING_X + bullet_width,
                                 y + 1,
                                 params.small_font,
                                 params.small_bold_font,
@@ -821,7 +1179,7 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                                 SetTextColor(hdc, params.suffix_color);
                             }
                             for row in wrapped_suffix {
-                                draw_text_line(hdc, &row, PADDING_X, y);
+                                draw_text_line(hdc, &row, PADDING_X + bullet_width, y);
                                 y += params.line_height;
                             }
                         }
@@ -835,6 +1193,197 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
     }
 }
 
+fn draw_main_segments(
+    hdc: HDC,
+    segments: &[(String, bool)],
+    x: i32,
+    y: i32,
+    font: HFONT,
+    normal_color: COLORREF,
+    highlight_color: COLORREF,
+) {
+    let mut cursor = x;
+    for (text, highlighted) in segments {
+        unsafe {
+            SelectObject(hdc, font);
+            SetTextColor(
+                hdc,
+                if *highlighted {
+                    highlight_color
+                } else {
+                    normal_color
+                },
+            );
+        }
+        draw_text_line(hdc, text, cursor, y);
+        cursor += text_width_with_font(hdc, font, text);
+    }
+}
+
+fn draw_selection_bg_for_row(
+    hdc: HDC,
+    row_x: i32,
+    row_y: i32,
+    line_height: i32,
+    row: &WrappedRow,
+    sel_start: usize,
+    sel_end: usize,
+    selection_bg_color: COLORREF,
+) {
+    let start = max(row.start, sel_start);
+    let end = min(row.end, sel_end);
+    if start >= end {
+        return;
+    }
+    let local_start = start.saturating_sub(row.start);
+    let local_end = end.saturating_sub(row.start);
+    let Some(left_slice) = row.text.get(..local_start) else {
+        return;
+    };
+    let Some(right_slice) = row.text.get(..local_end) else {
+        return;
+    };
+    let left_width = text_width(hdc, left_slice);
+    let right_width = text_width(hdc, right_slice);
+    let rect = RECT {
+        left: row_x + left_width,
+        top: row_y,
+        right: row_x + right_width,
+        bottom: row_y + line_height - 1,
+    };
+    unsafe {
+        let brush = CreateSolidBrush(selection_bg_color);
+        FillRect(hdc, &rect, brush);
+        DeleteObject(brush);
+    }
+}
+
+fn add_selectable_row(
+    layout: &mut SelectableLayout,
+    item_id: usize,
+    row: &WrappedRow,
+    row_x: i32,
+    row_y: i32,
+    line_height: i32,
+    hdc: HDC,
+    font: HFONT,
+) {
+    layout.rows.push(SelectableRow {
+        item_id,
+        start: row.start,
+        end: row.end,
+        left: row_x,
+        top: row_y,
+        bottom: row_y + line_height,
+        boundaries: row_boundaries(hdc, font, &row.text),
+    });
+}
+
+fn row_boundaries(hdc: HDC, font: HFONT, text: &str) -> Vec<SelectableBoundary> {
+    let mut out = Vec::new();
+    out.push(SelectableBoundary {
+        byte_index: 0,
+        x_offset: 0,
+    });
+    let mut x = 0;
+    for (idx, ch) in text.char_indices() {
+        let mut single = String::new();
+        single.push(ch);
+        x += text_width_with_font(hdc, font, &single);
+        out.push(SelectableBoundary {
+            byte_index: idx + ch.len_utf8(),
+            x_offset: x,
+        });
+    }
+    out
+}
+
+fn segments_for_row(
+    full_text: &str,
+    row_start: usize,
+    row_end: usize,
+    ranges: &[(usize, usize)],
+) -> Vec<(String, bool)> {
+    let Some(row_slice) = full_text.get(row_start..row_end) else {
+        return vec![(String::new(), false)];
+    };
+    let mut out = Vec::new();
+    let mut cursor = row_start;
+    for (start, end) in ranges {
+        let overlap_start = max(*start, row_start);
+        let overlap_end = min(*end, row_end);
+        if overlap_start >= overlap_end {
+            continue;
+        }
+        if cursor < overlap_start {
+            if let Some(normal) = full_text.get(cursor..overlap_start) {
+                out.push((normal.to_string(), false));
+            }
+        }
+        if let Some(highlight) = full_text.get(overlap_start..overlap_end) {
+            out.push((highlight.to_string(), true));
+        }
+        cursor = overlap_end;
+    }
+    if cursor < row_end {
+        if let Some(rest) = full_text.get(cursor..row_end) {
+            out.push((rest.to_string(), false));
+        }
+    }
+    if out.is_empty() {
+        out.push((row_slice.to_string(), false));
+    }
+    out
+}
+
+fn favorite_match_ranges(text: &str, favorites: &FavoritesSnapshot) -> Vec<(usize, usize)> {
+    if text.is_empty() || favorites.snippets_lower.is_empty() {
+        return Vec::new();
+    }
+    let lower_text = text.to_lowercase();
+    let mut candidates: Vec<(usize, usize)> = Vec::new();
+    for snippet_lower in &favorites.snippets_lower {
+        if snippet_lower.is_empty() {
+            continue;
+        }
+        let mut search_start = 0usize;
+        while search_start < lower_text.len() {
+            let Some(found) = lower_text[search_start..].find(snippet_lower) else {
+                break;
+            };
+            let start = search_start + found;
+            let end = start + snippet_lower.len();
+            if text.get(start..end).is_some() {
+                candidates.push((start, end));
+            }
+            search_start = end;
+        }
+    }
+
+    candidates.sort_by(|a, b| {
+        let len_a = a.1.saturating_sub(a.0);
+        let len_b = b.1.saturating_sub(b.0);
+        len_b.cmp(&len_a).then(a.0.cmp(&b.0))
+    });
+
+    let mut kept: Vec<(usize, usize)> = Vec::new();
+    for range in candidates {
+        if kept
+            .iter()
+            .any(|existing| ranges_overlap(*existing, range))
+        {
+            continue;
+        }
+        kept.push(range);
+    }
+    kept.sort_by_key(|range| range.0);
+    kept
+}
+
+fn ranges_overlap(a: (usize, usize), b: (usize, usize)) -> bool {
+    max(a.0, b.0) < min(a.1, b.1)
+}
+
 fn measure_lines_layout(
     hdc: HDC,
     normal_font: HFONT,
@@ -845,6 +1394,8 @@ fn measure_lines_layout(
     wrap_content_width: i32,
 ) -> LineLayoutMetrics {
     let wrap_width = wrap_content_width.max(40);
+    let bullet_width = text_width_with_font(hdc, normal_font, BULLET_PREFIX);
+    let main_wrap_width = (wrap_width - bullet_width).max(24);
     let mut required_content_width = 0;
     let mut wrapped_line_count = 0usize;
 
@@ -862,30 +1413,34 @@ fn measure_lines_layout(
                 let rows = wrapped_line_count_for_text(hdc, normal_font, text, wrap_width);
                 wrapped_line_count += rows.max(1);
             }
-            Line::TextWithSuffixSegments { main, segments } => {
+            Line::MenuItem {
+                main,
+                suffix_segments,
+            } => {
                 let styled_width = text_with_suffix_width(
                     hdc,
                     normal_font,
                     small_font,
                     small_bold_font,
                     main,
-                    segments,
+                    suffix_segments,
+                    bullet_width,
                 );
                 required_content_width = required_content_width.max(styled_width);
                 if styled_width <= wrap_width {
                     wrapped_line_count += 1;
                 } else {
                     let main_rows =
-                        wrapped_line_count_for_text(hdc, normal_font, main, wrap_width).max(1);
+                        wrapped_line_count_for_text(hdc, normal_font, main, main_wrap_width).max(1);
                     wrapped_line_count += main_rows;
-                    if !segments.is_empty() {
-                        let suffix_plain = flatten_suffix_segments(segments);
+                    if !suffix_segments.is_empty() {
+                        let suffix_plain = flatten_suffix_segments(suffix_segments);
                         if !suffix_plain.is_empty() {
                             let suffix_rows = wrapped_line_count_for_text(
                                 hdc,
                                 small_font,
                                 &suffix_plain,
-                                wrap_width,
+                                main_wrap_width,
                             )
                             .max(1);
                             wrapped_line_count += suffix_rows;
@@ -910,85 +1465,187 @@ fn wrapped_line_count_for_text(hdc: HDC, font: HFONT, text: &str, max_width: i32
     wrapped.len()
 }
 
-fn wrap_text_to_width_with_font(hdc: HDC, font: HFONT, text: &str, max_width: i32) -> Vec<String> {
+fn wrap_text_to_width_with_font_rows(
+    hdc: HDC,
+    font: HFONT,
+    text: &str,
+    max_width: i32,
+) -> Vec<WrappedRow> {
     unsafe {
         let old = SelectObject(hdc, font);
-        let wrapped = wrap_text_to_width(hdc, text, max_width);
+        let wrapped = wrap_text_to_width_rows(hdc, text, max_width);
         SelectObject(hdc, old);
         wrapped
     }
 }
 
+fn wrap_text_to_width_with_font(hdc: HDC, font: HFONT, text: &str, max_width: i32) -> Vec<String> {
+    wrap_text_to_width_with_font_rows(hdc, font, text, max_width)
+        .into_iter()
+        .map(|row| row.text)
+        .collect()
+}
+
 fn wrap_text_to_width(hdc: HDC, text: &str, max_width: i32) -> Vec<String> {
+    wrap_text_to_width_rows(hdc, text, max_width)
+        .into_iter()
+        .map(|row| row.text)
+        .collect()
+}
+
+fn wrap_text_to_width_rows(hdc: HDC, text: &str, max_width: i32) -> Vec<WrappedRow> {
     let clean = normalize_text(text);
     if clean.is_empty() {
         return Vec::new();
     }
     let limit = max_width.max(16);
     if text_width(hdc, &clean) <= limit {
-        return vec![clean];
+        return vec![WrappedRow {
+            text: clean.clone(),
+            start: 0,
+            end: clean.len(),
+        }];
     }
 
-    let words: Vec<String> = clean
-        .split_whitespace()
-        .map(|part| part.trim().to_string())
-        .filter(|part| !part.is_empty())
-        .collect();
+    let words = word_bounds(&clean);
     if words.is_empty() {
-        return vec![clean];
+        return vec![WrappedRow {
+            text: clean.clone(),
+            start: 0,
+            end: clean.len(),
+        }];
     }
 
-    let mut rows: Vec<String> = Vec::new();
-    let mut current = String::new();
+    let mut rows: Vec<WrappedRow> = Vec::new();
+    let mut current_start: Option<usize> = None;
+    let mut current_end: usize = 0;
     for word in words {
-        let candidate = if current.is_empty() {
-            word.clone()
-        } else {
-            format!("{} {}", current, word)
+        let candidate_range = match current_start {
+            Some(start) => start..word.end,
+            None => word.start..word.end,
         };
-        if text_width(hdc, &candidate) <= limit {
-            current = candidate;
+        let candidate_text = &clean[candidate_range.clone()];
+        if text_width(hdc, candidate_text) <= limit {
+            if current_start.is_none() {
+                current_start = Some(word.start);
+            }
+            current_end = word.end;
             continue;
         }
 
-        if !current.is_empty() {
-            rows.push(current.clone());
-            current.clear();
+        if let Some(start) = current_start {
+            let text = clean[start..current_end].to_string();
+            rows.push(WrappedRow {
+                text,
+                start,
+                end: current_end,
+            });
+            current_start = None;
+            current_end = 0;
         }
 
-        if text_width(hdc, &word) <= limit {
-            current = word;
+        let single_word = &clean[word.start..word.end];
+        if text_width(hdc, single_word) <= limit {
+            current_start = Some(word.start);
+            current_end = word.end;
         } else {
-            rows.extend(split_long_token_to_width(hdc, &word, limit));
+            rows.extend(split_long_token_to_width_rows(
+                hdc,
+                &clean,
+                word.start,
+                word.end,
+                limit,
+            ));
         }
     }
 
-    if !current.is_empty() {
-        rows.push(current);
+    if let Some(start) = current_start {
+        rows.push(WrappedRow {
+            text: clean[start..current_end].to_string(),
+            start,
+            end: current_end,
+        });
     }
+
     if rows.is_empty() {
-        rows.push(clean);
+        rows.push(WrappedRow {
+            text: clean.clone(),
+            start: 0,
+            end: clean.len(),
+        });
     }
     rows
 }
 
-fn split_long_token_to_width(hdc: HDC, token: &str, max_width: i32) -> Vec<String> {
+#[derive(Debug, Clone, Copy)]
+struct WordBounds {
+    start: usize,
+    end: usize,
+}
+
+fn word_bounds(text: &str) -> Vec<WordBounds> {
+    let mut out = Vec::new();
+    let mut start: Option<usize> = None;
+    for (idx, ch) in text.char_indices() {
+        if ch.is_whitespace() {
+            if let Some(s) = start.take() {
+                out.push(WordBounds { start: s, end: idx });
+            }
+        } else if start.is_none() {
+            start = Some(idx);
+        }
+    }
+    if let Some(s) = start {
+        out.push(WordBounds {
+            start: s,
+            end: text.len(),
+        });
+    }
+    out
+}
+
+fn split_long_token_to_width_rows(
+    hdc: HDC,
+    full_text: &str,
+    start: usize,
+    end: usize,
+    max_width: i32,
+) -> Vec<WrappedRow> {
     let mut rows = Vec::new();
+    let token = &full_text[start..end];
     let mut current = String::new();
-    for ch in token.chars() {
+    let mut current_start = start;
+    let mut current_end = start;
+
+    for (offset, ch) in token.char_indices() {
+        let ch_len = ch.len_utf8();
         let mut candidate = current.clone();
         candidate.push(ch);
         if !current.is_empty() && text_width(hdc, &candidate) > max_width {
-            rows.push(current.clone());
+            rows.push(WrappedRow {
+                text: current.clone(),
+                start: current_start,
+                end: current_end,
+            });
             current.clear();
+            current_start = start + offset;
         }
         current.push(ch);
+        current_end = start + offset + ch_len;
     }
     if !current.is_empty() {
-        rows.push(current);
+        rows.push(WrappedRow {
+            text: current,
+            start: current_start,
+            end: current_end,
+        });
     }
     if rows.is_empty() {
-        rows.push(token.to_string());
+        rows.push(WrappedRow {
+            text: token.to_string(),
+            start,
+            end,
+        });
     }
     rows
 }
@@ -1009,10 +1666,11 @@ fn text_with_suffix_width(
     small_bold_font: HFONT,
     main: &str,
     segments: &[(String, bool)],
+    bullet_width: i32,
 ) -> i32 {
     let main_width = text_width_with_font(hdc, normal_font, main);
     if segments.is_empty() {
-        return main_width;
+        return bullet_width + main_width;
     }
 
     let mut suffix_width = 0;
@@ -1020,7 +1678,7 @@ fn text_with_suffix_width(
         let font = if *bold { small_bold_font } else { small_font };
         suffix_width += text_width_with_font(hdc, font, segment);
     }
-    main_width + suffix_width + 4
+    bullet_width + main_width + suffix_width + 4
 }
 
 fn flatten_suffix_segments(segments: &[(String, bool)]) -> String {
@@ -1734,22 +2392,22 @@ fn append_menus(
             if main.is_empty() {
                 continue;
             }
-            let main_text = main;
-            if !show_allergens {
-                lines.push(Line::Text(format!("▸ {}", main_text)));
-            } else if !suffix.is_empty() {
+            if !show_allergens || suffix.is_empty() {
+                lines.push(Line::MenuItem {
+                    main,
+                    suffix_segments: Vec::new(),
+                });
+            } else {
                 let segments = build_suffix_segments(
                     &suffix,
                     highlight_gluten_free,
                     highlight_veg,
                     highlight_lactose_free,
                 );
-                lines.push(Line::TextWithSuffixSegments {
-                    main: format!("▸ {}", main_text),
-                    segments,
+                lines.push(Line::MenuItem {
+                    main,
+                    suffix_segments: segments,
                 });
-            } else {
-                lines.push(Line::Text(format!("▸ {}", main_text)));
             }
         }
     }
@@ -1765,7 +2423,7 @@ fn build_suffix_segments(
     let mut current = String::new();
     let mut token_mode = false;
 
-    let mut push_token = |token: &str, out: &mut Vec<(String, bool)>| {
+    let push_token = |token: &str, out: &mut Vec<(String, bool)>| {
         if token.is_empty() {
             return;
         }
@@ -1807,6 +2465,177 @@ fn build_suffix_segments(
     segments
 }
 
+fn selection_state() -> &'static Mutex<PopupSelectionState> {
+    POPUP_SELECTION_STATE.get_or_init(|| Mutex::new(PopupSelectionState::default()))
+}
+
+fn clear_selection_layout(hwnd: HWND) {
+    if let Ok(mut state) = selection_state().lock() {
+        if state
+            .layout
+            .as_ref()
+            .is_some_and(|layout| layout.hwnd == hwnd)
+        {
+            state.layout = None;
+        }
+        state.drag = None;
+    }
+}
+
+fn clear_selection_state(hwnd: HWND) {
+    clear_selection_layout(hwnd);
+}
+
+fn store_selection_layout(layout: SelectableLayout) {
+    if let Ok(mut state) = selection_state().lock() {
+        if let Some(ref existing_drag) = state.drag {
+            let keep_drag = state
+                .layout
+                .as_ref()
+                .is_some_and(|old| old.hwnd == layout.hwnd)
+                && state
+                    .layout
+                    .as_ref()
+                    .is_some_and(|old| old.items.get(existing_drag.item_id).is_some())
+                && layout.items.get(existing_drag.item_id).is_some();
+            if !keep_drag {
+                state.drag = None;
+            }
+        }
+        state.layout = Some(layout);
+    }
+}
+
+fn current_selection_range(hwnd: HWND) -> Option<SelectionRange> {
+    let state = selection_state().lock().ok()?;
+    let layout = state.layout.as_ref()?;
+    if layout.hwnd != hwnd {
+        return None;
+    }
+    let drag = state.drag.as_ref()?;
+    let item = layout.items.get(drag.item_id)?;
+    let (mut start, mut end) = selected_range(drag.anchor, drag.current);
+    start = start.min(item.len());
+    end = end.min(item.len());
+    if start >= end {
+        return None;
+    }
+    Some(SelectionRange {
+        item_id: drag.item_id,
+        start,
+        end,
+    })
+}
+
+fn hit_test_row(layout: &SelectableLayout, x: i32, y: i32) -> Option<(&SelectableRow, usize)> {
+    let row = layout
+        .rows
+        .iter()
+        .find(|row| y >= row.top && y <= row.bottom)?;
+    let local = row_byte_index_from_x(row, x);
+    Some((row, row.start + local))
+}
+
+fn hit_test_row_for_item(
+    layout: &SelectableLayout,
+    item_id: usize,
+    x: i32,
+    y: i32,
+) -> Option<(&SelectableRow, usize)> {
+    let item_rows: Vec<&SelectableRow> = layout
+        .rows
+        .iter()
+        .filter(|row| row.item_id == item_id)
+        .collect();
+    if item_rows.is_empty() {
+        return None;
+    }
+
+    let row = item_rows
+        .iter()
+        .copied()
+        .find(|row| y >= row.top && y <= row.bottom)
+        .or_else(|| {
+            item_rows
+                .iter()
+                .copied()
+                .min_by_key(|row| {
+                    if y < row.top {
+                        row.top - y
+                    } else if y > row.bottom {
+                        y - row.bottom
+                    } else {
+                        0
+                    }
+                })
+        })?;
+    let local = row_byte_index_from_x(row, x);
+    Some((row, row.start + local))
+}
+
+fn row_byte_index_from_x(row: &SelectableRow, x: i32) -> usize {
+    if row.boundaries.is_empty() {
+        return 0;
+    }
+    let rel_x = (x - row.left).max(0);
+    let mut selected = 0usize;
+    for boundary in &row.boundaries {
+        if boundary.x_offset <= rel_x {
+            selected = boundary.byte_index;
+        } else {
+            break;
+        }
+    }
+    selected.min(row.end.saturating_sub(row.start))
+}
+
+fn selected_range(a: usize, b: usize) -> (usize, usize) {
+    if a <= b {
+        (a, b)
+    } else {
+        (b, a)
+    }
+}
+
+fn current_favorites_snapshot() -> FavoritesSnapshot {
+    let now = now_epoch_ms();
+    let cache_lock = FAVORITES_CACHE.get_or_init(|| Mutex::new(FavoritesCache::default()));
+    let mut cache = match cache_lock.lock() {
+        Ok(value) => value,
+        Err(_) => return FavoritesSnapshot::default(),
+    };
+    if cache.loaded && now < cache.next_check_epoch_ms {
+        return cache.snapshot.clone();
+    }
+
+    let mtime = favorites::favorites_mtime_ms().unwrap_or(-1);
+    if !cache.loaded || mtime != cache.mtime_ms {
+        let loaded = favorites::load_favorites();
+        let mut snippets_lower = Vec::new();
+        for snippet in loaded.snippets {
+            let normalized = favorites::normalize_snippet(&snippet);
+            if normalized.is_empty() {
+                continue;
+            }
+            snippets_lower.push(normalized.to_lowercase());
+        }
+        cache.snapshot = FavoritesSnapshot { snippets_lower };
+        cache.mtime_ms = mtime;
+        cache.loaded = true;
+    }
+    cache.next_check_epoch_ms = now + FAVORITES_RELOAD_INTERVAL_MS;
+    cache.snapshot.clone()
+}
+
+fn invalidate_favorites_cache() {
+    let cache_lock = FAVORITES_CACHE.get_or_init(|| Mutex::new(FavoritesCache::default()));
+    if let Ok(mut cache) = cache_lock.lock() {
+        cache.loaded = false;
+        cache.next_check_epoch_ms = 0;
+        cache.mtime_ms = -1;
+    }
+}
+
 fn now_epoch_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1844,6 +2673,8 @@ struct ThemePalette {
     header_title_color: COLORREF,
     suffix_color: COLORREF,
     suffix_highlight_color: COLORREF,
+    favorite_highlight_color: COLORREF,
+    selection_bg_color: COLORREF,
     header_bg_color: COLORREF,
     button_bg_color: COLORREF,
     divider_color: COLORREF,
@@ -1858,6 +2689,8 @@ fn theme_palette(theme: &str) -> ThemePalette {
             header_title_color: COLORREF(0x00000000),
             suffix_color: COLORREF(0x00808080),
             suffix_highlight_color: COLORREF(0x00808080),
+            favorite_highlight_color: COLORREF(0x00996600),
+            selection_bg_color: COLORREF(0x00CDEBFF),
             header_bg_color: COLORREF(0x00F3F3F3),
             button_bg_color: COLORREF(0x00DDDDDD),
             divider_color: COLORREF(0x00C9C9C9),
@@ -1869,6 +2702,8 @@ fn theme_palette(theme: &str) -> ThemePalette {
             header_title_color: COLORREF(0x00FFFFFF),
             suffix_color: COLORREF(0x00E7C7A7),
             suffix_highlight_color: COLORREF(0x00E7C7A7),
+            favorite_highlight_color: COLORREF(0x0000D6FF),
+            selection_bg_color: COLORREF(0x003E2B1A),
             header_bg_color: COLORREF(0x00733809),
             button_bg_color: COLORREF(0x00804A1A),
             divider_color: COLORREF(0x00834D1F),
@@ -1880,6 +2715,8 @@ fn theme_palette(theme: &str) -> ThemePalette {
             header_title_color: COLORREF(0x0000D000),
             suffix_color: COLORREF(0x00009000),
             suffix_highlight_color: COLORREF(0x0000D000),
+            favorite_highlight_color: COLORREF(0x0000FFFF),
+            selection_bg_color: COLORREF(0x001A2F1A),
             header_bg_color: COLORREF(0x000B1A0B),
             button_bg_color: COLORREF(0x00142D14),
             divider_color: COLORREF(0x00142D14),
@@ -1891,6 +2728,8 @@ fn theme_palette(theme: &str) -> ThemePalette {
             header_title_color: rgb(255, 255, 0),
             suffix_color: rgb(0, 255, 0),
             suffix_highlight_color: rgb(255, 0, 255),
+            favorite_highlight_color: rgb(255, 255, 0),
+            selection_bg_color: rgb(0, 0, 180),
             header_bg_color: rgb(0, 0, 180),
             button_bg_color: rgb(0, 0, 140),
             divider_color: rgb(255, 0, 0),
@@ -1902,6 +2741,8 @@ fn theme_palette(theme: &str) -> ThemePalette {
             header_title_color: rgb(0, 96, 255),
             suffix_color: rgb(0, 255, 150),
             suffix_highlight_color: rgb(255, 255, 0),
+            favorite_highlight_color: rgb(0, 255, 255),
+            selection_bg_color: rgb(0, 96, 255),
             header_bg_color: rgb(0, 215, 0),
             button_bg_color: rgb(0, 145, 0),
             divider_color: rgb(255, 0, 255),
@@ -1913,6 +2754,8 @@ fn theme_palette(theme: &str) -> ThemePalette {
             header_title_color: COLORREF(0x00FFFFFF),
             suffix_color: COLORREF(0x00B0B0B0),
             suffix_highlight_color: COLORREF(0x00B0B0B0),
+            favorite_highlight_color: COLORREF(0x0000D6FF),
+            selection_bg_color: COLORREF(0x00303030),
             header_bg_color: COLORREF(0x00101010),
             button_bg_color: COLORREF(0x00202020),
             divider_color: COLORREF(0x00202020),

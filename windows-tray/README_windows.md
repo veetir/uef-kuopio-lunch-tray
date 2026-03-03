@@ -31,6 +31,7 @@ Only do this for binaries downloaded from the official GitHub Releases page of t
 
 - Left-click tray icon: open/close the menu popup
 - Mouse wheel on tray icon: switch restaurant
+- Drag-select text on a dish row: toggle it as a favorite highlight
 - Right-click tray icon: open settings, refresh, and quit
 
 ## First-time setup
@@ -46,6 +47,7 @@ Open settings from the tray menu and set:
 
 - Settings: `%LOCALAPPDATA%\compass-lunch\settings.json`
 - Cache: `%LOCALAPPDATA%\compass-lunch\cache\`
+- Favorites: `%LOCALAPPDATA%\compass-lunch\favorites.json`
 
 To reset the app:
 
