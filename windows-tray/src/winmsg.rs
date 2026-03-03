@@ -359,7 +359,12 @@ pub unsafe extern "system" fn popup_wndproc(
             LRESULT(0)
         }
         WM_DESTROY => LRESULT(0),
-        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+        _ => {
+            if msg == windows::Win32::UI::WindowsAndMessaging::WM_NCDESTROY {
+                popup::clear_font_cache();
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
     }
 }
 

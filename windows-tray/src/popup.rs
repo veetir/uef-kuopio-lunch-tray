@@ -11,7 +11,7 @@ use crate::restaurant::{available_restaurants, Provider, Restaurant};
 use crate::settings::Settings;
 use crate::util::to_wstring;
 use std::cmp::{max, min};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use time::{OffsetDateTime, UtcOffset};
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{COLORREF, HWND, POINT, RECT};
@@ -51,6 +51,7 @@ static POPUP_LINE_BUDGET_CACHE: OnceLock<Mutex<Option<PopupLineBudgetCache>>> = 
 static POPUP_ANIMATION: OnceLock<Mutex<Option<PopupAnimation>>> = OnceLock::new();
 static FAVORITES_CACHE: OnceLock<Mutex<FavoritesCache>> = OnceLock::new();
 static POPUP_SELECTION_STATE: OnceLock<Mutex<PopupSelectionState>> = OnceLock::new();
+static POPUP_FONT_CACHE: OnceLock<Mutex<Option<PopupFontCache>>> = OnceLock::new();
 
 pub const POPUP_ANIM_TIMER_ID: usize = 100;
 
@@ -169,18 +170,18 @@ struct FavoritesCache {
 #[derive(Debug, Clone)]
 enum PopupAnimationKind {
     Open {
-        lines: Vec<Line>,
-        title: String,
+        lines: Arc<Vec<Line>>,
+        title: Arc<String>,
     },
     Close {
-        lines: Vec<Line>,
-        title: String,
+        lines: Arc<Vec<Line>>,
+        title: Arc<String>,
     },
     Switch {
-        old_lines: Vec<Line>,
-        new_lines: Vec<Line>,
-        old_title: String,
-        new_title: String,
+        old_lines: Arc<Vec<Line>>,
+        new_lines: Arc<Vec<Line>>,
+        old_title: Arc<String>,
+        new_title: Arc<String>,
         direction: i32,
     },
 }
@@ -196,23 +197,43 @@ struct PopupAnimation {
 #[derive(Debug, Clone)]
 enum PopupAnimationFrame {
     Open {
-        lines: Vec<Line>,
-        title: String,
+        lines: Arc<Vec<Line>>,
+        title: Arc<String>,
         progress: f32,
     },
     Close {
-        lines: Vec<Line>,
-        title: String,
+        lines: Arc<Vec<Line>>,
+        title: Arc<String>,
         progress: f32,
     },
     Switch {
-        old_lines: Vec<Line>,
-        new_lines: Vec<Line>,
-        old_title: String,
-        new_title: String,
+        old_lines: Arc<Vec<Line>>,
+        new_lines: Arc<Vec<Line>>,
+        old_title: Arc<String>,
+        new_title: Arc<String>,
         direction: i32,
         progress: f32,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PopupFontCacheKey {
+    theme: [u8; 16],
+    dpi_y: i32,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PopupFonts {
+    normal: HFONT,
+    bold: HFONT,
+    small: HFONT,
+    small_bold: HFONT,
+}
+
+#[derive(Debug)]
+struct PopupFontCache {
+    key: PopupFontCacheKey,
+    fonts: PopupFonts,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -296,13 +317,27 @@ pub fn hide_popup(hwnd: HWND) {
     }
 }
 
+pub fn clear_font_cache() {
+    let cache_lock = POPUP_FONT_CACHE.get_or_init(|| Mutex::new(None));
+    if let Ok(mut cache) = cache_lock.lock() {
+        if let Some(old) = cache.take() {
+            unsafe {
+                DeleteObject(old.fonts.normal);
+                DeleteObject(old.fonts.bold);
+                DeleteObject(old.fonts.small);
+                DeleteObject(old.fonts.small_bold);
+            }
+        }
+    }
+}
+
 fn begin_open_animation(hwnd: HWND, state: &AppState) {
     start_animation(
         hwnd,
         POPUP_OPEN_ANIM_MS,
         PopupAnimationKind::Open {
-            lines: build_lines(state),
-            title: header_title(state),
+            lines: Arc::new(build_lines(state)),
+            title: Arc::new(header_title(state)),
         },
     );
 }
@@ -343,13 +378,13 @@ fn current_animation_frame(hwnd: HWND) -> Option<PopupAnimationFrame> {
     let progress = (elapsed as f32 / anim.duration_ms.max(1) as f32).clamp(0.0, 1.0);
     match &anim.kind {
         PopupAnimationKind::Open { lines, title } => Some(PopupAnimationFrame::Open {
-            lines: lines.clone(),
-            title: title.clone(),
+            lines: Arc::clone(lines),
+            title: Arc::clone(title),
             progress,
         }),
         PopupAnimationKind::Close { lines, title } => Some(PopupAnimationFrame::Close {
-            lines: lines.clone(),
-            title: title.clone(),
+            lines: Arc::clone(lines),
+            title: Arc::clone(title),
             progress,
         }),
         PopupAnimationKind::Switch {
@@ -359,10 +394,10 @@ fn current_animation_frame(hwnd: HWND) -> Option<PopupAnimationFrame> {
             new_title,
             direction,
         } => Some(PopupAnimationFrame::Switch {
-            old_lines: old_lines.clone(),
-            new_lines: new_lines.clone(),
-            old_title: old_title.clone(),
-            new_title: new_title.clone(),
+            old_lines: Arc::clone(old_lines),
+            new_lines: Arc::clone(new_lines),
+            old_title: Arc::clone(old_title),
+            new_title: Arc::clone(new_title),
             direction: *direction,
             progress,
         }),
@@ -378,8 +413,8 @@ pub fn begin_close_animation(hwnd: HWND, state: &AppState) {
         hwnd,
         POPUP_CLOSE_ANIM_MS,
         PopupAnimationKind::Close {
-            lines: build_lines(state),
-            title: header_title(state),
+            lines: Arc::new(build_lines(state)),
+            title: Arc::new(header_title(state)),
         },
     );
 }
@@ -395,10 +430,10 @@ pub fn begin_switch_animation(
         hwnd,
         POPUP_SWITCH_ANIM_MS,
         PopupAnimationKind::Switch {
-            old_lines: build_lines(old_state),
-            new_lines: build_lines(new_state),
-            old_title: header_title(old_state),
-            new_title: header_title(new_state),
+            old_lines: Arc::new(build_lines(old_state)),
+            new_lines: Arc::new(build_lines(new_state)),
+            old_title: Arc::new(header_title(old_state)),
+            new_title: Arc::new(header_title(new_state)),
             direction,
         },
     );
@@ -609,8 +644,11 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
         DeleteObject(brush);
         SetBkMode(hdc, TRANSPARENT);
 
-        let (normal_font, bold_font, small_font, small_bold_font) =
-            create_fonts(hdc, &state.settings.theme);
+        let fonts = fonts_for_paint(hdc, &state.settings.theme);
+        let normal_font = fonts.normal;
+        let bold_font = fonts.bold;
+        let small_font = fonts.small;
+        let small_bold_font = fonts.small_bold;
         let _old_font = SelectObject(hdc, normal_font);
 
         let metrics = text_metrics(hdc, normal_font);
@@ -688,8 +726,8 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
                         lerp_color(palette.bg_color, palette.favorite_highlight_color, progress);
                     draw_content_layer(
                         hdc,
-                        &title,
-                        &lines,
+                        title.as_str(),
+                        lines.as_ref(),
                         DrawLayerParams {
                             width,
                             content_width,
@@ -740,8 +778,8 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
                     );
                     draw_content_layer(
                         hdc,
-                        &title,
-                        &lines,
+                        title.as_str(),
+                        lines.as_ref(),
                         DrawLayerParams {
                             width,
                             content_width,
@@ -809,8 +847,8 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
                         lerp_color(palette.bg_color, palette.favorite_highlight_color, progress);
                     draw_content_layer(
                         hdc,
-                        &old_title,
-                        &old_lines,
+                        old_title.as_str(),
+                        old_lines.as_ref(),
                         DrawLayerParams {
                             width,
                             content_width,
@@ -836,8 +874,8 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
                     );
                     draw_content_layer(
                         hdc,
-                        &new_title,
-                        &new_lines,
+                        new_title.as_str(),
+                        new_lines.as_ref(),
                         DrawLayerParams {
                             width,
                             content_width,
@@ -904,10 +942,6 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
         }
 
         SelectObject(hdc, _old_font);
-        DeleteObject(normal_font);
-        DeleteObject(bold_font);
-        DeleteObject(small_font);
-        DeleteObject(small_bold_font);
         EndPaint(hwnd, &ps);
     }
 }
@@ -1836,9 +1870,12 @@ fn text_width(hdc: HDC, text: &str) -> i32 {
 fn desired_size(hwnd: HWND, state: &AppState) -> (i32, i32) {
     unsafe {
         let hdc = windows::Win32::Graphics::Gdi::GetDC(hwnd);
+        let fonts = fonts_for_paint(hdc, &state.settings.theme);
+        let normal_font = fonts.normal;
+        let bold_font = fonts.bold;
+        let small_font = fonts.small;
+        let small_bold_font = fonts.small_bold;
         let dpi_y = GetDeviceCaps(hdc, LOGPIXELSY);
-        let (normal_font, bold_font, small_font, small_bold_font) =
-            create_fonts(hdc, &state.settings.theme);
         let current_lines = build_lines(state);
         let current_metrics = measure_lines_layout(
             hdc,
@@ -1882,10 +1919,6 @@ fn desired_size(hwnd: HWND, state: &AppState) -> (i32, i32) {
         let line_height = metrics.tmHeight as i32 + LINE_GAP;
         let height = HEADER_HEIGHT + (target_lines as i32 * line_height) + PADDING_Y * 2;
         let width = (target_content_width + PADDING_X * 2).clamp(POPUP_MIN_WIDTH, POPUP_MAX_WIDTH);
-        DeleteObject(normal_font);
-        DeleteObject(bold_font);
-        DeleteObject(small_font);
-        DeleteObject(small_bold_font);
         windows::Win32::Graphics::Gdi::ReleaseDC(hwnd, hdc);
 
         (width, height.max(HEADER_HEIGHT + 120))
@@ -1965,6 +1998,60 @@ fn create_fonts(hdc: HDC, theme: &str) -> (HFONT, HFONT, HFONT, HFONT) {
         );
         (normal, bold, small, small_bold)
     }
+}
+
+fn theme_key(theme: &str) -> [u8; 16] {
+    let mut out = [0u8; 16];
+    for (idx, byte) in theme.as_bytes().iter().take(16).enumerate() {
+        out[idx] = byte.to_ascii_lowercase();
+    }
+    out
+}
+
+fn fonts_for_paint(hdc: HDC, theme: &str) -> PopupFonts {
+    let dpi_y = unsafe { GetDeviceCaps(hdc, LOGPIXELSY) };
+    let key = PopupFontCacheKey {
+        theme: theme_key(theme),
+        dpi_y,
+    };
+    let cache_lock = POPUP_FONT_CACHE.get_or_init(|| Mutex::new(None));
+    let mut cache = match cache_lock.lock() {
+        Ok(value) => value,
+        Err(_) => {
+            let (normal, bold, small, small_bold) = create_fonts(hdc, theme);
+            return PopupFonts {
+                normal,
+                bold,
+                small,
+                small_bold,
+            };
+        }
+    };
+
+    if let Some(existing) = cache.as_ref() {
+        if existing.key == key {
+            return existing.fonts;
+        }
+    }
+
+    if let Some(old) = cache.take() {
+        unsafe {
+            DeleteObject(old.fonts.normal);
+            DeleteObject(old.fonts.bold);
+            DeleteObject(old.fonts.small);
+            DeleteObject(old.fonts.small_bold);
+        }
+    }
+
+    let (normal, bold, small, small_bold) = create_fonts(hdc, theme);
+    let fonts = PopupFonts {
+        normal,
+        bold,
+        small,
+        small_bold,
+    };
+    *cache = Some(PopupFontCache { key, fonts });
+    fonts
 }
 
 fn build_lines(state: &AppState) -> Vec<Line> {
