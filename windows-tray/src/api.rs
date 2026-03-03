@@ -9,6 +9,7 @@ use regex::Regex;
 use reqwest::blocking::Client;
 use serde_json::Value;
 use std::collections::HashSet;
+use std::sync::OnceLock;
 use time::{Month, OffsetDateTime};
 
 pub struct FetchOutput {
@@ -40,15 +41,12 @@ fn fetch_compass(settings: &Settings, restaurant: Restaurant) -> FetchOutput {
         "https://www.compass-group.fi/menuapi/feed/json?costNumber={}&language={}",
         restaurant.code, settings.language
     );
-    let client = match Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-    {
+    let client = match shared_http_client() {
         Ok(c) => c,
         Err(err) => {
             return FetchOutput {
                 ok: false,
-                error_message: err.to_string(),
+                error_message: err,
                 today_menu: None,
                 restaurant_name: String::new(),
                 restaurant_url: String::new(),
@@ -133,15 +131,12 @@ fn fetch_compass_rss(settings: &Settings, restaurant: Restaurant) -> FetchOutput
         rss_cost_number, settings.language
     );
 
-    let client = match Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-    {
+    let client = match shared_http_client() {
         Ok(c) => c,
         Err(err) => {
             return FetchOutput {
                 ok: false,
-                error_message: err.to_string(),
+                error_message: err,
                 today_menu: None,
                 restaurant_name: restaurant.name.to_string(),
                 restaurant_url: restaurant.url.unwrap_or_default().to_string(),
@@ -206,15 +201,12 @@ fn fetch_huomen(settings: &Settings, restaurant: Restaurant) -> FetchOutput {
         huomen_api_base, separator, settings.language
     );
 
-    let client = match Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-    {
+    let client = match shared_http_client() {
         Ok(c) => c,
         Err(err) => {
             return FetchOutput {
                 ok: false,
-                error_message: err.to_string(),
+                error_message: err,
                 today_menu: None,
                 restaurant_name: restaurant.name.to_string(),
                 restaurant_url: restaurant.url.unwrap_or_default().to_string(),
@@ -409,15 +401,12 @@ fn fetch_antell(settings: &Settings, restaurant: Restaurant) -> FetchOutput {
             slug, weekday
         )
     };
-    let client = match Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-    {
+    let client = match shared_http_client() {
         Ok(c) => c,
         Err(err) => {
             return FetchOutput {
                 ok: false,
-                error_message: err.to_string(),
+                error_message: err,
                 today_menu: None,
                 restaurant_name: restaurant.name.to_string(),
                 restaurant_url: restaurant.url.unwrap_or_default().to_string(),
@@ -465,6 +454,20 @@ fn fetch_antell(settings: &Settings, restaurant: Restaurant) -> FetchOutput {
             raw_json: String::new(),
             payload_date: String::new(),
         },
+    }
+}
+
+fn shared_http_client() -> Result<&'static Client, String> {
+    static HTTP_CLIENT: OnceLock<Result<Client, String>> = OnceLock::new();
+    let init = HTTP_CLIENT.get_or_init(|| {
+        Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .map_err(|err| err.to_string())
+    });
+    match init {
+        Ok(client) => Ok(client),
+        Err(err) => Err(err.clone()),
     }
 }
 

@@ -50,7 +50,6 @@ struct MemoryMenuEntry {
     restaurant_name: String,
     restaurant_url: String,
     provider: Provider,
-    raw_payload: String,
     payload_date: String,
 }
 
@@ -127,6 +126,11 @@ impl App {
 
     pub fn snapshot(&self) -> AppState {
         self.state.lock().unwrap().clone()
+    }
+
+    pub fn with_state<R>(&self, f: impl FnOnce(&AppState) -> R) -> R {
+        let state = self.state.lock().unwrap();
+        f(&state)
     }
 
     pub fn load_cache_for_current(&self) -> bool {
@@ -236,7 +240,6 @@ impl App {
             restaurant_name: result.restaurant_name.clone(),
             restaurant_url: result.restaurant_url.clone(),
             provider: result.provider,
-            raw_payload: result.raw_json.clone(),
             payload_date: result.payload_date.clone(),
         };
         let mut cache = self.memory_menu_cache.lock().unwrap();
@@ -266,7 +269,7 @@ impl App {
         }
 
         let mut state = self.state.lock().unwrap();
-        state.raw_payload = entry.raw_payload;
+        state.raw_payload.clear();
         state.restaurant_name = entry.restaurant_name;
         state.restaurant_url = entry.restaurant_url;
         state.today_menu = entry.today_menu;
@@ -314,7 +317,7 @@ impl App {
         let (settings, requested_language, is_current_code) = {
             let mut state = self.state.lock().unwrap();
             let is_current = state.settings.restaurant_code == code;
-            if is_current && mark_loading_when_empty && state.raw_payload.is_empty() {
+            if is_current && mark_loading_when_empty && state.today_menu.is_none() {
                 state.status = FetchStatus::Loading;
                 state.loading_started_epoch_ms = now_epoch_ms();
             }
@@ -428,7 +431,7 @@ impl App {
                 self.store_memory_from_fetch_output(&requested_code, &requested_language, &result);
                 FetchApplyOutcome::CurrentSuccess
             } else {
-                if !state.raw_payload.is_empty() {
+                if state.today_menu.is_some() || !state.raw_payload.is_empty() {
                     state.status = FetchStatus::Stale;
                     state.loading_started_epoch_ms = 0;
                     state.stale_network_error = is_probable_network_error(&result.error_message);

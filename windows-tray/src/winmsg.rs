@@ -234,8 +234,7 @@ pub unsafe extern "system" fn popup_wndproc(
             let app = app_from_hwnd(hwnd);
             if !app.is_null() {
                 let app = &*(app);
-                let state = app.snapshot();
-                popup::paint_popup(hwnd, &state);
+                app.with_state(|state| popup::paint_popup(hwnd, state));
             }
             LRESULT(0)
         }
