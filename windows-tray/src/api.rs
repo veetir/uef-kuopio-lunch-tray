@@ -30,7 +30,7 @@ pub fn fetch_today(settings: &Settings) -> FetchOutput {
     match restaurant.provider {
         Provider::Compass => fetch_compass(settings, restaurant),
         Provider::CompassRss => fetch_compass_rss(settings, restaurant),
-        Provider::Antell => fetch_antell(restaurant),
+        Provider::Antell => fetch_antell(settings, restaurant),
         Provider::HuomenJson => fetch_huomen(settings, restaurant),
     }
 }
@@ -380,7 +380,7 @@ fn normalize_menus(set_menus: Vec<ApiSetMenu>) -> Vec<MenuGroup> {
         .collect()
 }
 
-fn fetch_antell(restaurant: Restaurant) -> FetchOutput {
+fn fetch_antell(settings: &Settings, restaurant: Restaurant) -> FetchOutput {
     let today_key = local_today_key();
     let slug = match restaurant.antell_slug {
         Some(s) => s,
@@ -397,11 +397,18 @@ fn fetch_antell(restaurant: Restaurant) -> FetchOutput {
             };
         }
     };
-    let url = format!(
-        "https://antell.fi/lounas/kuopio/{}/?print_lunch_day={}&print_lunch_list_day=1",
-        slug,
-        weekday_token()
-    );
+    let weekday = weekday_token();
+    let url = if settings.language == "en" && restaurant.code == "antell-round" {
+        format!(
+            "https://antell.fi/en/lunch/kuopio/{}/?print_lunch_list_day=1&print_lunch_day=panel-{}",
+            slug, weekday
+        )
+    } else {
+        format!(
+            "https://antell.fi/lounas/kuopio/{}/?print_lunch_day={}&print_lunch_list_day=1",
+            slug, weekday
+        )
+    };
     let client = match Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
