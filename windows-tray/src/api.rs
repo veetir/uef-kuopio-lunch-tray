@@ -669,9 +669,8 @@ fn parse_rss_tag_raw(xml_text: &str, tag_name: &str) -> String {
 }
 
 fn parse_rss_item_raw(xml_text: &str) -> String {
-    Regex::new(r"(?is)<item\b[^>]*>([\s\S]*?)</item>")
-        .ok()
-        .and_then(|re| re.captures(xml_text))
+    rss_item_re()
+        .captures(xml_text)
         .and_then(|captures| captures.get(1).map(|m| m.as_str().to_string()))
         .unwrap_or_default()
 }
@@ -682,11 +681,7 @@ fn parse_rss_menu_date_iso(date_text: &str) -> String {
         return String::new();
     }
 
-    let regex = match Regex::new(r"(\d{1,2})[-./](\d{1,2})[-./](\d{2,4})") {
-        Ok(re) => re,
-        Err(_) => return String::new(),
-    };
-    let captures = match regex.captures(&clean) {
+    let captures = match date_token_re().captures(&clean) {
         Some(c) => c,
         None => return String::new(),
     };
@@ -768,17 +763,11 @@ fn normalize_rss_component_line(raw_line: &str) -> String {
         return String::new();
     }
 
-    if Regex::new(r"\((?:\*|[A-Za-z]{1,8})(?:\s*,\s*(?:\*|[A-Za-z]{1,8}))*\)\s*$")
-        .ok()
-        .is_some_and(|re| re.is_match(&line))
-    {
+    if trailing_allergen_group_re().is_match(&line) {
         return line;
     }
 
-    let compact = Regex::new(r"\s*[;,]\s*$")
-        .ok()
-        .map(|re| re.replace(&line, "").to_string())
-        .unwrap_or_else(|| line.clone());
+    let compact = trailing_punct_re().replace(&line, "").to_string();
 
     let parts: Vec<String> = compact
         .split(',')
@@ -813,19 +802,15 @@ fn normalize_rss_component_line(raw_line: &str) -> String {
         return compact;
     }
 
-    let star_re = Regex::new(r"^(.*\S)\s*\*$").ok();
-    if let Some(re) = star_re {
-        if let Some(captures) = re.captures(&main_text) {
-            if let Some(raw_main) = captures.get(1) {
-                main_text = normalize_text(raw_main.as_str());
-                suffix_tokens.insert(0, "*".to_string());
-            }
+    if let Some(captures) = trailing_star_re().captures(&main_text) {
+        if let Some(raw_main) = captures.get(1) {
+            main_text = normalize_text(raw_main.as_str());
+            suffix_tokens.insert(0, "*".to_string());
         }
     }
 
-    let trailing_re = Regex::new(r"^(.*\S)\s+([A-Za-z*]{1,4})$").ok();
-    while let Some(re) = &trailing_re {
-        let captures = match re.captures(&main_text) {
+    loop {
+        let captures = match trailing_token_re().captures(&main_text) {
             Some(c) => c,
             None => break,
         };
@@ -857,18 +842,15 @@ fn normalize_rss_component_line(raw_line: &str) -> String {
 
 fn parse_rss_components(description_raw: &str) -> Vec<String> {
     let decoded = decode_html_entities(description_raw).to_string();
-    let paragraph_re = Regex::new(r"(?is)<p[^>]*>([\s\S]*?)</p>").ok();
 
     let mut components = Vec::new();
-    if let Some(re) = paragraph_re {
-        for captures in re.captures_iter(&decoded) {
-            let line = captures
-                .get(1)
-                .map(|m| normalize_rss_component_line(&strip_html_text(m.as_str())))
-                .unwrap_or_default();
-            if !line.is_empty() {
-                components.push(line);
-            }
+    for captures in paragraph_re().captures_iter(&decoded) {
+        let line = captures
+            .get(1)
+            .map(|m| normalize_rss_component_line(&strip_html_text(m.as_str())))
+            .unwrap_or_default();
+        if !line.is_empty() {
+            components.push(line);
         }
     }
 
@@ -883,11 +865,51 @@ fn parse_rss_components(description_raw: &str) -> Vec<String> {
 }
 
 fn strip_html_text(raw_html: &str) -> String {
-    let without_tags = Regex::new(r"<[^>]*>")
-        .ok()
-        .map(|re| re.replace_all(raw_html, " ").to_string())
-        .unwrap_or_else(|| raw_html.to_string());
+    let without_tags = html_tag_re().replace_all(raw_html, " ").to_string();
     normalize_text(decode_html_entities(&without_tags).as_ref())
+}
+
+fn rss_item_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(?is)<item\b[^>]*>([\s\S]*?)</item>").expect("rss item regex"))
+}
+
+fn date_token_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(\d{1,2})[-./](\d{1,2})[-./](\d{2,4})").expect("date regex"))
+}
+
+fn trailing_allergen_group_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"\((?:\*|[A-Za-z]{1,8})(?:\s*,\s*(?:\*|[A-Za-z]{1,8}))*\)\s*$")
+            .expect("trailing allergen regex")
+    })
+}
+
+fn trailing_punct_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"\s*[;,]\s*$").expect("trailing punct regex"))
+}
+
+fn trailing_star_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"^(.*\S)\s*\*$").expect("trailing star regex"))
+}
+
+fn trailing_token_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"^(.*\S)\s+([A-Za-z*]{1,4})$").expect("trailing token regex"))
+}
+
+fn paragraph_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(?is)<p[^>]*>([\s\S]*?)</p>").expect("paragraph regex"))
+}
+
+fn html_tag_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"<[^>]*>").expect("html tag regex"))
 }
 
 fn localized_field(value: Option<&Value>, language: &str) -> String {

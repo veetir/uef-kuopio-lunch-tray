@@ -531,19 +531,26 @@ pub fn update_text_selection(hwnd: HWND, x: i32, y: i32) {
         Ok(value) => value,
         Err(_) => return,
     };
-    let layout = match state.layout.as_ref() {
-        Some(value) if value.hwnd == hwnd => value.clone(),
-        _ => return,
+    let item_id = match state.drag.as_ref() {
+        Some(drag) => drag.item_id,
+        None => return,
+    };
+    let next_index = {
+        let layout = match state.layout.as_ref() {
+            Some(value) if value.hwnd == hwnd => value,
+            _ => return,
+        };
+        let Some((row, idx)) = hit_test_row_for_item(layout, item_id, x, y) else {
+            return;
+        };
+        if row.item_id != item_id {
+            return;
+        }
+        idx
     };
     let Some(drag) = state.drag.as_mut() else {
         return;
     };
-    let Some((row, next_index)) = hit_test_row_for_item(&layout, drag.item_id, x, y) else {
-        return;
-    };
-    if row.item_id != drag.item_id {
-        return;
-    }
     if drag.current != next_index {
         drag.current = next_index;
         unsafe {
@@ -558,22 +565,28 @@ pub fn finish_text_selection(hwnd: HWND, x: i32, y: i32) -> bool {
             Ok(value) => value,
             Err(_) => return false,
         };
-        let layout = match state.layout.as_ref() {
-            Some(value) if value.hwnd == hwnd => value.clone(),
-            _ => return false,
-        };
         let Some(mut drag) = state.drag.take() else {
             return false;
         };
-        if let Some((_, next_index)) = hit_test_row_for_item(&layout, drag.item_id, x, y) {
-            drag.current = next_index;
+        {
+            let layout = match state.layout.as_ref() {
+                Some(value) if value.hwnd == hwnd => value,
+                _ => return false,
+            };
+            if let Some((_, next_index)) = hit_test_row_for_item(layout, drag.item_id, x, y) {
+                drag.current = next_index;
+            }
         }
+
+        let layout = match state.layout.as_ref() {
+            Some(value) if value.hwnd == hwnd => value,
+            _ => return false,
+        };
         let selected = selected_range(drag.anchor, drag.current);
         if selected.0 == selected.1 {
             None
         } else {
-            let item = layout.items.get(drag.item_id);
-            item.and_then(|text| {
+            layout.items.get(drag.item_id).and_then(|text| {
                 text.get(selected.0..selected.1)
                     .map(|value| favorites::normalize_snippet(value))
                     .filter(|value| !value.is_empty())
