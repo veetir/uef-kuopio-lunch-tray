@@ -656,6 +656,22 @@ fn parse_huomen_payload(
 }
 
 fn parse_rss_tag_raw(xml_text: &str, tag_name: &str) -> String {
+    if tag_name.eq_ignore_ascii_case("channel") {
+        return capture_first_group(xml_text, rss_channel_tag_re());
+    }
+    if tag_name.eq_ignore_ascii_case("title") {
+        return capture_first_group(xml_text, rss_title_tag_re());
+    }
+    if tag_name.eq_ignore_ascii_case("guid") {
+        return capture_first_group(xml_text, rss_guid_tag_re());
+    }
+    if tag_name.eq_ignore_ascii_case("link") {
+        return capture_first_group(xml_text, rss_link_tag_re());
+    }
+    if tag_name.eq_ignore_ascii_case("description") {
+        return capture_first_group(xml_text, rss_description_tag_re());
+    }
+
     let pattern = format!(
         r"(?is)<{}(?:\s+[^>]*)?>([\s\S]*?)</{}>",
         regex::escape(tag_name),
@@ -663,8 +679,7 @@ fn parse_rss_tag_raw(xml_text: &str, tag_name: &str) -> String {
     );
     Regex::new(&pattern)
         .ok()
-        .and_then(|re| re.captures(xml_text))
-        .and_then(|captures| captures.get(1).map(|m| m.as_str().to_string()))
+        .map(|re| capture_first_group(xml_text, &re))
         .unwrap_or_default()
 }
 
@@ -867,6 +882,52 @@ fn parse_rss_components(description_raw: &str) -> Vec<String> {
 fn strip_html_text(raw_html: &str) -> String {
     let without_tags = html_tag_re().replace_all(raw_html, " ").to_string();
     normalize_text(decode_html_entities(&without_tags).as_ref())
+}
+
+fn capture_first_group(xml_text: &str, re: &Regex) -> String {
+    re.captures(xml_text)
+        .and_then(|captures| captures.get(1).map(|m| m.as_str().to_string()))
+        .unwrap_or_default()
+}
+
+fn rss_channel_tag_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"(?is)<channel(?:\s+[^>]*)?>([\s\S]*?)</channel>")
+            .expect("rss channel tag regex")
+    })
+}
+
+fn rss_title_tag_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"(?is)<title(?:\s+[^>]*)?>([\s\S]*?)</title>")
+            .expect("rss title tag regex")
+    })
+}
+
+fn rss_guid_tag_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"(?is)<guid(?:\s+[^>]*)?>([\s\S]*?)</guid>")
+            .expect("rss guid tag regex")
+    })
+}
+
+fn rss_link_tag_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"(?is)<link(?:\s+[^>]*)?>([\s\S]*?)</link>")
+            .expect("rss link tag regex")
+    })
+}
+
+fn rss_description_tag_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"(?is)<description(?:\s+[^>]*)?>([\s\S]*?)</description>")
+            .expect("rss description tag regex")
+    })
 }
 
 fn rss_item_re() -> &'static Regex {

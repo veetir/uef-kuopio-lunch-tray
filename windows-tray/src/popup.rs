@@ -156,7 +156,7 @@ struct PopupSelectionState {
 
 #[derive(Debug, Clone, Default)]
 struct FavoritesSnapshot {
-    snippets_lower: Vec<String>,
+    snippets_lower: Arc<[String]>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1389,7 +1389,7 @@ fn favorite_match_ranges(text: &str, favorites: &FavoritesSnapshot) -> Vec<(usiz
     }
     let lower_text = text.to_lowercase();
     let mut candidates: Vec<(usize, usize)> = Vec::new();
-    for snippet_lower in &favorites.snippets_lower {
+    for snippet_lower in favorites.snippets_lower.iter() {
         if snippet_lower.is_empty() {
             continue;
         }
@@ -2642,33 +2642,31 @@ fn hit_test_row_for_item(
     x: i32,
     y: i32,
 ) -> Option<(&SelectableRow, usize)> {
-    let item_rows: Vec<&SelectableRow> = layout
-        .rows
-        .iter()
-        .filter(|row| row.item_id == item_id)
-        .collect();
-    if item_rows.is_empty() {
-        return None;
+    let mut nearest_row: Option<&SelectableRow> = None;
+    let mut nearest_distance = i32::MAX;
+
+    for row in &layout.rows {
+        if row.item_id != item_id {
+            continue;
+        }
+
+        if y >= row.top && y <= row.bottom {
+            let local = row_byte_index_from_x(row, x);
+            return Some((row, row.start + local));
+        }
+
+        let distance = if y < row.top {
+            row.top - y
+        } else {
+            y - row.bottom
+        };
+        if distance < nearest_distance {
+            nearest_distance = distance;
+            nearest_row = Some(row);
+        }
     }
 
-    let row = item_rows
-        .iter()
-        .copied()
-        .find(|row| y >= row.top && y <= row.bottom)
-        .or_else(|| {
-            item_rows
-                .iter()
-                .copied()
-                .min_by_key(|row| {
-                    if y < row.top {
-                        row.top - y
-                    } else if y > row.bottom {
-                        y - row.bottom
-                    } else {
-                        0
-                    }
-                })
-        })?;
+    let row = nearest_row?;
     let local = row_byte_index_from_x(row, x);
     Some((row, row.start + local))
 }
@@ -2719,7 +2717,9 @@ fn current_favorites_snapshot() -> FavoritesSnapshot {
             }
             snippets_lower.push(normalized.to_lowercase());
         }
-        cache.snapshot = FavoritesSnapshot { snippets_lower };
+        cache.snapshot = FavoritesSnapshot {
+            snippets_lower: snippets_lower.into(),
+        };
         cache.mtime_ms = mtime;
         cache.loaded = true;
     }
