@@ -77,7 +77,7 @@ pub struct GpuPresenter {
     device: ID3D11Device,
     context: ID3D11DeviceContext,
     swap_chain: IDXGISwapChain1,
-    backbuffer_rtv: ID3D11RenderTargetView,
+    backbuffer_rtv: Option<ID3D11RenderTargetView>,
     scene_tex: ID3D11Texture2D,
     scene_srv: ID3D11ShaderResourceView,
     vertex_shader: ID3D11VertexShader,
@@ -123,7 +123,7 @@ impl GpuPresenter {
             device,
             context,
             swap_chain,
-            backbuffer_rtv,
+            backbuffer_rtv: Some(backbuffer_rtv),
             scene_tex,
             scene_srv,
             vertex_shader,
@@ -154,10 +154,16 @@ impl GpuPresenter {
                 None,
                 None::<&windows::Win32::Graphics::Direct3D11::ID3D11DepthStencilView>,
             );
+            // Release all pipeline references before resizing the swapchain.
+            self.context.PSSetShaderResources(0, Some(&[None]));
+            self.context.ClearState();
+            self.context.Flush();
         }
-        self.backbuffer_rtv =
+        self.backbuffer_rtv = None;
+        self.backbuffer_rtv = Some(
             create_backbuffer_rtv_after_resize(&self.device, &self.swap_chain, width_u, height_u)
-                .context("resize backbuffer RTV")?;
+                .context("resize backbuffer RTV")?,
+        );
         let (scene_tex, scene_srv) = create_scene_texture(&self.device, width_u, height_u)
             .context("resize scene texture")?;
         self.scene_tex = scene_tex;
@@ -207,8 +213,12 @@ impl GpuPresenter {
                 0,
             );
 
+            let backbuffer = self
+                .backbuffer_rtv
+                .as_ref()
+                .ok_or_else(|| anyhow!("Missing backbuffer RTV"))?;
             self.context.OMSetRenderTargets(
-                Some(&[Some(self.backbuffer_rtv.clone())]),
+                Some(&[Some(backbuffer.clone())]),
                 None::<&windows::Win32::Graphics::Direct3D11::ID3D11DepthStencilView>,
             );
             let viewport = D3D11_VIEWPORT {
@@ -222,7 +232,7 @@ impl GpuPresenter {
             self.context.RSSetViewports(Some(&[viewport]));
 
             self.context
-                .ClearRenderTargetView(&self.backbuffer_rtv, &[0.0, 0.0, 0.0, 1.0]);
+                .ClearRenderTargetView(backbuffer, &[0.0, 0.0, 0.0, 1.0]);
 
             self.context.IASetInputLayout(&self.input_layout);
             let stride = size_of::<Vertex>() as u32;
@@ -730,16 +740,16 @@ float4 main(float4 pos : SV_POSITION, float2 uvIn : TEXCOORD0) : SV_TARGET {
         float g = sampleScene(uv).g;
         float b = sampleScene(uv - float2(shift * px.x, 0)).b;
         color = float3(r, g, b);
-        color += bloomApprox(uv, 0.28);
+        color += bloomApprox(uv, 0.36);
         color *= phosphorMask(uv);
-        color *= scanlineFactor(uv, 0.12);
-        color *= vignetteFactor(uv, 0.85);
+        color *= scanlineFactor(uv, 0.20);
+        color *= vignetteFactor(uv, 0.10);
         color += shutdownP * 0.10;
     } else if (profile >= 1.0) {
         color = sampleScene(uv).rgb;
-        color += bloomApprox(uv, 0.10);
-        color *= scanlineFactor(uv, 0.08);
-        color *= vignetteFactor(uv, 0.42);
+        color += bloomApprox(uv, 0.17);
+        color *= scanlineFactor(uv, 0.14);
+        color *= vignetteFactor(uv, 0.06);
     } else {
         color = sampleScene(uv).rgb;
     }
