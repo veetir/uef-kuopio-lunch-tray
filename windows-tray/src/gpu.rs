@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Context};
+use crate::log::log_line;
 use std::mem::size_of;
 use windows::core::{ComInterface, PCSTR};
 use windows::Win32::Foundation::{HMODULE, HWND};
@@ -18,14 +19,13 @@ use windows::Win32::Graphics::Direct3D11::{
     D3D11_TEXTURE2D_DESC, D3D11_TEXTURE_ADDRESS_CLAMP, D3D11_USAGE_DEFAULT, D3D11_VIEWPORT,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_ALPHA_MODE_IGNORE, DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R32G32_FLOAT,
-    DXGI_MODE_SCALING_UNSPECIFIED, DXGI_MODE_SCANLINE_ORDER_UNSPECIFIED, DXGI_RATIONAL,
-    DXGI_SAMPLE_DESC,
+    DXGI_ALPHA_MODE_IGNORE, DXGI_ALPHA_MODE_UNSPECIFIED, DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM,
+    DXGI_FORMAT_R32G32_FLOAT, DXGI_SAMPLE_DESC,
 };
 use windows::Win32::Graphics::Dxgi::{
-    IDXGIAdapter, IDXGIDevice, IDXGIFactory2, IDXGIOutput, IDXGISwapChain1, DXGI_SCALING_STRETCH,
-    DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_CHAIN_FULLSCREEN_DESC, DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
-    DXGI_USAGE_RENDER_TARGET_OUTPUT,
+    IDXGIAdapter, IDXGIDevice, IDXGIFactory2, IDXGIOutput, IDXGISwapChain1, DXGI_SCALING_NONE,
+    DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_EFFECT_DISCARD,
+    DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL, DXGI_SWAP_EFFECT_SEQUENTIAL, DXGI_USAGE_RENDER_TARGET_OUTPUT,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,7 +90,9 @@ pub struct GpuPresenter {
 }
 
 pub fn probe_hardware() -> anyhow::Result<()> {
+    log_line("gpu probe: start");
     let (_device, _context) = create_device().context("create D3D11 device")?;
+    log_line("gpu probe: success");
     Ok(())
 }
 
@@ -264,26 +266,47 @@ impl GpuPresenter {
 
 fn create_device() -> anyhow::Result<(ID3D11Device, ID3D11DeviceContext)> {
     let feature_levels: [D3D_FEATURE_LEVEL; 2] = [D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_0];
-    let mut device: Option<ID3D11Device> = None;
-    let mut context: Option<ID3D11DeviceContext> = None;
-    let mut selected_feature_level = D3D_FEATURE_LEVEL_10_0;
-    unsafe {
-        D3D11CreateDevice(
-            None::<&IDXGIAdapter>,
-            D3D_DRIVER_TYPE_HARDWARE,
-            HMODULE(0),
-            D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-            Some(&feature_levels),
-            D3D11_SDK_VERSION,
-            Some(&mut device),
-            Some(&mut selected_feature_level),
-            Some(&mut context),
-        )
-        .context("D3D11CreateDevice failed")?;
+    let attempt = |flags| -> anyhow::Result<(ID3D11Device, ID3D11DeviceContext)> {
+        let mut device: Option<ID3D11Device> = None;
+        let mut context: Option<ID3D11DeviceContext> = None;
+        let mut selected_feature_level = D3D_FEATURE_LEVEL_10_0;
+        unsafe {
+            D3D11CreateDevice(
+                None::<&IDXGIAdapter>,
+                D3D_DRIVER_TYPE_HARDWARE,
+                HMODULE(0),
+                flags,
+                Some(&feature_levels),
+                D3D11_SDK_VERSION,
+                Some(&mut device),
+                Some(&mut selected_feature_level),
+                Some(&mut context),
+            )
+            .context("D3D11CreateDevice failed")?;
+        }
+        let device = device.ok_or_else(|| anyhow!("D3D11CreateDevice returned no device"))?;
+        let context = context.ok_or_else(|| anyhow!("D3D11CreateDevice returned no context"))?;
+        Ok((device, context))
+    };
+
+    match attempt(D3D11_CREATE_DEVICE_BGRA_SUPPORT) {
+        Ok(pair) => Ok(pair),
+        Err(primary) => {
+            log_line(&format!(
+                "gpu create_device with BGRA flag failed: {:#}",
+                primary
+            ));
+            attempt(windows::Win32::Graphics::Direct3D11::D3D11_CREATE_DEVICE_FLAG(0)).map_err(
+                |secondary| {
+                    anyhow!(
+                        "D3D11 device creation failed (BGRA attempt + plain attempt)\nBGRA: {:#}\nPlain: {:#}",
+                        primary,
+                        secondary
+                    )
+                },
+            )
+        }
     }
-    let device = device.ok_or_else(|| anyhow!("D3D11CreateDevice returned no device"))?;
-    let context = context.ok_or_else(|| anyhow!("D3D11CreateDevice returned no context"))?;
-    Ok((device, context))
 }
 
 fn create_swap_chain(
@@ -298,7 +321,7 @@ fn create_swap_chain(
         unsafe { adapter.GetParent() }.context("Get DXGI factory failed")?;
     let _ = unsafe { factory.MakeWindowAssociation(hwnd, 2) };
 
-    let desc = DXGI_SWAP_CHAIN_DESC1 {
+    let base_desc = DXGI_SWAP_CHAIN_DESC1 {
         Width: width,
         Height: height,
         Format: DXGI_FORMAT_B8G8R8A8_UNORM,
@@ -314,27 +337,41 @@ fn create_swap_chain(
         AlphaMode: DXGI_ALPHA_MODE_IGNORE,
         Flags: 0,
     };
-    let fullscreen_desc = DXGI_SWAP_CHAIN_FULLSCREEN_DESC {
-        RefreshRate: DXGI_RATIONAL {
-            Numerator: 0,
-            Denominator: 1,
-        },
-        ScanlineOrdering: DXGI_MODE_SCANLINE_ORDER_UNSPECIFIED,
-        Scaling: DXGI_MODE_SCALING_UNSPECIFIED,
-        Windowed: true.into(),
-    };
 
-    let swap_chain = unsafe {
-        factory.CreateSwapChainForHwnd(
-            device,
-            hwnd,
-            &desc,
-            Some(&fullscreen_desc),
-            None::<&IDXGIOutput>,
-        )
+    let mut attempts: Vec<(&str, DXGI_SWAP_CHAIN_DESC1)> = Vec::new();
+    attempts.push(("flip-sequential/stretch/alpha-ignore", base_desc));
+    let mut desc2 = base_desc;
+    desc2.Scaling = DXGI_SCALING_NONE;
+    attempts.push(("flip-sequential/none/alpha-ignore", desc2));
+    let mut desc3 = base_desc;
+    desc3.SwapEffect = DXGI_SWAP_EFFECT_SEQUENTIAL;
+    desc3.AlphaMode = DXGI_ALPHA_MODE_UNSPECIFIED;
+    attempts.push(("sequential/stretch/alpha-unspecified", desc3));
+    let mut desc4 = base_desc;
+    desc4.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
+    desc4.BufferCount = 1;
+    desc4.AlphaMode = DXGI_ALPHA_MODE_UNSPECIFIED;
+    attempts.push(("discard/stretch/alpha-unspecified", desc4));
+
+    let mut errors = Vec::new();
+    for (label, desc) in attempts {
+        match unsafe {
+            factory.CreateSwapChainForHwnd(device, hwnd, &desc, None, None::<&IDXGIOutput>)
+        } {
+            Ok(chain) => {
+                log_line(&format!("gpu swapchain create success via {}", label));
+                return Ok(chain);
+            }
+            Err(err) => {
+                errors.push(format!("{} => {}", label, err));
+            }
+        }
     }
-    .context("CreateSwapChainForHwnd failed")?;
-    Ok(swap_chain)
+
+    Err(anyhow!(
+        "CreateSwapChainForHwnd failed for all variants: {}",
+        errors.join(" | ")
+    ))
 }
 
 fn create_backbuffer_rtv(
@@ -569,6 +606,10 @@ fn compile_shader(source: &str, entry: &str, target: &str) -> anyhow::Result<ID3
                 .as_ref()
                 .map(blob_to_utf8)
                 .unwrap_or_else(String::new);
+            log_line(&format!(
+                "gpu shader compile failed entry={} target={} err={} detail={}",
+                entry, target, err, detail
+            ));
             return Err(anyhow!("D3DCompile failed: {} {}", err, detail));
         }
     }
@@ -633,8 +674,8 @@ float vignetteFactor(float2 uv, float strength) {
 }
 
 float scanlineFactor(float2 uv, float intensity) {
-    float line = sin(uv.y * resolution.y * 3.14159);
-    return 1.0 - intensity * (0.5 + 0.5 * line);
+    float wave = sin(uv.y * resolution.y * 3.14159);
+    return 1.0 - intensity * (0.5 + 0.5 * wave);
 }
 
 float3 phosphorMask(float2 uv) {

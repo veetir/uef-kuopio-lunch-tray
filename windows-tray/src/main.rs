@@ -106,11 +106,12 @@ fn main() -> anyhow::Result<()> {
         let startup_state = app.snapshot();
         if startup_state.settings.renderer_backend == "gpu" {
             if let Err(err) = gpu::probe_hardware() {
+                let detail = format!("{:#}", err);
                 app.set_renderer_backend("gdi");
                 let title = to_wstring("Compass Lunch - GPU Renderer");
                 let body = to_wstring(&format!(
                     "GPU renderer could not be initialized on startup.\n\n{}\n\nFalling back to GDI.",
-                    err
+                    detail
                 ));
                 let _ = MessageBoxW(
                     tray_hwnd,

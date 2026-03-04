@@ -236,6 +236,24 @@ pub unsafe extern "system" fn popup_wndproc(
             if !app.is_null() {
                 let app = &*(app);
                 app.with_state(|state| popup::paint_popup(hwnd, state));
+                if let Some(detail) = popup::take_gpu_error() {
+                    let using_gpu = app.with_state(|state| state.settings.renderer_backend == "gpu");
+                    if using_gpu {
+                        log_line(&format!(
+                            "gpu renderer runtime failure, switching to gdi: {}",
+                            detail.replace('\n', " | ")
+                        ));
+                        app.set_renderer_backend("gdi");
+                        popup::shutdown_gpu_renderer();
+                        show_gpu_error(
+                            hwnd,
+                            &format!(
+                                "GPU renderer failed at runtime and has been disabled.\n\n{}\n\nThe app switched back to GDI.",
+                                detail
+                            ),
+                        );
+                    }
+                }
             }
             LRESULT(0)
         }
@@ -520,11 +538,12 @@ fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
                 app.set_renderer_backend("gpu");
             }
             Err(err) => {
+                let detail = format!("{:#}", err);
                 app.set_renderer_backend("gdi");
                 popup::shutdown_gpu_renderer();
                 show_gpu_error(
                     hwnd,
-                    &format!("GPU renderer could not be enabled.\n\n{}", err),
+                    &format!("GPU renderer could not be enabled.\n\n{}", detail),
                 );
             }
         },

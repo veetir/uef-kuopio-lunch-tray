@@ -7,6 +7,7 @@ use crate::format::{
     text_for, PriceGroups,
 };
 use crate::gpu::{CrtProfile, GpuPresenter};
+use crate::log::log_line;
 use crate::model::TodayMenu;
 use crate::restaurant::{available_restaurants, Provider, Restaurant};
 use crate::settings::Settings;
@@ -668,9 +669,12 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
         let _ = GetClientRect(hwnd, &mut rect);
         if state.settings.renderer_backend == "gpu" {
             if let Err(err) = paint_popup_gpu(hwnd, state, &rect) {
-                record_gpu_error(&err.to_string());
+                let detail = format!("{:#}", err);
+                log_line(&format!("gpu render failed: {}", detail.replace('\n', " | ")));
+                record_gpu_error(&detail);
                 paint_popup_to_hdc(hwnd, state, hdc, rect);
-                draw_gpu_error_line(hdc, &rect, &format!("GPU renderer error: {}", err));
+                let headline = detail.lines().next().unwrap_or("GPU renderer error");
+                draw_gpu_error_line(hdc, &rect, &format!("GPU renderer error: {}", headline));
             } else {
                 clear_gpu_error();
             }
@@ -1128,6 +1132,14 @@ fn clear_gpu_error() {
     let lock = POPUP_GPU_ERROR.get_or_init(|| Mutex::new(None));
     if let Ok(mut error) = lock.lock() {
         *error = None;
+    }
+}
+
+pub fn take_gpu_error() -> Option<String> {
+    let lock = POPUP_GPU_ERROR.get_or_init(|| Mutex::new(None));
+    match lock.lock() {
+        Ok(mut error) => error.take(),
+        Err(_) => None,
     }
 }
 
