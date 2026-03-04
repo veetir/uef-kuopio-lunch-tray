@@ -30,7 +30,7 @@ pub struct AppState {
     pub today_menu: Option<TodayMenu>,
     pub restaurant_name: String,
     pub restaurant_url: String,
-    pub raw_payload: String,
+    pub has_payload: bool,
     pub provider: Provider,
     pub payload_date: String,
     pub stale_date: bool,
@@ -49,6 +49,7 @@ struct MemoryMenuEntry {
     today_menu: Option<TodayMenu>,
     restaurant_name: String,
     restaurant_url: String,
+    has_payload: bool,
     provider: Provider,
     payload_date: String,
 }
@@ -93,7 +94,7 @@ impl App {
             today_menu: None,
             restaurant_name: String::new(),
             restaurant_url: String::new(),
-            raw_payload: String::new(),
+            has_payload: false,
             payload_date: String::new(),
             stale_date: false,
         };
@@ -211,7 +212,7 @@ impl App {
 
     fn apply_cached_result(&self, result: &FetchOutput) {
         let mut state = self.state.lock().unwrap();
-        state.raw_payload = result.raw_json.clone();
+        state.has_payload = fetch_output_has_payload(result);
         state.restaurant_name = result.restaurant_name.clone();
         state.restaurant_url = result.restaurant_url.clone();
         state.today_menu = result.today_menu.clone();
@@ -239,6 +240,7 @@ impl App {
             today_menu: result.today_menu.clone(),
             restaurant_name: result.restaurant_name.clone(),
             restaurant_url: result.restaurant_url.clone(),
+            has_payload: fetch_output_has_payload(result),
             provider: result.provider,
             payload_date: result.payload_date.clone(),
         };
@@ -269,7 +271,7 @@ impl App {
         }
 
         let mut state = self.state.lock().unwrap();
-        state.raw_payload.clear();
+        state.has_payload = entry.has_payload;
         state.restaurant_name = entry.restaurant_name;
         state.restaurant_url = entry.restaurant_url;
         state.today_menu = entry.today_menu;
@@ -404,7 +406,7 @@ impl App {
                 state.loading_started_epoch_ms = 0;
                 state.error_message.clear();
                 state.stale_network_error = false;
-                state.raw_payload = result.raw_json.clone();
+                state.has_payload = fetch_output_has_payload(&result);
                 state.restaurant_name = result.restaurant_name.clone();
                 state.restaurant_url = result.restaurant_url.clone();
                 state.today_menu = result.today_menu.clone();
@@ -431,7 +433,7 @@ impl App {
                 self.store_memory_from_fetch_output(&requested_code, &requested_language, &result);
                 FetchApplyOutcome::CurrentSuccess
             } else {
-                if state.today_menu.is_some() || !state.raw_payload.is_empty() {
+                if state.today_menu.is_some() || state.has_payload {
                     state.status = FetchStatus::Stale;
                     state.loading_started_epoch_ms = 0;
                     state.stale_network_error = is_probable_network_error(&result.error_message);
@@ -460,7 +462,7 @@ impl App {
         state.provider = restaurant.provider;
         state.restaurant_url = restaurant.url.unwrap_or_default().to_string();
         let _ = save_settings(&state.settings);
-        state.raw_payload.clear();
+        state.has_payload = false;
         state.today_menu = None;
         state.payload_date.clear();
         state.stale_date = false;
@@ -473,7 +475,7 @@ impl App {
         let mut state = self.state.lock().unwrap();
         state.settings.language = language.to_string();
         let _ = save_settings(&state.settings);
-        state.raw_payload.clear();
+        state.has_payload = false;
         state.today_menu = None;
         state.payload_date.clear();
         state.stale_date = false;
@@ -557,7 +559,7 @@ impl App {
         state.settings.restaurant_code = list[idx as usize].code.to_string();
         state.provider = list[idx as usize].provider;
         state.restaurant_url = list[idx as usize].url.unwrap_or_default().to_string();
-        state.raw_payload.clear();
+        state.has_payload = false;
         state.today_menu = None;
         state.payload_date.clear();
         state.stale_date = false;
@@ -805,6 +807,10 @@ fn date_key_from_epoch_ms(ms: i64) -> Option<String> {
     let local = dt.to_offset(offset);
     let date = local.date();
     Some(format!("{:04}-{:02}-{:02}", date.year(), date.month() as u8, date.day()))
+}
+
+fn fetch_output_has_payload(result: &FetchOutput) -> bool {
+    !result.raw_json.is_empty() || result.today_menu.is_some() || !result.payload_date.is_empty()
 }
 
 fn is_probable_network_error(message: &str) -> bool {

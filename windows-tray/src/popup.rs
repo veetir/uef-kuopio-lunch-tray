@@ -2352,7 +2352,9 @@ fn popup_state_from_cached_result(
         today_menu: parsed.today_menu.clone(),
         restaurant_name,
         restaurant_url: parsed.restaurant_url.clone(),
-        raw_payload: String::new(),
+        has_payload: !parsed.raw_json.is_empty()
+            || parsed.today_menu.is_some()
+            || !parsed.payload_date.is_empty(),
         provider: restaurant.provider,
         payload_date: parsed.payload_date.clone(),
         stale_date: !parsed.payload_date.is_empty() && parsed.payload_date != today_key,
