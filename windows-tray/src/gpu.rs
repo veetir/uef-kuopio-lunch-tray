@@ -674,7 +674,7 @@ cbuffer Params : register(b0) {
 };
 
 float4 sampleScene(float2 uv) {
-    return sceneTex.Sample(sceneSmp, uv);
+    return sceneTex.Sample(sceneSmp, saturate(uv));
 }
 
 float vignetteFactor(float2 uv, float strength) {
@@ -702,6 +702,10 @@ float2 curvatureWarp(float2 uv, float amount) {
     return p * 0.5 + 0.5;
 }
 
+float2 overscanCrop(float2 uv, float amount) {
+    return (uv - 0.5) * amount + 0.5;
+}
+
 float3 bloomApprox(float2 uv, float strength) {
     float2 px = 1.0 / resolution;
     float3 c = 0;
@@ -718,16 +722,15 @@ float4 main(float4 pos : SV_POSITION, float2 uvIn : TEXCOORD0) : SV_TARGET {
     float2 uv = uvIn;
     if (profile >= 2.0) {
         uv = curvatureWarp(uv, 0.07);
-        if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
-            return float4(0.0, 0.0, 0.0, 1.0);
-        }
+        uv = overscanCrop(uv, 0.92);
     }
+    uv = saturate(uv);
 
     float shutdownP = saturate(shutdown);
     if (profile >= 2.0 && shutdownP > 0.001) {
         float center = 0.5;
         float halfBand = max(0.005, 0.5 * (1.0 - shutdownP * 0.97));
-        if (abs(uv.y - center) > halfBand) {
+        if (abs(uvIn.y - center) > halfBand) {
             return float4(0.0, 0.0, 0.0, 1.0);
         }
     }
@@ -741,15 +744,15 @@ float4 main(float4 pos : SV_POSITION, float2 uvIn : TEXCOORD0) : SV_TARGET {
         float b = sampleScene(uv - float2(shift * px.x, 0)).b;
         color = float3(r, g, b);
         color += bloomApprox(uv, 0.36);
-        color *= phosphorMask(uv);
-        color *= scanlineFactor(uv, 0.20);
-        color *= vignetteFactor(uv, 0.10);
+        color *= phosphorMask(uvIn);
+        color *= scanlineFactor(uvIn, 0.20);
+        color *= vignetteFactor(uvIn, 0.10);
         color += shutdownP * 0.10;
     } else if (profile >= 1.0) {
         color = sampleScene(uv).rgb;
         color += bloomApprox(uv, 0.17);
-        color *= scanlineFactor(uv, 0.14);
-        color *= vignetteFactor(uv, 0.06);
+        color *= scanlineFactor(uvIn, 0.14);
+        color *= vignetteFactor(uvIn, 0.06);
     } else {
         color = sampleScene(uv).rgb;
     }
