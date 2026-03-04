@@ -4,7 +4,7 @@ use crate::log::{log_line, set_enabled as set_log_enabled};
 use crate::model::TodayMenu;
 use crate::restaurant::{available_restaurants, provider_key, restaurant_for_code, Provider};
 use crate::settings::{
-    load_settings, normalize_crt_profile, normalize_renderer_backend, normalize_theme,
+    load_settings, normalize_renderer_backend, normalize_theme, normalize_widget_scale,
     save_settings, settings_dir, Settings,
 };
 use std::collections::{HashMap, HashSet};
@@ -666,15 +666,21 @@ impl App {
         let _ = save_settings(&state.settings);
     }
 
+    pub fn set_widget_scale(&self, value: &str) {
+        let mut state = self.state.lock().unwrap();
+        state.settings.widget_scale = normalize_widget_scale(value);
+        let _ = save_settings(&state.settings);
+    }
+
     pub fn set_renderer_backend(&self, backend: &str) {
         let mut state = self.state.lock().unwrap();
         state.settings.renderer_backend = normalize_renderer_backend(backend);
         let _ = save_settings(&state.settings);
     }
 
-    pub fn set_crt_profile(&self, profile: &str) {
+    pub fn toggle_crt_enabled(&self) {
         let mut state = self.state.lock().unwrap();
-        state.settings.crt_profile = normalize_crt_profile(profile);
+        state.settings.crt_enabled = !state.settings.crt_enabled;
         let _ = save_settings(&state.settings);
     }
 

@@ -1,5 +1,5 @@
-use anyhow::{anyhow, Context};
 use crate::log::log_line;
+use anyhow::{anyhow, Context};
 use std::mem::size_of;
 use windows::core::{ComInterface, PCSTR};
 use windows::Win32::Foundation::{HMODULE, HWND};
@@ -28,39 +28,15 @@ use windows::Win32::Graphics::Dxgi::{
     DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL, DXGI_SWAP_EFFECT_SEQUENTIAL, DXGI_USAGE_RENDER_TARGET_OUTPUT,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CrtProfile {
-    Off,
-    Lite,
-    Full,
-}
-
-impl CrtProfile {
-    pub fn from_settings(value: &str) -> Self {
-        match value {
-            "lite" => Self::Lite,
-            "full" => Self::Full,
-            _ => Self::Off,
-        }
-    }
-
-    fn as_f32(self) -> f32 {
-        match self {
-            Self::Off => 0.0,
-            Self::Lite => 1.0,
-            Self::Full => 2.0,
-        }
-    }
-}
-
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 struct ShaderParams {
     resolution: [f32; 2],
-    profile: f32,
+    crt_enabled: f32,
     shutdown: f32,
+    switch_progress: f32,
     time_sec: f32,
-    _pad: [f32; 3],
+    _pad: [f32; 2],
 }
 
 #[repr(C)]
@@ -176,8 +152,9 @@ impl GpuPresenter {
         frame_bgra: &[u8],
         frame_width: i32,
         frame_height: i32,
-        profile: CrtProfile,
+        crt_enabled: bool,
         shutdown_progress: f32,
+        switch_progress: f32,
     ) -> anyhow::Result<()> {
         self.ensure_size(frame_width, frame_height)?;
         let expected = (self.width as usize)
@@ -199,10 +176,11 @@ impl GpuPresenter {
 
             let params = ShaderParams {
                 resolution: [self.width as f32, self.height as f32],
-                profile: profile.as_f32(),
+                crt_enabled: if crt_enabled { 1.0 } else { 0.0 },
                 shutdown: shutdown_progress.clamp(0.0, 1.0),
+                switch_progress,
                 time_sec: (now_epoch_ms().saturating_sub(self.clock_started_ms) as f32) / 1000.0,
-                _pad: [0.0; 3],
+                _pad: [0.0; 2],
             };
             self.context.UpdateSubresource(
                 &self.constant_buffer,
@@ -667,14 +645,24 @@ SamplerState sceneSmp : register(s0);
 
 cbuffer Params : register(b0) {
     float2 resolution;
-    float profile;
+    float crtEnabled;
     float shutdown;
+    float switchProgress;
     float timeSec;
-    float3 _pad;
+    float2 _pad;
 };
 
 float4 sampleScene(float2 uv) {
     return sceneTex.Sample(sceneSmp, saturate(uv));
+}
+
+float luma(float3 color) {
+    return dot(color, float3(0.2126, 0.7152, 0.0722));
+}
+
+float hash12(float2 p) {
+    float h = dot(p, float2(127.1, 311.7));
+    return frac(sin(h) * 43758.5453123);
 }
 
 float vignetteFactor(float2 uv, float strength) {
@@ -683,9 +671,10 @@ float vignetteFactor(float2 uv, float strength) {
     return saturate(1.0 - d * strength);
 }
 
-float scanlineFactor(float2 uv, float intensity) {
+float scanlineFactor(float2 uv, float3 sceneColor, float intensity) {
     float wave = sin(uv.y * resolution.y * 3.14159);
-    return 1.0 - intensity * (0.5 + 0.5 * wave);
+    float beam = lerp(1.20, 0.70, saturate(luma(sceneColor)));
+    return 1.0 - intensity * beam * (0.5 + 0.5 * wave);
 }
 
 float3 phosphorMask(float2 uv) {
@@ -718,16 +707,41 @@ float3 bloomApprox(float2 uv, float strength) {
     return c * strength;
 }
 
-float4 main(float4 pos : SV_POSITION, float2 uvIn : TEXCOORD0) : SV_TARGET {
-    float2 uv = uvIn;
-    if (profile >= 2.0) {
-        uv = curvatureWarp(uv, 0.07);
-        uv = overscanCrop(uv, 0.92);
+float switchEnvelope(float progress) {
+    if (progress < 0.0) {
+        return 0.0;
     }
+    float x = saturate(1.0 - progress);
+    return x * x * (0.65 + 0.35 * x);
+}
+
+float2 applySwitchTransient(float2 uv, float envelope) {
+    if (envelope <= 0.0001) {
+        return uv;
+    }
+    float2 p = uv * 2.0 - 1.0;
+    float radius = length(p) + 0.00001;
+    float2 dir = p / radius;
+    float ring = sin(radius * 52.0 - switchProgress * 28.0);
+    p += dir * ring * (0.010 * envelope);
+    p.y += sin((uv.x + switchProgress * 2.0) * 45.0) * (0.003 * envelope);
+    return p * 0.5 + 0.5;
+}
+
+float4 main(float4 pos : SV_POSITION, float2 uvIn : TEXCOORD0) : SV_TARGET {
+    float2 uv = saturate(uvIn);
+    if (crtEnabled < 0.5) {
+        return float4(sampleScene(uv).rgb, 1.0);
+    }
+
+    float switchEnv = switchEnvelope(switchProgress);
+    uv = curvatureWarp(uv, 0.06);
+    uv = overscanCrop(uv, 0.92);
+    uv = applySwitchTransient(uv, switchEnv);
     uv = saturate(uv);
 
     float shutdownP = saturate(shutdown);
-    if (profile >= 2.0 && shutdownP > 0.001) {
+    if (shutdownP > 0.001) {
         float center = 0.5;
         float halfBand = max(0.005, 0.5 * (1.0 - shutdownP * 0.97));
         if (abs(uvIn.y - center) > halfBand) {
@@ -735,27 +749,23 @@ float4 main(float4 pos : SV_POSITION, float2 uvIn : TEXCOORD0) : SV_TARGET {
         }
     }
 
-    float3 color;
-    if (profile >= 2.0) {
-        float2 px = 1.0 / resolution;
-        float shift = 1.0 + shutdownP * 1.5;
-        float r = sampleScene(uv + float2(shift * px.x, 0)).r;
-        float g = sampleScene(uv).g;
-        float b = sampleScene(uv - float2(shift * px.x, 0)).b;
-        color = float3(r, g, b);
-        color += bloomApprox(uv, 0.36);
-        color *= phosphorMask(uvIn);
-        color *= scanlineFactor(uvIn, 0.20);
-        color *= vignetteFactor(uvIn, 0.10);
-        color += shutdownP * 0.10;
-    } else if (profile >= 1.0) {
-        color = sampleScene(uv).rgb;
-        color += bloomApprox(uv, 0.17);
-        color *= scanlineFactor(uvIn, 0.14);
-        color *= vignetteFactor(uvIn, 0.06);
-    } else {
-        color = sampleScene(uv).rgb;
-    }
+    float2 px = 1.0 / resolution;
+    float shift = 0.85 + switchEnv * 2.2;
+    float r = sampleScene(uv + float2(shift * px.x, 0)).r;
+    float g = sampleScene(uv).g;
+    float b = sampleScene(uv - float2(shift * px.x, 0)).b;
+    float3 color = float3(r, g, b);
+
+    color += bloomApprox(uv, 0.22 + switchEnv * 0.10);
+    color *= lerp(float3(1.0, 1.0, 1.0), phosphorMask(uvIn), 0.45);
+    color *= scanlineFactor(uvIn, color, 0.22 + switchEnv * 0.10);
+    color *= vignetteFactor(uvIn, 0.045);
+
+    float noise = (hash12(uvIn * resolution + float2(timeSec * 53.0, timeSec * 17.0)) - 0.5) * 0.018;
+    color += noise * (0.35 + switchEnv * 0.65);
+
+    color *= (1.0 + switchEnv * 0.16);
+    color += shutdownP * 0.10;
 
     return float4(saturate(color), 1.0);
 }

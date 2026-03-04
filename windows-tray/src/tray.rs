@@ -45,9 +45,10 @@ pub const CMD_THEME_TELETEXT1: u16 = 2218;
 pub const CMD_THEME_TELETEXT2: u16 = 2219;
 pub const CMD_RENDERER_GDI: u16 = 2220;
 pub const CMD_RENDERER_GPU: u16 = 2221;
-pub const CMD_CRT_PROFILE_OFF: u16 = 2222;
-pub const CMD_CRT_PROFILE_LITE: u16 = 2223;
-pub const CMD_CRT_PROFILE_FULL: u16 = 2224;
+pub const CMD_TOGGLE_CRT_THEME: u16 = 2222;
+pub const CMD_WIDGET_SCALE_NORMAL: u16 = 2225;
+pub const CMD_WIDGET_SCALE_125: u16 = 2226;
+pub const CMD_WIDGET_SCALE_150: u16 = 2227;
 pub const CMD_REFRESH_NOW: u16 = 2301;
 pub const CMD_REFRESH_OFF: u16 = 2400;
 pub const CMD_REFRESH_60: u16 = 2401;
@@ -385,11 +386,49 @@ fn build_context_menu(state: &AppState) -> HMENU {
             "Teletext 2",
             state.settings.theme == "teletext2",
         );
+        let crt_gpu_enabled = state.settings.renderer_backend == "gpu";
+        let crt_label = if crt_gpu_enabled {
+            "CRT"
+        } else {
+            "CRT (GPU only)"
+        };
+        append_menu_toggle_enabled(
+            theme_menu,
+            CMD_TOGGLE_CRT_THEME,
+            crt_label,
+            state.settings.crt_enabled,
+            crt_gpu_enabled,
+        );
         let _ = AppendMenuW(
             menu,
             MF_POPUP,
             theme_menu.0 as usize,
             PCWSTR(to_wstring("Theme").as_ptr()),
+        );
+        let widget_scale_menu = CreatePopupMenu().expect("CreatePopupMenu");
+        append_menu_item(
+            widget_scale_menu,
+            CMD_WIDGET_SCALE_NORMAL,
+            "Normal",
+            state.settings.widget_scale == "normal",
+        );
+        append_menu_item(
+            widget_scale_menu,
+            CMD_WIDGET_SCALE_125,
+            "125%",
+            state.settings.widget_scale == "125",
+        );
+        append_menu_item(
+            widget_scale_menu,
+            CMD_WIDGET_SCALE_150,
+            "150%",
+            state.settings.widget_scale == "150",
+        );
+        let _ = AppendMenuW(
+            menu,
+            MF_POPUP,
+            widget_scale_menu.0 as usize,
+            PCWSTR(to_wstring("Widget size").as_ptr()),
         );
         let renderer_menu = CreatePopupMenu().expect("CreatePopupMenu");
         append_menu_item(
@@ -409,35 +448,6 @@ fn build_context_menu(state: &AppState) -> HMENU {
             MF_POPUP,
             renderer_menu.0 as usize,
             PCWSTR(to_wstring("Renderer").as_ptr()),
-        );
-        let crt_menu = CreatePopupMenu().expect("CreatePopupMenu");
-        let crt_enabled = state.settings.renderer_backend == "gpu";
-        append_menu_item_enabled(
-            crt_menu,
-            CMD_CRT_PROFILE_OFF,
-            "CRT Off",
-            state.settings.crt_profile == "off",
-            crt_enabled,
-        );
-        append_menu_item_enabled(
-            crt_menu,
-            CMD_CRT_PROFILE_LITE,
-            "CRT Lite",
-            state.settings.crt_profile == "lite",
-            crt_enabled,
-        );
-        append_menu_item_enabled(
-            crt_menu,
-            CMD_CRT_PROFILE_FULL,
-            "CRT Full",
-            state.settings.crt_profile == "full",
-            crt_enabled,
-        );
-        let _ = AppendMenuW(
-            menu,
-            MF_POPUP,
-            crt_menu.0 as usize,
-            PCWSTR(to_wstring("CRT Effects").as_ptr()),
         );
         append_menu_toggle(
             menu,
@@ -531,19 +541,6 @@ fn append_menu_toggle(menu: HMENU, id: u16, label: &str, enabled: bool) {
 }
 
 fn append_menu_toggle_enabled(menu: HMENU, id: u16, label: &str, checked: bool, enabled: bool) {
-    unsafe {
-        let mut flags = MF_STRING;
-        if checked {
-            flags |= MF_CHECKED;
-        }
-        if !enabled {
-            flags |= MF_DISABLED | MF_GRAYED;
-        }
-        let _ = AppendMenuW(menu, flags, id as usize, PCWSTR(to_wstring(label).as_ptr()));
-    }
-}
-
-fn append_menu_item_enabled(menu: HMENU, id: u16, label: &str, checked: bool, enabled: bool) {
     unsafe {
         let mut flags = MF_STRING;
         if checked {

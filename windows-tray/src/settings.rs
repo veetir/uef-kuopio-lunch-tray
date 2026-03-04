@@ -13,8 +13,9 @@ pub struct Settings {
     pub show_guest_price: bool,
     pub hide_expensive_student_meals: bool,
     pub theme: String,
+    pub widget_scale: String,
     pub renderer_backend: String,
-    pub crt_profile: String,
+    pub crt_enabled: bool,
     pub show_allergens: bool,
     pub highlight_gluten_free: bool,
     pub highlight_veg: bool,
@@ -36,8 +37,9 @@ impl Default for Settings {
             show_guest_price: false,
             hide_expensive_student_meals: false,
             theme: "dark".to_string(),
+            widget_scale: "normal".to_string(),
             renderer_backend: "gdi".to_string(),
-            crt_profile: "off".to_string(),
+            crt_enabled: false,
             show_allergens: true,
             highlight_gluten_free: false,
             highlight_veg: false,
@@ -85,8 +87,9 @@ struct RawSettings {
     show_guest_price: Option<bool>,
     hide_expensive_student_meals: Option<bool>,
     theme: Option<String>,
+    widget_scale: Option<String>,
     renderer_backend: Option<String>,
-    crt_profile: Option<String>,
+    crt_enabled: Option<bool>,
     dark_mode: Option<bool>,
     show_allergens: Option<bool>,
     hide_allergens: Option<bool>,
@@ -125,11 +128,12 @@ fn decode_settings(data: &str) -> anyhow::Result<Settings> {
         .as_deref()
         .map(normalize_renderer_backend)
         .unwrap_or_else(|| defaults.renderer_backend.clone());
-    let crt_profile = raw
-        .crt_profile
+    let widget_scale = raw
+        .widget_scale
         .as_deref()
-        .map(normalize_crt_profile)
-        .unwrap_or_else(|| defaults.crt_profile.clone());
+        .map(normalize_widget_scale)
+        .unwrap_or_else(|| defaults.widget_scale.clone());
+    let crt_enabled = raw.crt_enabled.unwrap_or(defaults.crt_enabled);
 
     Ok(Settings {
         restaurant_code: raw.restaurant_code.unwrap_or(defaults.restaurant_code),
@@ -145,8 +149,9 @@ fn decode_settings(data: &str) -> anyhow::Result<Settings> {
             .hide_expensive_student_meals
             .unwrap_or(defaults.hide_expensive_student_meals),
         theme,
+        widget_scale,
         renderer_backend,
-        crt_profile,
+        crt_enabled,
         show_allergens,
         highlight_gluten_free: raw
             .highlight_gluten_free
@@ -184,11 +189,11 @@ pub fn normalize_renderer_backend(value: &str) -> String {
     }
 }
 
-pub fn normalize_crt_profile(value: &str) -> String {
+pub fn normalize_widget_scale(value: &str) -> String {
     match value.to_ascii_lowercase().as_str() {
-        "off" => "off".to_string(),
-        "lite" => "lite".to_string(),
-        "full" => "full".to_string(),
-        _ => "off".to_string(),
+        "normal" | "100" | "100%" => "normal".to_string(),
+        "125" | "125%" => "125".to_string(),
+        "150" | "150%" => "150".to_string(),
+        _ => "normal".to_string(),
     }
 }

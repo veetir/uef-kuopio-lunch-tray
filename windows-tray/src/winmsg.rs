@@ -237,7 +237,8 @@ pub unsafe extern "system" fn popup_wndproc(
                 let app = &*(app);
                 app.with_state(|state| popup::paint_popup(hwnd, state));
                 if let Some(detail) = popup::take_gpu_error() {
-                    let using_gpu = app.with_state(|state| state.settings.renderer_backend == "gpu");
+                    let using_gpu =
+                        app.with_state(|state| state.settings.renderer_backend == "gpu");
                     if using_gpu {
                         log_line(&format!(
                             "gpu renderer runtime failure, switching to gdi: {}",
@@ -273,9 +274,15 @@ pub unsafe extern "system" fn popup_wndproc(
             LRESULT(0)
         }
         WM_LBUTTONDOWN => {
+            let app = app_from_hwnd(hwnd);
+            if app.is_null() {
+                return LRESULT(0);
+            }
+            let app = &*(app);
+            let state = app.snapshot();
             let x = (lparam.0 as u32 & 0xFFFF) as i16 as i32;
             let y = ((lparam.0 as u32 >> 16) & 0xFFFF) as i16 as i32;
-            if popup::header_button_at(hwnd, x, y).is_none()
+            if popup::header_button_at(hwnd, &state.settings, x, y).is_none()
                 && popup::begin_text_selection(hwnd, x, y)
             {
                 return LRESULT(0);
@@ -324,7 +331,7 @@ pub unsafe extern "system" fn popup_wndproc(
                 let _ = popup::finish_text_selection(hwnd, x, y);
                 return LRESULT(0);
             }
-            if let Some(action) = popup::header_button_at(hwnd, x, y) {
+            if let Some(action) = popup::header_button_at(hwnd, &app.snapshot().settings, x, y) {
                 match action {
                     popup::HeaderButtonAction::Prev => {
                         cycle_popup_restaurant(hwnd, app, -1);
@@ -529,6 +536,15 @@ fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
                 popup::resize_popup_keep_position(app.hwnd_popup(), &state);
             }
         }
+        tray::CMD_WIDGET_SCALE_NORMAL => {
+            app.set_widget_scale("normal");
+        }
+        tray::CMD_WIDGET_SCALE_125 => {
+            app.set_widget_scale("125");
+        }
+        tray::CMD_WIDGET_SCALE_150 => {
+            app.set_widget_scale("150");
+        }
         tray::CMD_RENDERER_GDI => {
             app.set_renderer_backend("gdi");
             popup::shutdown_gpu_renderer();
@@ -547,14 +563,10 @@ fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
                 );
             }
         },
-        tray::CMD_CRT_PROFILE_OFF => {
-            app.set_crt_profile("off");
-        }
-        tray::CMD_CRT_PROFILE_LITE => {
-            app.set_crt_profile("lite");
-        }
-        tray::CMD_CRT_PROFILE_FULL => {
-            app.set_crt_profile("full");
+        tray::CMD_TOGGLE_CRT_THEME => {
+            if app.with_state(|state| state.settings.renderer_backend == "gpu") {
+                app.toggle_crt_enabled();
+            }
         }
         tray::CMD_TOGGLE_STARTUP => {
             let enable = !crate::startup::is_enabled();

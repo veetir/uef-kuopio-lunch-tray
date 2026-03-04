@@ -6,7 +6,7 @@ use crate::format::{
     date_and_time_line, menu_heading, normalize_text, split_component_suffix, student_price_eur,
     text_for, PriceGroups,
 };
-use crate::gpu::{CrtProfile, GpuPresenter};
+use crate::gpu::GpuPresenter;
 use crate::log::log_line;
 use crate::model::TodayMenu;
 use crate::restaurant::{available_restaurants, Provider, Restaurant};
@@ -36,8 +36,6 @@ const LINE_GAP: i32 = 2;
 const ANCHOR_GAP: i32 = 10;
 const POPUP_MAX_WIDTH: i32 = 525;
 const POPUP_MIN_WIDTH: i32 = 320;
-const POPUP_MAX_CONTENT_WIDTH: i32 = POPUP_MAX_WIDTH - PADDING_X * 2;
-const POPUP_MIN_CONTENT_WIDTH: i32 = POPUP_MIN_WIDTH - PADDING_X * 2;
 const HEADER_HEIGHT: i32 = 46;
 const HEADER_BUTTON_SIZE: i32 = 30;
 const HEADER_BUTTON_GAP: i32 = 8;
@@ -50,6 +48,23 @@ const POPUP_SWITCH_ANIM_MS: i64 = 120;
 const POPUP_SWITCH_OFFSET_PX: i32 = 6;
 const FAVORITES_RELOAD_INTERVAL_MS: i64 = 1000;
 const BULLET_PREFIX: &str = "▸ ";
+
+#[derive(Debug, Clone, Copy)]
+struct PopupScale {
+    factor: f32,
+    padding_x: i32,
+    padding_y: i32,
+    line_gap: i32,
+    anchor_gap: i32,
+    max_width: i32,
+    min_width: i32,
+    max_content_width: i32,
+    min_content_width: i32,
+    header_height: i32,
+    header_button_size: i32,
+    header_button_gap: i32,
+    switch_offset_px: i32,
+}
 
 static POPUP_LINE_BUDGET_CACHE: OnceLock<Mutex<Option<PopupLineBudgetCache>>> = OnceLock::new();
 static POPUP_ANIMATION: OnceLock<Mutex<Option<PopupAnimation>>> = OnceLock::new();
@@ -67,6 +82,7 @@ struct PopupLineBudgetKey {
     today_key: String,
     language: String,
     theme: String,
+    widget_scale: String,
     dpi_y: i32,
     enable_antell_restaurants: bool,
     show_prices: bool,
@@ -226,6 +242,7 @@ enum PopupAnimationFrame {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct PopupFontCacheKey {
     theme: [u8; 16],
+    widget_scale: [u8; 16],
     dpi_y: i32,
 }
 
@@ -267,6 +284,43 @@ struct HeaderLayout {
     close: RECT,
 }
 
+fn scale_px(base: i32, factor: f32) -> i32 {
+    ((base as f32) * factor).round() as i32
+}
+
+fn widget_scale_factor(value: &str) -> f32 {
+    match value {
+        "125" => 1.25,
+        "150" => 1.50,
+        _ => 1.0,
+    }
+}
+
+fn popup_scale(settings: &Settings) -> PopupScale {
+    let factor = widget_scale_factor(&settings.widget_scale);
+    let padding_x = scale_px(PADDING_X, factor).max(8);
+    let padding_y = scale_px(PADDING_Y, factor).max(6);
+    let min_width = scale_px(POPUP_MIN_WIDTH, factor).max(220);
+    let max_width = scale_px(POPUP_MAX_WIDTH, factor).max(min_width);
+    let max_content_width = (max_width - padding_x * 2).max(40);
+    let min_content_width = (min_width - padding_x * 2).max(40);
+    PopupScale {
+        factor,
+        padding_x,
+        padding_y,
+        line_gap: scale_px(LINE_GAP, factor).max(1),
+        anchor_gap: scale_px(ANCHOR_GAP, factor).max(4),
+        max_width,
+        min_width,
+        max_content_width,
+        min_content_width,
+        header_height: scale_px(HEADER_HEIGHT, factor).max(30),
+        header_button_size: scale_px(HEADER_BUTTON_SIZE, factor).max(18),
+        header_button_gap: scale_px(HEADER_BUTTON_GAP, factor).max(4),
+        switch_offset_px: scale_px(POPUP_SWITCH_OFFSET_PX, factor).max(2),
+    }
+}
+
 pub fn toggle_popup(hwnd: HWND, state: &AppState) {
     if is_visible(hwnd) {
         begin_close_animation(hwnd, state);
@@ -300,7 +354,8 @@ pub fn show_popup_at(hwnd: HWND, state: &AppState, anchor: POINT) {
 pub fn show_popup_for_tray_icon(hwnd: HWND, state: &AppState, tray_rect: RECT) {
     unsafe {
         let (width, height) = desired_size(hwnd, state);
-        let (x, y) = position_near_tray_rect(width, height, tray_rect);
+        let scale = popup_scale(&state.settings);
+        let (x, y) = position_near_tray_rect(width, height, tray_rect, scale.anchor_gap);
         let _ = SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, SWP_SHOWWINDOW);
         begin_open_animation(hwnd, state);
         InvalidateRect(hwnd, None, true);
@@ -499,14 +554,20 @@ pub fn tick_animation(hwnd: HWND) {
     }
 }
 
-pub fn header_button_at(hwnd: HWND, x: i32, y: i32) -> Option<HeaderButtonAction> {
+pub fn header_button_at(
+    hwnd: HWND,
+    settings: &Settings,
+    x: i32,
+    y: i32,
+) -> Option<HeaderButtonAction> {
     unsafe {
         let mut rect = RECT::default();
         if GetClientRect(hwnd, &mut rect).is_err() {
             return None;
         }
         let width = rect.right - rect.left;
-        let layout = header_layout(width);
+        let scale = popup_scale(settings);
+        let layout = header_layout(width, &scale);
         if point_in_rect(&layout.prev, x, y) {
             return Some(HeaderButtonAction::Prev);
         }
@@ -670,11 +731,20 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
         if state.settings.renderer_backend == "gpu" {
             if let Err(err) = paint_popup_gpu(hwnd, state, &rect) {
                 let detail = format!("{:#}", err);
-                log_line(&format!("gpu render failed: {}", detail.replace('\n', " | ")));
+                log_line(&format!(
+                    "gpu render failed: {}",
+                    detail.replace('\n', " | ")
+                ));
                 record_gpu_error(&detail);
                 paint_popup_to_hdc(hwnd, state, hdc, rect);
                 let headline = detail.lines().next().unwrap_or("GPU renderer error");
-                draw_gpu_error_line(hdc, &rect, &format!("GPU renderer error: {}", headline));
+                let scale = popup_scale(&state.settings);
+                draw_gpu_error_line(
+                    hdc,
+                    &rect,
+                    &format!("GPU renderer error: {}", headline),
+                    scale,
+                );
             } else {
                 clear_gpu_error();
             }
@@ -688,13 +758,14 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
 
 unsafe fn paint_popup_to_hdc(hwnd: HWND, state: &AppState, hdc: HDC, rect: RECT) {
     let width = rect.right - rect.left;
+    let scale = popup_scale(&state.settings);
     let palette = theme_palette(&state.settings.theme);
     let brush = CreateSolidBrush(palette.bg_color);
     FillRect(hdc, &rect, brush);
     DeleteObject(brush);
     SetBkMode(hdc, TRANSPARENT);
 
-    let fonts = fonts_for_paint(hdc, &state.settings.theme);
+    let fonts = fonts_for_paint(hdc, &state.settings);
     let normal_font = fonts.normal;
     let bold_font = fonts.bold;
     let small_font = fonts.small;
@@ -702,8 +773,8 @@ unsafe fn paint_popup_to_hdc(hwnd: HWND, state: &AppState, hdc: HDC, rect: RECT)
     let old_font = SelectObject(hdc, normal_font);
 
     let metrics = text_metrics(hdc, normal_font);
-    let line_height = metrics.tmHeight as i32 + LINE_GAP;
-    let content_width = (width - PADDING_X * 2).max(40);
+    let line_height = metrics.tmHeight as i32 + scale.line_gap;
+    let content_width = (width - scale.padding_x * 2).max(40);
     let animation = current_animation_frame(hwnd);
     let favorites = current_favorites_snapshot();
 
@@ -711,13 +782,13 @@ unsafe fn paint_popup_to_hdc(hwnd: HWND, state: &AppState, hdc: HDC, rect: RECT)
         left: rect.left,
         top: rect.top,
         right: rect.right,
-        bottom: rect.top + HEADER_HEIGHT,
+        bottom: rect.top + scale.header_height,
     };
     let header_brush = CreateSolidBrush(palette.header_bg_color);
     FillRect(hdc, &header_rect, header_brush);
     DeleteObject(header_brush);
 
-    let layout = header_layout(width);
+    let layout = header_layout(width, &scale);
     draw_header_button(
         hdc,
         &layout.prev,
@@ -761,7 +832,7 @@ unsafe fn paint_popup_to_hdc(hwnd: HWND, state: &AppState, hdc: HDC, rect: RECT)
                 title,
                 progress,
             } => {
-                let y_offset = ((1.0 - progress) * POPUP_SWITCH_OFFSET_PX as f32).round() as i32;
+                let y_offset = ((1.0 - progress) * scale.switch_offset_px as f32).round() as i32;
                 let layer_body_text =
                     lerp_color(palette.bg_color, palette.body_text_color, progress);
                 let layer_heading = lerp_color(palette.bg_color, palette.heading_color, progress);
@@ -777,6 +848,7 @@ unsafe fn paint_popup_to_hdc(hwnd: HWND, state: &AppState, hdc: HDC, rect: RECT)
                     title.as_str(),
                     lines.as_ref(),
                     DrawLayerParams {
+                        scale,
                         width,
                         content_width,
                         body_text_color: layer_body_text,
@@ -805,7 +877,7 @@ unsafe fn paint_popup_to_hdc(hwnd: HWND, state: &AppState, hdc: HDC, rect: RECT)
                 title,
                 progress,
             } => {
-                let y_offset = -((progress * POPUP_SWITCH_OFFSET_PX as f32).round() as i32);
+                let y_offset = -((progress * scale.switch_offset_px as f32).round() as i32);
                 let layer_body_text =
                     lerp_color(palette.bg_color, palette.body_text_color, 1.0 - progress);
                 let layer_heading =
@@ -829,6 +901,7 @@ unsafe fn paint_popup_to_hdc(hwnd: HWND, state: &AppState, hdc: HDC, rect: RECT)
                     title.as_str(),
                     lines.as_ref(),
                     DrawLayerParams {
+                        scale,
                         width,
                         content_width,
                         body_text_color: layer_body_text,
@@ -861,9 +934,9 @@ unsafe fn paint_popup_to_hdc(hwnd: HWND, state: &AppState, hdc: HDC, rect: RECT)
                 progress,
             } => {
                 let dir = if direction >= 0 { 1 } else { -1 };
-                let old_offset = -dir * ((progress * POPUP_SWITCH_OFFSET_PX as f32).round() as i32);
+                let old_offset = -dir * ((progress * scale.switch_offset_px as f32).round() as i32);
                 let new_offset =
-                    dir * (((1.0 - progress) * POPUP_SWITCH_OFFSET_PX as f32).round() as i32);
+                    dir * (((1.0 - progress) * scale.switch_offset_px as f32).round() as i32);
                 let old_body_text =
                     lerp_color(palette.bg_color, palette.body_text_color, 1.0 - progress);
                 let old_heading =
@@ -895,6 +968,7 @@ unsafe fn paint_popup_to_hdc(hwnd: HWND, state: &AppState, hdc: HDC, rect: RECT)
                     old_title.as_str(),
                     old_lines.as_ref(),
                     DrawLayerParams {
+                        scale,
                         width,
                         content_width,
                         body_text_color: old_body_text,
@@ -922,6 +996,7 @@ unsafe fn paint_popup_to_hdc(hwnd: HWND, state: &AppState, hdc: HDC, rect: RECT)
                     new_title.as_str(),
                     new_lines.as_ref(),
                     DrawLayerParams {
+                        scale,
                         width,
                         content_width,
                         body_text_color: new_body_text,
@@ -961,6 +1036,7 @@ unsafe fn paint_popup_to_hdc(hwnd: HWND, state: &AppState, hdc: HDC, rect: RECT)
             &title,
             &lines,
             DrawLayerParams {
+                scale,
                 width,
                 content_width,
                 body_text_color: palette.body_text_color,
@@ -992,14 +1068,23 @@ unsafe fn paint_popup_to_hdc(hwnd: HWND, state: &AppState, hdc: HDC, rect: RECT)
 fn paint_popup_gpu(hwnd: HWND, state: &AppState, rect: &RECT) -> anyhow::Result<()> {
     let width = (rect.right - rect.left).max(1);
     let height = (rect.bottom - rect.top).max(1);
-    let profile = CrtProfile::from_settings(&state.settings.crt_profile);
-    let shutdown_progress = if matches!(profile, CrtProfile::Full) {
-        match current_animation_frame(hwnd) {
+    let crt_enabled = state.settings.crt_enabled;
+    let animation = current_animation_frame(hwnd);
+    let shutdown_progress = if crt_enabled {
+        match animation.as_ref() {
             Some(PopupAnimationFrame::Close { progress, .. }) => progress.clamp(0.0, 1.0),
             _ => 0.0,
         }
     } else {
         0.0
+    };
+    let switch_progress = if crt_enabled {
+        match animation.as_ref() {
+            Some(PopupAnimationFrame::Switch { progress, .. }) => progress.clamp(0.0, 1.0),
+            _ => -1.0,
+        }
+    } else {
+        -1.0
     };
 
     let surface_lock = POPUP_GPU_SURFACE.get_or_init(|| Mutex::new(None));
@@ -1041,7 +1126,14 @@ fn paint_popup_gpu(hwnd: HWND, state: &AppState, rect: &RECT) -> anyhow::Result<
         .as_mut()
         .ok_or_else(|| anyhow!("GPU presenter unavailable"))?;
     renderer
-        .render_bgra_frame(frame, width, height, profile, shutdown_progress)
+        .render_bgra_frame(
+            frame,
+            width,
+            height,
+            crt_enabled,
+            shutdown_progress,
+            switch_progress,
+        )
         .context("render CRT frame")?;
 
     Ok(())
@@ -1107,16 +1199,17 @@ fn destroy_gpu_surface(surface: &mut Option<GpuSurface>) {
     }
 }
 
-fn draw_gpu_error_line(hdc: HDC, rect: &RECT, message: &str) {
+fn draw_gpu_error_line(hdc: HDC, rect: &RECT, message: &str, scale: PopupScale) {
     unsafe {
         let old = SetTextColor(hdc, rgb(255, 96, 96));
         let clipped = fit_text_to_width(
             hdc,
             message,
-            (rect.right - rect.left - PADDING_X * 2).max(80),
+            (rect.right - rect.left - scale.padding_x * 2).max(scale_px(80, scale.factor)),
         );
-        let y = (rect.bottom - 18).max(HEADER_HEIGHT + 4);
-        draw_text_line(hdc, &clipped, PADDING_X, y);
+        let y = (rect.bottom - scale_px(18, scale.factor))
+            .max(scale.header_height + scale_px(4, scale.factor));
+        draw_text_line(hdc, &clipped, scale.padding_x, y);
         let _ = SetTextColor(hdc, old);
     }
 }
@@ -1158,6 +1251,7 @@ pub fn shutdown_gpu_renderer() {
 }
 
 struct DrawLayerParams<'a> {
+    scale: PopupScale,
     width: i32,
     content_width: i32,
     body_text_color: COLORREF,
@@ -1189,17 +1283,20 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
     let clipped_title = fit_text_to_width(
         hdc,
         title,
-        (params.layout.close.left - params.layout.next.right - 24).max(40),
+        (params.layout.close.left - params.layout.next.right - scale_px(24, params.scale.factor))
+            .max(scale_px(40, params.scale.factor)),
     );
     let title_width = text_width(hdc, &clipped_title);
-    let title_x = ((params.width - title_width) / 2).max(params.layout.next.right + 12);
-    let title_y = ((HEADER_HEIGHT - params.metrics.tmHeight as i32) / 2 - 1) + params.y_offset;
+    let title_x = ((params.width - title_width) / 2)
+        .max(params.layout.next.right + scale_px(12, params.scale.factor));
+    let title_y =
+        ((params.scale.header_height - params.metrics.tmHeight as i32) / 2 - 1) + params.y_offset;
     draw_text_line(hdc, &clipped_title, title_x, title_y);
 
     let bullet_width = text_width_with_font(hdc, params.normal_font, BULLET_PREFIX);
     let main_wrap_width = (params.content_width - bullet_width).max(24);
 
-    let mut y = HEADER_HEIGHT + PADDING_Y + params.y_offset;
+    let mut y = params.scale.header_height + params.scale.padding_y + params.y_offset;
     let mut capture = params.capture;
     for line in lines {
         match line {
@@ -1213,7 +1310,7 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                     y += params.line_height;
                 } else {
                     for row in wrapped {
-                        draw_text_line(hdc, &row, PADDING_X, y);
+                        draw_text_line(hdc, &row, params.scale.padding_x, y);
                         y += params.line_height;
                     }
                 }
@@ -1228,7 +1325,7 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                     y += params.line_height;
                 } else {
                     for row in wrapped {
-                        draw_text_line(hdc, &row, PADDING_X, y);
+                        draw_text_line(hdc, &row, params.scale.padding_x, y);
                         y += params.line_height;
                     }
                 }
@@ -1280,7 +1377,7 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                         SetTextColor(hdc, params.body_text_color);
                     }
                     let clipped_main = fit_text_to_width(hdc, main, max_main);
-                    let line_x = PADDING_X + bullet_width;
+                    let line_x = params.scale.padding_x + bullet_width;
                     let row = WrappedRow {
                         start: 0,
                         end: clipped_main.len(),
@@ -1288,7 +1385,7 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                     };
                     let row_segments =
                         segments_for_row(&clipped_main, row.start, row.end, &favorite_ranges);
-                    draw_text_line(hdc, BULLET_PREFIX, PADDING_X, y);
+                    draw_text_line(hdc, BULLET_PREFIX, params.scale.padding_x, y);
                     if let Some(selection) = selected_item_range {
                         draw_selection_bg_for_row(
                             hdc,
@@ -1326,7 +1423,7 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                         let main_width =
                             text_width_with_font(hdc, params.normal_font, &clipped_main);
                         let suffix_x = line_x + main_width + 4;
-                        if suffix_x < (PADDING_X + params.content_width) {
+                        if suffix_x < (params.scale.padding_x + params.content_width) {
                             draw_text_segments(
                                 hdc,
                                 suffix_segments,
@@ -1353,9 +1450,9 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                     y += params.line_height;
                 } else {
                     for (idx, row) in wrapped_main.iter().enumerate() {
-                        let line_x = PADDING_X + bullet_width;
+                        let line_x = params.scale.padding_x + bullet_width;
                         if idx == 0 {
-                            draw_text_line(hdc, BULLET_PREFIX, PADDING_X, y);
+                            draw_text_line(hdc, BULLET_PREFIX, params.scale.padding_x, y);
                         }
                         if let Some(selection) = selected_item_range {
                             draw_selection_bg_for_row(
@@ -1409,7 +1506,7 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                             draw_text_segments(
                                 hdc,
                                 suffix_segments,
-                                PADDING_X + bullet_width,
+                                params.scale.padding_x + bullet_width,
                                 y + 1,
                                 params.small_font,
                                 params.small_bold_font,
@@ -1425,7 +1522,7 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                                 SetTextColor(hdc, params.suffix_color);
                             }
                             for row in wrapped_suffix {
-                                draw_text_line(hdc, &row, PADDING_X + bullet_width, y);
+                                draw_text_line(hdc, &row, params.scale.padding_x + bullet_width, y);
                                 y += params.line_height;
                             }
                         }
@@ -2014,25 +2111,25 @@ fn draw_header_button(
     draw_text_line(hdc, label, x, y);
 }
 
-fn header_layout(width: i32) -> HeaderLayout {
-    let top = (HEADER_HEIGHT - HEADER_BUTTON_SIZE) / 2;
+fn header_layout(width: i32, scale: &PopupScale) -> HeaderLayout {
+    let top = (scale.header_height - scale.header_button_size) / 2;
     let prev = RECT {
-        left: PADDING_X,
+        left: scale.padding_x,
         top,
-        right: PADDING_X + HEADER_BUTTON_SIZE,
-        bottom: top + HEADER_BUTTON_SIZE,
+        right: scale.padding_x + scale.header_button_size,
+        bottom: top + scale.header_button_size,
     };
     let next = RECT {
-        left: prev.right + HEADER_BUTTON_GAP,
+        left: prev.right + scale.header_button_gap,
         top,
-        right: prev.right + HEADER_BUTTON_GAP + HEADER_BUTTON_SIZE,
-        bottom: top + HEADER_BUTTON_SIZE,
+        right: prev.right + scale.header_button_gap + scale.header_button_size,
+        bottom: top + scale.header_button_size,
     };
     let close = RECT {
-        left: width - PADDING_X - HEADER_BUTTON_SIZE,
+        left: width - scale.padding_x - scale.header_button_size,
         top,
-        right: width - PADDING_X,
-        bottom: top + HEADER_BUTTON_SIZE,
+        right: width - scale.padding_x,
+        bottom: top + scale.header_button_size,
     };
     HeaderLayout { prev, next, close }
 }
@@ -2075,7 +2172,8 @@ fn text_width(hdc: HDC, text: &str) -> i32 {
 fn desired_size(hwnd: HWND, state: &AppState) -> (i32, i32) {
     unsafe {
         let hdc = windows::Win32::Graphics::Gdi::GetDC(hwnd);
-        let fonts = fonts_for_paint(hdc, &state.settings.theme);
+        let scale = popup_scale(&state.settings);
+        let fonts = fonts_for_paint(hdc, &state.settings);
         let normal_font = fonts.normal;
         let bold_font = fonts.bold;
         let small_font = fonts.small;
@@ -2089,7 +2187,7 @@ fn desired_size(hwnd: HWND, state: &AppState) -> (i32, i32) {
             small_font,
             small_bold_font,
             &current_lines,
-            POPUP_MAX_CONTENT_WIDTH,
+            scale.max_content_width,
         );
         let budget = popup_cached_layout_budget(
             state,
@@ -2103,7 +2201,7 @@ fn desired_size(hwnd: HWND, state: &AppState) -> (i32, i32) {
         let target_content_width = budget
             .max_content_width_px
             .unwrap_or(current_metrics.required_content_width)
-            .clamp(POPUP_MIN_CONTENT_WIDTH, POPUP_MAX_CONTENT_WIDTH);
+            .clamp(scale.min_content_width, scale.max_content_width);
         let current_wrapped_metrics = measure_lines_layout(
             hdc,
             normal_font,
@@ -2121,20 +2219,27 @@ fn desired_size(hwnd: HWND, state: &AppState) -> (i32, i32) {
         }
         target_lines = target_lines.min(MAX_DYNAMIC_LINES);
         let metrics = text_metrics(hdc, normal_font);
-        let line_height = metrics.tmHeight as i32 + LINE_GAP;
-        let height = HEADER_HEIGHT + (target_lines as i32 * line_height) + PADDING_Y * 2;
-        let width = (target_content_width + PADDING_X * 2).clamp(POPUP_MIN_WIDTH, POPUP_MAX_WIDTH);
+        let line_height = metrics.tmHeight as i32 + scale.line_gap;
+        let height =
+            scale.header_height + (target_lines as i32 * line_height) + scale.padding_y * 2;
+        let width =
+            (target_content_width + scale.padding_x * 2).clamp(scale.min_width, scale.max_width);
         windows::Win32::Graphics::Gdi::ReleaseDC(hwnd, hdc);
 
-        (width, height.max(HEADER_HEIGHT + 120))
+        (
+            width,
+            height.max(scale.header_height + scale_px(120, scale.factor)),
+        )
     }
 }
 
-fn create_fonts(hdc: HDC, theme: &str) -> (HFONT, HFONT, HFONT, HFONT) {
+fn create_fonts(hdc: HDC, theme: &str, scale_factor: f32) -> (HFONT, HFONT, HFONT, HFONT) {
     unsafe {
         let dpi = GetDeviceCaps(hdc, LOGPIXELSY);
-        let height_normal = -MulDiv(12, dpi, 72);
-        let height_small = -MulDiv(10, dpi, 72);
+        let normal_pt = scale_px(12, scale_factor).max(8);
+        let small_pt = scale_px(10, scale_factor).max(7);
+        let height_normal = -MulDiv(normal_pt, dpi, 72);
+        let height_small = -MulDiv(small_pt, dpi, 72);
         let face = to_wstring(theme_font_family(theme));
 
         let normal = CreateFontW(
@@ -2213,17 +2318,22 @@ fn theme_key(theme: &str) -> [u8; 16] {
     out
 }
 
-fn fonts_for_paint(hdc: HDC, theme: &str) -> PopupFonts {
+fn fonts_for_paint(hdc: HDC, settings: &Settings) -> PopupFonts {
     let dpi_y = unsafe { GetDeviceCaps(hdc, LOGPIXELSY) };
     let key = PopupFontCacheKey {
-        theme: theme_key(theme),
+        theme: theme_key(&settings.theme),
+        widget_scale: theme_key(&settings.widget_scale),
         dpi_y,
     };
     let cache_lock = POPUP_FONT_CACHE.get_or_init(|| Mutex::new(None));
     let mut cache = match cache_lock.lock() {
         Ok(value) => value,
         Err(_) => {
-            let (normal, bold, small, small_bold) = create_fonts(hdc, theme);
+            let (normal, bold, small, small_bold) = create_fonts(
+                hdc,
+                &settings.theme,
+                widget_scale_factor(&settings.widget_scale),
+            );
             return PopupFonts {
                 normal,
                 bold,
@@ -2248,7 +2358,11 @@ fn fonts_for_paint(hdc: HDC, theme: &str) -> PopupFonts {
         }
     }
 
-    let (normal, bold, small, small_bold) = create_fonts(hdc, theme);
+    let (normal, bold, small, small_bold) = create_fonts(
+        hdc,
+        &settings.theme,
+        widget_scale_factor(&settings.widget_scale),
+    );
     let fonts = PopupFonts {
         normal,
         bold,
@@ -2378,6 +2492,7 @@ fn line_budget_key(settings: &Settings, today_key: &str, dpi_y: i32) -> PopupLin
         today_key: today_key.to_string(),
         language: settings.language.clone(),
         theme: settings.theme.clone(),
+        widget_scale: settings.widget_scale.clone(),
         dpi_y,
         enable_antell_restaurants: settings.enable_antell_restaurants,
         show_prices: settings.show_prices,
@@ -2449,6 +2564,7 @@ fn max_today_cached_layout_budget(
     small_bold_font: HFONT,
 ) -> CachedLayoutBudget {
     let settings = &state.settings;
+    let scale = popup_scale(settings);
     let mut max_wrapped_lines: Option<usize> = None;
     let mut max_content_width_px: Option<i32> = None;
 
@@ -2483,7 +2599,7 @@ fn max_today_cached_layout_budget(
             small_font,
             small_bold_font,
             &candidate_lines,
-            POPUP_MAX_CONTENT_WIDTH,
+            scale.max_content_width,
         );
         max_wrapped_lines = Some(
             max_wrapped_lines.map_or(metrics.wrapped_line_count, |prev| {
@@ -2613,7 +2729,12 @@ fn position_near_point(width: i32, height: i32, point: POINT) -> (i32, i32) {
     }
 }
 
-fn position_near_tray_rect(width: i32, height: i32, tray_rect: RECT) -> (i32, i32) {
+fn position_near_tray_rect(
+    width: i32,
+    height: i32,
+    tray_rect: RECT,
+    anchor_gap: i32,
+) -> (i32, i32) {
     unsafe {
         let center = POINT {
             x: (tray_rect.left + tray_rect.right) / 2,
@@ -2628,13 +2749,13 @@ fn position_near_tray_rect(width: i32, height: i32, tray_rect: RECT) -> (i32, i3
         }
 
         let mut x = tray_rect.right - width;
-        let mut y = tray_rect.top - height - ANCHOR_GAP;
+        let mut y = tray_rect.top - height - anchor_gap;
 
         if y < work_area.top {
-            y = tray_rect.bottom + ANCHOR_GAP;
+            y = tray_rect.bottom + anchor_gap;
         }
         if y + height > work_area.bottom {
-            y = (tray_rect.top - height - ANCHOR_GAP).max(work_area.top);
+            y = (tray_rect.top - height - anchor_gap).max(work_area.top);
         }
 
         if x < work_area.left {
