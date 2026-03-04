@@ -22,8 +22,9 @@ use windows::Win32::Graphics::Gdi::{
     BeginPaint, CreateCompatibleDC, CreateDIBSection, CreateFontW, CreateSolidBrush, DeleteDC,
     DeleteObject, EndPaint, FillRect, GetDeviceCaps, GetMonitorInfoW, GetTextExtentPoint32W,
     GetTextMetricsW, InvalidateRect, MonitorFromPoint, SelectObject, SetBkMode, SetTextColor,
-    TextOutW, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HBITMAP, HDC, HFONT, HGDIOBJ,
-    LOGPIXELSY, MONITORINFO, MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, TEXTMETRICW, TRANSPARENT,
+    TextOutW, UpdateWindow, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HBITMAP, HDC,
+    HFONT, HGDIOBJ, LOGPIXELSY, MONITORINFO, MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, TEXTMETRICW,
+    TRANSPARENT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GetClientRect, GetCursorPos, GetWindowRect, KillTimer, SetTimer, SetWindowPos, ShowWindow,
@@ -42,6 +43,7 @@ const HEADER_BUTTON_GAP: i32 = 8;
 const LOADING_HINT_DELAY_MS: i64 = 250;
 const MAX_DYNAMIC_LINES: usize = 35;
 const POPUP_ANIM_INTERVAL_MS: u32 = 33;
+const POPUP_HEADER_PRESS_MS: i64 = 90;
 const POPUP_OPEN_ANIM_MS: i64 = 120;
 const POPUP_CLOSE_ANIM_MS: i64 = 135;
 const POPUP_SWITCH_ANIM_MS: i64 = 120;
@@ -74,8 +76,10 @@ static POPUP_FONT_CACHE: OnceLock<Mutex<Option<PopupFontCache>>> = OnceLock::new
 static POPUP_GPU_RENDERER: OnceLock<Mutex<Option<GpuPresenter>>> = OnceLock::new();
 static POPUP_GPU_SURFACE: OnceLock<Mutex<Option<GpuSurface>>> = OnceLock::new();
 static POPUP_GPU_ERROR: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+static POPUP_HEADER_PRESS: OnceLock<Mutex<Option<HeaderButtonPress>>> = OnceLock::new();
 
 pub const POPUP_ANIM_TIMER_ID: usize = 100;
+pub const POPUP_HEADER_PRESS_TIMER_ID: usize = 101;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PopupLineBudgetKey {
@@ -284,6 +288,13 @@ struct HeaderLayout {
     close: RECT,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct HeaderButtonPress {
+    hwnd: HWND,
+    action: HeaderButtonAction,
+    until_epoch_ms: i64,
+}
+
 fn scale_px(base: i32, factor: f32) -> i32 {
     ((base as f32) * factor).round() as i32
 }
@@ -338,6 +349,7 @@ pub fn show_popup(hwnd: HWND, state: &AppState) {
         let _ = SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, SWP_SHOWWINDOW);
         begin_open_animation(hwnd, state);
         InvalidateRect(hwnd, None, true);
+        let _ = UpdateWindow(hwnd);
     }
 }
 
@@ -348,6 +360,7 @@ pub fn show_popup_at(hwnd: HWND, state: &AppState, anchor: POINT) {
         let _ = SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, SWP_SHOWWINDOW);
         begin_open_animation(hwnd, state);
         InvalidateRect(hwnd, None, true);
+        let _ = UpdateWindow(hwnd);
     }
 }
 
@@ -359,6 +372,7 @@ pub fn show_popup_for_tray_icon(hwnd: HWND, state: &AppState, tray_rect: RECT) {
         let _ = SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, SWP_SHOWWINDOW);
         begin_open_animation(hwnd, state);
         InvalidateRect(hwnd, None, true);
+        let _ = UpdateWindow(hwnd);
     }
 }
 
@@ -377,6 +391,7 @@ pub fn resize_popup_keep_position(hwnd: HWND, state: &AppState) {
         let (x, y) = position_near_point(width, height, anchor);
         let _ = SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, SWP_SHOWWINDOW);
         InvalidateRect(hwnd, None, true);
+        let _ = UpdateWindow(hwnd);
     }
 }
 
@@ -384,9 +399,79 @@ pub fn hide_popup(hwnd: HWND) {
     unsafe {
         clear_animation_state(hwnd);
         clear_selection_state(hwnd);
+        clear_header_button_press(hwnd);
         let _ = KillTimer(hwnd, POPUP_ANIM_TIMER_ID);
+        let _ = KillTimer(hwnd, POPUP_HEADER_PRESS_TIMER_ID);
         ShowWindow(hwnd, SW_HIDE);
     }
+}
+
+pub fn press_navigation_button(hwnd: HWND, direction: i32) {
+    let action = if direction < 0 {
+        HeaderButtonAction::Prev
+    } else if direction > 0 {
+        HeaderButtonAction::Next
+    } else {
+        return;
+    };
+    let store = POPUP_HEADER_PRESS.get_or_init(|| Mutex::new(None));
+    if let Ok(mut guard) = store.lock() {
+        *guard = Some(HeaderButtonPress {
+            hwnd,
+            action,
+            until_epoch_ms: now_epoch_ms() + POPUP_HEADER_PRESS_MS,
+        });
+    }
+    unsafe {
+        let _ = SetTimer(
+            hwnd,
+            POPUP_HEADER_PRESS_TIMER_ID,
+            POPUP_HEADER_PRESS_MS.max(1) as u32,
+            None,
+        );
+        InvalidateRect(hwnd, None, true);
+    }
+}
+
+pub fn tick_header_button_press(hwnd: HWND) {
+    let store = POPUP_HEADER_PRESS.get_or_init(|| Mutex::new(None));
+    let should_clear = match store.lock() {
+        Ok(guard) => match guard.as_ref() {
+            Some(press) => press.hwnd == hwnd && now_epoch_ms() >= press.until_epoch_ms,
+            None => true,
+        },
+        Err(_) => true,
+    };
+    if should_clear {
+        clear_header_button_press(hwnd);
+        unsafe {
+            let _ = KillTimer(hwnd, POPUP_HEADER_PRESS_TIMER_ID);
+            InvalidateRect(hwnd, None, true);
+        }
+    }
+}
+
+fn clear_header_button_press(hwnd: HWND) {
+    let store = POPUP_HEADER_PRESS.get_or_init(|| Mutex::new(None));
+    if let Ok(mut guard) = store.lock() {
+        if guard.as_ref().is_some_and(|press| press.hwnd == hwnd) {
+            *guard = None;
+        }
+    }
+}
+
+fn pressed_header_button(hwnd: HWND) -> Option<HeaderButtonAction> {
+    let store = POPUP_HEADER_PRESS.get_or_init(|| Mutex::new(None));
+    let mut guard = store.lock().ok()?;
+    let now = now_epoch_ms();
+    if let Some(press) = guard.as_ref() {
+        if press.hwnd != hwnd || now >= press.until_epoch_ms {
+            *guard = None;
+            return None;
+        }
+        return Some(press.action);
+    }
+    None
 }
 
 pub fn clear_font_cache() {
@@ -789,6 +874,7 @@ unsafe fn paint_popup_to_hdc(hwnd: HWND, state: &AppState, hdc: HDC, rect: RECT)
     DeleteObject(header_brush);
 
     let layout = header_layout(width, &scale);
+    let pressed_button = pressed_header_button(hwnd);
     draw_header_button(
         hdc,
         &layout.prev,
@@ -796,6 +882,7 @@ unsafe fn paint_popup_to_hdc(hwnd: HWND, state: &AppState, hdc: HDC, rect: RECT)
         palette.button_bg_color,
         palette.body_text_color,
         normal_font,
+        pressed_button == Some(HeaderButtonAction::Prev),
     );
     draw_header_button(
         hdc,
@@ -804,6 +891,7 @@ unsafe fn paint_popup_to_hdc(hwnd: HWND, state: &AppState, hdc: HDC, rect: RECT)
         palette.button_bg_color,
         palette.body_text_color,
         normal_font,
+        pressed_button == Some(HeaderButtonAction::Next),
     );
     draw_header_button(
         hdc,
@@ -812,6 +900,7 @@ unsafe fn paint_popup_to_hdc(hwnd: HWND, state: &AppState, hdc: HDC, rect: RECT)
         palette.button_bg_color,
         palette.body_text_color,
         normal_font,
+        false,
     );
 
     let divider_rect = RECT {
@@ -2096,18 +2185,38 @@ fn draw_header_button(
     bg_color: COLORREF,
     text_color: COLORREF,
     font: HFONT,
+    pressed: bool,
 ) {
+    let mut button_rect = *rect;
+    let bg = if pressed {
+        lerp_color(bg_color, rgb(0, 0, 0), 0.28)
+    } else {
+        bg_color
+    };
+    if pressed
+        && button_rect.right - button_rect.left > 4
+        && button_rect.bottom - button_rect.top > 4
+    {
+        button_rect.left += 1;
+        button_rect.top += 1;
+        button_rect.right -= 1;
+        button_rect.bottom -= 1;
+    }
     unsafe {
-        let brush = CreateSolidBrush(bg_color);
-        FillRect(hdc, rect, brush);
+        let brush = CreateSolidBrush(bg);
+        FillRect(hdc, &button_rect, brush);
         DeleteObject(brush);
         SelectObject(hdc, font);
         SetTextColor(hdc, text_color);
     }
     let label_width = text_width(hdc, label);
     let metrics = text_metrics(hdc, font);
-    let x = rect.left + ((rect.right - rect.left - label_width) / 2).max(0);
-    let y = rect.top + ((rect.bottom - rect.top - metrics.tmHeight as i32) / 2).max(0);
+    let x = button_rect.left
+        + ((button_rect.right - button_rect.left - label_width) / 2).max(0)
+        + if pressed { 1 } else { 0 };
+    let y = button_rect.top
+        + ((button_rect.bottom - button_rect.top - metrics.tmHeight as i32) / 2).max(0)
+        + if pressed { 1 } else { 0 };
     draw_text_line(hdc, label, x, y);
 }
 

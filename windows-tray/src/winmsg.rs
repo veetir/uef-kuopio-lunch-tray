@@ -244,6 +244,7 @@ pub unsafe extern "system" fn popup_wndproc(
                             "gpu renderer runtime failure, switching to gdi: {}",
                             detail.replace('\n', " | ")
                         ));
+                        popup::hide_popup(hwnd);
                         app.set_renderer_backend("gdi");
                         popup::shutdown_gpu_renderer();
                         show_gpu_error(
@@ -383,6 +384,10 @@ pub unsafe extern "system" fn popup_wndproc(
                 popup::tick_animation(hwnd);
                 return LRESULT(0);
             }
+            if wparam.0 as usize == popup::POPUP_HEADER_PRESS_TIMER_ID {
+                popup::tick_header_button_press(hwnd);
+                return LRESULT(0);
+            }
             LRESULT(0)
         }
         WM_DESTROY => LRESULT(0),
@@ -397,6 +402,7 @@ pub unsafe extern "system" fn popup_wndproc(
 }
 
 fn cycle_popup_restaurant(hwnd: HWND, app: &App, direction: i32) {
+    popup::press_navigation_button(hwnd, direction);
     let old_state = app.snapshot();
     app.cycle_restaurant(direction);
     let _ = app.load_cache_for_current();
@@ -408,6 +414,7 @@ fn cycle_popup_restaurant(hwnd: HWND, app: &App, direction: i32) {
 }
 
 fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
+    let mut skip_post_resize = false;
     match cmd {
         tray::CMD_RESTAURANT_0437 => {
             app.set_restaurant("0437");
@@ -546,21 +553,31 @@ fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
             app.set_widget_scale("150");
         }
         tray::CMD_RENDERER_GDI => {
+            log_line("renderer switch requested: gdi");
+            popup::hide_popup(app.hwnd_popup());
             app.set_renderer_backend("gdi");
             popup::shutdown_gpu_renderer();
+            popup::clear_font_cache();
+            skip_post_resize = true;
         }
         tray::CMD_RENDERER_GPU => match gpu::probe_hardware() {
             Ok(()) => {
+                log_line("renderer switch requested: gpu");
+                popup::hide_popup(app.hwnd_popup());
                 app.set_renderer_backend("gpu");
+                skip_post_resize = true;
             }
             Err(err) => {
                 let detail = format!("{:#}", err);
+                popup::hide_popup(app.hwnd_popup());
                 app.set_renderer_backend("gdi");
                 popup::shutdown_gpu_renderer();
+                popup::clear_font_cache();
                 show_gpu_error(
                     hwnd,
                     &format!("GPU renderer could not be enabled.\n\n{}", detail),
                 );
+                skip_post_resize = true;
             }
         },
         tray::CMD_TOGGLE_CRT_THEME => {
@@ -604,7 +621,7 @@ fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
         },
         _ => {}
     }
-    if popup_is_visible(app.hwnd_popup()) {
+    if !skip_post_resize && popup_is_visible(app.hwnd_popup()) {
         let state = app.snapshot();
         popup::resize_popup_keep_position(app.hwnd_popup(), &state);
     }

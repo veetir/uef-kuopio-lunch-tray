@@ -675,6 +675,9 @@ impl App {
     pub fn set_renderer_backend(&self, backend: &str) {
         let mut state = self.state.lock().unwrap();
         state.settings.renderer_backend = normalize_renderer_backend(backend);
+        if state.settings.renderer_backend != "gpu" {
+            state.settings.crt_enabled = false;
+        }
         let _ = save_settings(&state.settings);
     }
 
