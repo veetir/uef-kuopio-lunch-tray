@@ -735,8 +735,8 @@ float4 main(float4 pos : SV_POSITION, float2 uvIn : TEXCOORD0) : SV_TARGET {
     }
 
     float switchEnv = switchEnvelope(switchProgress);
-    uv = curvatureWarp(uv, 0.06);
-    uv = overscanCrop(uv, 0.92);
+    uv = curvatureWarp(uv, 0.03);
+    uv = overscanCrop(uv, 0.96);
     uv = applySwitchTransient(uv, switchEnv);
     uv = saturate(uv);
 
