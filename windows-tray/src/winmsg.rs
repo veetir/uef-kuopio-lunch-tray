@@ -1,4 +1,5 @@
 use crate::app::{App, FetchApplyOutcome, FetchMessage};
+use crate::gpu;
 use crate::log::log_line;
 use crate::popup;
 use crate::tray;
@@ -8,11 +9,11 @@ use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
     DefWindowProcW, DestroyWindow, GetCursorPos, GetWindowLongPtrW, GetWindowRect, KillTimer,
-    LoadCursorW, PostQuitMessage, RegisterClassExW, SetForegroundWindow, SetTimer,
+    LoadCursorW, MessageBoxW, PostQuitMessage, RegisterClassExW, SetForegroundWindow, SetTimer,
     SetWindowLongPtrW, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, IDC_ARROW,
-    WM_ACTIVATE, WM_APP, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_KEYDOWN, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_PAINT, WM_RBUTTONUP,
-    WM_TIMER, WNDCLASSEXW,
+    MB_ICONERROR, MB_OK, WM_ACTIVATE, WM_APP, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_KEYDOWN,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_PAINT,
+    WM_RBUTTONUP, WM_TIMER, WNDCLASSEXW,
 };
 
 pub const TRAY_WND_CLASS: &str = "CompassLunchTrayWindow";
@@ -256,7 +257,8 @@ pub unsafe extern "system" fn popup_wndproc(
         WM_LBUTTONDOWN => {
             let x = (lparam.0 as u32 & 0xFFFF) as i16 as i32;
             let y = ((lparam.0 as u32 >> 16) & 0xFFFF) as i16 as i32;
-            if popup::header_button_at(hwnd, x, y).is_none() && popup::begin_text_selection(hwnd, x, y)
+            if popup::header_button_at(hwnd, x, y).is_none()
+                && popup::begin_text_selection(hwnd, x, y)
             {
                 return LRESULT(0);
             }
@@ -362,6 +364,7 @@ pub unsafe extern "system" fn popup_wndproc(
         _ => {
             if msg == windows::Win32::UI::WindowsAndMessaging::WM_NCDESTROY {
                 popup::clear_font_cache();
+                popup::shutdown_gpu_renderer();
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
@@ -507,6 +510,32 @@ fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
                 let state = app.snapshot();
                 popup::resize_popup_keep_position(app.hwnd_popup(), &state);
             }
+        }
+        tray::CMD_RENDERER_GDI => {
+            app.set_renderer_backend("gdi");
+            popup::shutdown_gpu_renderer();
+        }
+        tray::CMD_RENDERER_GPU => match gpu::probe_hardware() {
+            Ok(()) => {
+                app.set_renderer_backend("gpu");
+            }
+            Err(err) => {
+                app.set_renderer_backend("gdi");
+                popup::shutdown_gpu_renderer();
+                show_gpu_error(
+                    hwnd,
+                    &format!("GPU renderer could not be enabled.\n\n{}", err),
+                );
+            }
+        },
+        tray::CMD_CRT_PROFILE_OFF => {
+            app.set_crt_profile("off");
+        }
+        tray::CMD_CRT_PROFILE_LITE => {
+            app.set_crt_profile("lite");
+        }
+        tray::CMD_CRT_PROFILE_FULL => {
+            app.set_crt_profile("full");
         }
         tray::CMD_TOGGLE_STARTUP => {
             let enable = !crate::startup::is_enabled();
@@ -684,4 +713,17 @@ fn point_near_rect(rect: &RECT, x: i32, y: i32, padding: i32) -> bool {
         && x <= rect.right + padding
         && y >= rect.top - padding
         && y <= rect.bottom + padding
+}
+
+fn show_gpu_error(hwnd: HWND, message: &str) {
+    unsafe {
+        let title = to_wstring("Compass Lunch - GPU Renderer");
+        let body = to_wstring(message);
+        let _ = MessageBoxW(
+            hwnd,
+            PCWSTR(body.as_ptr()),
+            PCWSTR(title.as_ptr()),
+            MB_OK | MB_ICONERROR,
+        );
+    }
 }

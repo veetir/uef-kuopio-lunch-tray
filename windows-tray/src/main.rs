@@ -6,6 +6,7 @@ mod app;
 mod cache;
 mod favorites;
 mod format;
+mod gpu;
 mod log;
 mod model;
 mod popup;
@@ -31,6 +32,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DispatchMessageW, GetMessageW, TranslateMessage, MSG, SW_HIDE,
     WS_EX_TOOLWINDOW, WS_OVERLAPPEDWINDOW, WS_POPUP,
 };
+use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -101,6 +103,23 @@ fn main() -> anyhow::Result<()> {
 
         let app = &*app_ptr;
         app.set_hwnds(tray_hwnd, popup_hwnd);
+        let startup_state = app.snapshot();
+        if startup_state.settings.renderer_backend == "gpu" {
+            if let Err(err) = gpu::probe_hardware() {
+                app.set_renderer_backend("gdi");
+                let title = to_wstring("Compass Lunch - GPU Renderer");
+                let body = to_wstring(&format!(
+                    "GPU renderer could not be initialized on startup.\n\n{}\n\nFalling back to GDI.",
+                    err
+                ));
+                let _ = MessageBoxW(
+                    tray_hwnd,
+                    PCWSTR(body.as_ptr()),
+                    PCWSTR(title.as_ptr()),
+                    MB_OK | MB_ICONERROR,
+                );
+            }
+        }
         let _ = app.load_cache_for_current();
         winmsg::schedule_timers(tray_hwnd, app.refresh_minutes());
         app.check_stale_date_and_refresh();

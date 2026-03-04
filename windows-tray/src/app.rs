@@ -2,10 +2,11 @@ use crate::api::{self, FetchOutput};
 use crate::cache;
 use crate::log::{log_line, set_enabled as set_log_enabled};
 use crate::model::TodayMenu;
-use crate::restaurant::{
-    available_restaurants, provider_key, restaurant_for_code, Provider,
+use crate::restaurant::{available_restaurants, provider_key, restaurant_for_code, Provider};
+use crate::settings::{
+    load_settings, normalize_crt_profile, normalize_renderer_backend, normalize_theme,
+    save_settings, settings_dir, Settings,
 };
-use crate::settings::{load_settings, normalize_theme, save_settings, settings_dir, Settings};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use time::OffsetDateTime;
@@ -85,7 +86,11 @@ impl App {
         let settings = load_settings();
         set_log_enabled(settings.enable_logging);
         let state = AppState {
-            provider: restaurant_for_code(&settings.restaurant_code, settings.enable_antell_restaurants).provider,
+            provider: restaurant_for_code(
+                &settings.restaurant_code,
+                settings.enable_antell_restaurants,
+            )
+            .provider,
             settings,
             status: FetchStatus::Idle,
             loading_started_epoch_ms: 0,
@@ -534,8 +539,7 @@ impl App {
 
     pub fn toggle_hide_expensive_student_meals(&self) {
         let mut state = self.state.lock().unwrap();
-        state.settings.hide_expensive_student_meals =
-            !state.settings.hide_expensive_student_meals;
+        state.settings.hide_expensive_student_meals = !state.settings.hide_expensive_student_meals;
         let _ = save_settings(&state.settings);
     }
 
@@ -640,10 +644,11 @@ impl App {
         }
 
         let now = now_epoch_ms();
-        let should_fetch = match cache::cache_mtime_ms(restaurant.provider, restaurant.code, &language) {
-            None => true,
-            Some(ts) => now.saturating_sub(ts) >= (refresh_minutes as i64) * 60_000,
-        };
+        let should_fetch =
+            match cache::cache_mtime_ms(restaurant.provider, restaurant.code, &language) {
+                None => true,
+                Some(ts) => now.saturating_sub(ts) >= (refresh_minutes as i64) * 60_000,
+            };
 
         if should_fetch {
             let _ = self.start_refresh_for_code(restaurant.code, false);
@@ -658,6 +663,18 @@ impl App {
     pub fn set_theme(&self, theme: &str) {
         let mut state = self.state.lock().unwrap();
         state.settings.theme = normalize_theme(theme);
+        let _ = save_settings(&state.settings);
+    }
+
+    pub fn set_renderer_backend(&self, backend: &str) {
+        let mut state = self.state.lock().unwrap();
+        state.settings.renderer_backend = normalize_renderer_backend(backend);
+        let _ = save_settings(&state.settings);
+    }
+
+    pub fn set_crt_profile(&self, profile: &str) {
+        let mut state = self.state.lock().unwrap();
+        state.settings.crt_profile = normalize_crt_profile(profile);
         let _ = save_settings(&state.settings);
     }
 
@@ -718,7 +735,10 @@ impl App {
 
         let (settings, current_code) = {
             let state = self.state.lock().unwrap();
-            (state.settings.clone(), state.settings.restaurant_code.clone())
+            (
+                state.settings.clone(),
+                state.settings.restaurant_code.clone(),
+            )
         };
         let today = today_key();
         let restaurants = available_restaurants(settings.enable_antell_restaurants);
@@ -784,7 +804,12 @@ fn menu_cache_key(code: &str, language: &str) -> String {
 fn today_key() -> String {
     let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
     let date = now.date();
-    format!("{:04}-{:02}-{:02}", date.year(), date.month() as u8, date.day())
+    format!(
+        "{:04}-{:02}-{:02}",
+        date.year(),
+        date.month() as u8,
+        date.day()
+    )
 }
 
 fn update_stale_date(state: &mut AppState) {
@@ -806,7 +831,12 @@ fn date_key_from_epoch_ms(ms: i64) -> Option<String> {
     let offset = time::UtcOffset::current_local_offset().unwrap_or(time::UtcOffset::UTC);
     let local = dt.to_offset(offset);
     let date = local.date();
-    Some(format!("{:04}-{:02}-{:02}", date.year(), date.month() as u8, date.day()))
+    Some(format!(
+        "{:04}-{:02}-{:02}",
+        date.year(),
+        date.month() as u8,
+        date.day()
+    ))
 }
 
 fn fetch_output_has_payload(result: &FetchOutput) -> bool {

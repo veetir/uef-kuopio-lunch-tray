@@ -6,20 +6,23 @@ use crate::format::{
     date_and_time_line, menu_heading, normalize_text, split_component_suffix, student_price_eur,
     text_for, PriceGroups,
 };
+use crate::gpu::{CrtProfile, GpuPresenter};
 use crate::model::TodayMenu;
 use crate::restaurant::{available_restaurants, Provider, Restaurant};
 use crate::settings::Settings;
 use crate::util::to_wstring;
+use anyhow::{anyhow, Context};
 use std::cmp::{max, min};
 use std::sync::{Arc, Mutex, OnceLock};
 use time::{OffsetDateTime, UtcOffset};
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{COLORREF, HWND, POINT, RECT};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, CreateFontW, CreateSolidBrush, DeleteObject, EndPaint, FillRect, GetDeviceCaps,
-    GetMonitorInfoW, GetTextExtentPoint32W, GetTextMetricsW, InvalidateRect, MonitorFromPoint,
-    SelectObject, SetBkMode, SetTextColor, TextOutW, HDC, HFONT, LOGPIXELSY, MONITORINFO,
-    MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, TEXTMETRICW, TRANSPARENT,
+    BeginPaint, CreateCompatibleDC, CreateDIBSection, CreateFontW, CreateSolidBrush, DeleteDC,
+    DeleteObject, EndPaint, FillRect, GetDeviceCaps, GetMonitorInfoW, GetTextExtentPoint32W,
+    GetTextMetricsW, InvalidateRect, MonitorFromPoint, SelectObject, SetBkMode, SetTextColor,
+    TextOutW, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HBITMAP, HDC, HFONT, HGDIOBJ,
+    LOGPIXELSY, MONITORINFO, MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, TEXTMETRICW, TRANSPARENT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GetClientRect, GetCursorPos, GetWindowRect, KillTimer, SetTimer, SetWindowPos, ShowWindow,
@@ -52,6 +55,9 @@ static POPUP_ANIMATION: OnceLock<Mutex<Option<PopupAnimation>>> = OnceLock::new(
 static FAVORITES_CACHE: OnceLock<Mutex<FavoritesCache>> = OnceLock::new();
 static POPUP_SELECTION_STATE: OnceLock<Mutex<PopupSelectionState>> = OnceLock::new();
 static POPUP_FONT_CACHE: OnceLock<Mutex<Option<PopupFontCache>>> = OnceLock::new();
+static POPUP_GPU_RENDERER: OnceLock<Mutex<Option<GpuPresenter>>> = OnceLock::new();
+static POPUP_GPU_SURFACE: OnceLock<Mutex<Option<GpuSurface>>> = OnceLock::new();
+static POPUP_GPU_ERROR: OnceLock<Mutex<Option<String>>> = OnceLock::new();
 
 pub const POPUP_ANIM_TIMER_ID: usize = 100;
 
@@ -234,6 +240,16 @@ struct PopupFonts {
 struct PopupFontCache {
     key: PopupFontCacheKey,
     fonts: PopupFonts,
+}
+
+#[derive(Debug)]
+struct GpuSurface {
+    width: i32,
+    height: i32,
+    dc: HDC,
+    bitmap: HBITMAP,
+    old_bitmap: HGDIOBJ,
+    bits: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -650,313 +666,483 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
 
         let mut rect = RECT::default();
         let _ = GetClientRect(hwnd, &mut rect);
-        let width = rect.right - rect.left;
-        let palette = theme_palette(&state.settings.theme);
-        let brush = CreateSolidBrush(palette.bg_color);
-        FillRect(hdc, &rect, brush);
-        DeleteObject(brush);
-        SetBkMode(hdc, TRANSPARENT);
-
-        let fonts = fonts_for_paint(hdc, &state.settings.theme);
-        let normal_font = fonts.normal;
-        let bold_font = fonts.bold;
-        let small_font = fonts.small;
-        let small_bold_font = fonts.small_bold;
-        let _old_font = SelectObject(hdc, normal_font);
-
-        let metrics = text_metrics(hdc, normal_font);
-        let line_height = metrics.tmHeight as i32 + LINE_GAP;
-        let content_width = (width - PADDING_X * 2).max(40);
-        let animation = current_animation_frame(hwnd);
-        let favorites = current_favorites_snapshot();
-
-        let header_rect = RECT {
-            left: rect.left,
-            top: rect.top,
-            right: rect.right,
-            bottom: rect.top + HEADER_HEIGHT,
-        };
-        let header_brush = CreateSolidBrush(palette.header_bg_color);
-        FillRect(hdc, &header_rect, header_brush);
-        DeleteObject(header_brush);
-
-        let layout = header_layout(width);
-        draw_header_button(
-            hdc,
-            &layout.prev,
-            "<",
-            palette.button_bg_color,
-            palette.body_text_color,
-            normal_font,
-        );
-        draw_header_button(
-            hdc,
-            &layout.next,
-            ">",
-            palette.button_bg_color,
-            palette.body_text_color,
-            normal_font,
-        );
-        draw_header_button(
-            hdc,
-            &layout.close,
-            "X",
-            palette.button_bg_color,
-            palette.body_text_color,
-            normal_font,
-        );
-
-        let divider_rect = RECT {
-            left: rect.left,
-            top: header_rect.bottom - 1,
-            right: rect.right,
-            bottom: header_rect.bottom,
-        };
-        let divider_brush = CreateSolidBrush(palette.divider_color);
-        FillRect(hdc, &divider_rect, divider_brush);
-        DeleteObject(divider_brush);
-
-        if let Some(frame) = animation {
-            clear_selection_layout(hwnd);
-            match frame {
-                PopupAnimationFrame::Open {
-                    lines,
-                    title,
-                    progress,
-                } => {
-                    let y_offset =
-                        ((1.0 - progress) * POPUP_SWITCH_OFFSET_PX as f32).round() as i32;
-                    let layer_body_text =
-                        lerp_color(palette.bg_color, palette.body_text_color, progress);
-                    let layer_heading =
-                        lerp_color(palette.bg_color, palette.heading_color, progress);
-                    let layer_title =
-                        lerp_color(palette.bg_color, palette.header_title_color, progress);
-                    let layer_suffix = lerp_color(palette.bg_color, palette.suffix_color, progress);
-                    let layer_suffix_highlight =
-                        lerp_color(palette.bg_color, palette.suffix_highlight_color, progress);
-                    let layer_favorites =
-                        lerp_color(palette.bg_color, palette.favorite_highlight_color, progress);
-                    draw_content_layer(
-                        hdc,
-                        title.as_str(),
-                        lines.as_ref(),
-                        DrawLayerParams {
-                            width,
-                            content_width,
-                            body_text_color: layer_body_text,
-                            heading_color: layer_heading,
-                            header_title_color: layer_title,
-                            suffix_color: layer_suffix,
-                            suffix_highlight_color: layer_suffix_highlight,
-                            favorite_highlight_color: layer_favorites,
-                            selection_bg_color: palette.selection_bg_color,
-                            layout: &layout,
-                            metrics: &metrics,
-                            line_height,
-                            normal_font,
-                            bold_font,
-                            small_font,
-                            small_bold_font,
-                            favorites: &favorites,
-                            selection: None,
-                            capture: None,
-                            y_offset,
-                        },
-                    );
-                }
-                PopupAnimationFrame::Close {
-                    lines,
-                    title,
-                    progress,
-                } => {
-                    let y_offset = -((progress * POPUP_SWITCH_OFFSET_PX as f32).round() as i32);
-                    let layer_body_text =
-                        lerp_color(palette.bg_color, palette.body_text_color, 1.0 - progress);
-                    let layer_heading =
-                        lerp_color(palette.bg_color, palette.heading_color, 1.0 - progress);
-                    let layer_title =
-                        lerp_color(palette.bg_color, palette.header_title_color, 1.0 - progress);
-                    let layer_suffix =
-                        lerp_color(palette.bg_color, palette.suffix_color, 1.0 - progress);
-                    let layer_suffix_highlight = lerp_color(
-                        palette.bg_color,
-                        palette.suffix_highlight_color,
-                        1.0 - progress,
-                    );
-                    let layer_favorites = lerp_color(
-                        palette.bg_color,
-                        palette.favorite_highlight_color,
-                        1.0 - progress,
-                    );
-                    draw_content_layer(
-                        hdc,
-                        title.as_str(),
-                        lines.as_ref(),
-                        DrawLayerParams {
-                            width,
-                            content_width,
-                            body_text_color: layer_body_text,
-                            heading_color: layer_heading,
-                            header_title_color: layer_title,
-                            suffix_color: layer_suffix,
-                            suffix_highlight_color: layer_suffix_highlight,
-                            favorite_highlight_color: layer_favorites,
-                            selection_bg_color: palette.selection_bg_color,
-                            layout: &layout,
-                            metrics: &metrics,
-                            line_height,
-                            normal_font,
-                            bold_font,
-                            small_font,
-                            small_bold_font,
-                            favorites: &favorites,
-                            selection: None,
-                            capture: None,
-                            y_offset,
-                        },
-                    );
-                }
-                PopupAnimationFrame::Switch {
-                    old_lines,
-                    new_lines,
-                    old_title,
-                    new_title,
-                    direction,
-                    progress,
-                } => {
-                    let dir = if direction >= 0 { 1 } else { -1 };
-                    let old_offset =
-                        -dir * ((progress * POPUP_SWITCH_OFFSET_PX as f32).round() as i32);
-                    let new_offset =
-                        dir * (((1.0 - progress) * POPUP_SWITCH_OFFSET_PX as f32).round() as i32);
-                    let old_body_text =
-                        lerp_color(palette.bg_color, palette.body_text_color, 1.0 - progress);
-                    let old_heading =
-                        lerp_color(palette.bg_color, palette.heading_color, 1.0 - progress);
-                    let old_title_color =
-                        lerp_color(palette.bg_color, palette.header_title_color, 1.0 - progress);
-                    let old_suffix =
-                        lerp_color(palette.bg_color, palette.suffix_color, 1.0 - progress);
-                    let old_suffix_highlight = lerp_color(
-                        palette.bg_color,
-                        palette.suffix_highlight_color,
-                        1.0 - progress,
-                    );
-                    let old_favorites = lerp_color(
-                        palette.bg_color,
-                        palette.favorite_highlight_color,
-                        1.0 - progress,
-                    );
-                    let new_body_text =
-                        lerp_color(palette.bg_color, palette.body_text_color, progress);
-                    let new_heading = lerp_color(palette.bg_color, palette.heading_color, progress);
-                    let new_title_color =
-                        lerp_color(palette.bg_color, palette.header_title_color, progress);
-                    let new_suffix = lerp_color(palette.bg_color, palette.suffix_color, progress);
-                    let new_suffix_highlight =
-                        lerp_color(palette.bg_color, palette.suffix_highlight_color, progress);
-                    let new_favorites =
-                        lerp_color(palette.bg_color, palette.favorite_highlight_color, progress);
-                    draw_content_layer(
-                        hdc,
-                        old_title.as_str(),
-                        old_lines.as_ref(),
-                        DrawLayerParams {
-                            width,
-                            content_width,
-                            body_text_color: old_body_text,
-                            heading_color: old_heading,
-                            header_title_color: old_title_color,
-                            suffix_color: old_suffix,
-                            suffix_highlight_color: old_suffix_highlight,
-                            favorite_highlight_color: old_favorites,
-                            selection_bg_color: palette.selection_bg_color,
-                            layout: &layout,
-                            metrics: &metrics,
-                            line_height,
-                            normal_font,
-                            bold_font,
-                            small_font,
-                            small_bold_font,
-                            favorites: &favorites,
-                            selection: None,
-                            capture: None,
-                            y_offset: old_offset,
-                        },
-                    );
-                    draw_content_layer(
-                        hdc,
-                        new_title.as_str(),
-                        new_lines.as_ref(),
-                        DrawLayerParams {
-                            width,
-                            content_width,
-                            body_text_color: new_body_text,
-                            heading_color: new_heading,
-                            header_title_color: new_title_color,
-                            suffix_color: new_suffix,
-                            suffix_highlight_color: new_suffix_highlight,
-                            favorite_highlight_color: new_favorites,
-                            selection_bg_color: palette.selection_bg_color,
-                            layout: &layout,
-                            metrics: &metrics,
-                            line_height,
-                            normal_font,
-                            bold_font,
-                            small_font,
-                            small_bold_font,
-                            favorites: &favorites,
-                            selection: None,
-                            capture: None,
-                            y_offset: new_offset,
-                        },
-                    );
-                }
+        if state.settings.renderer_backend == "gpu" {
+            if let Err(err) = paint_popup_gpu(hwnd, state, &rect) {
+                record_gpu_error(&err.to_string());
+                paint_popup_to_hdc(hwnd, state, hdc, rect);
+                draw_gpu_error_line(hdc, &rect, &format!("GPU renderer error: {}", err));
+            } else {
+                clear_gpu_error();
             }
         } else {
-            let lines = build_lines(state);
-            let title = header_title(state);
-            let selection = current_selection_range(hwnd);
-            let mut capture = DrawCapture {
-                layout: SelectableLayout {
-                    hwnd,
-                    ..Default::default()
-                },
-            };
-            draw_content_layer(
-                hdc,
-                &title,
-                &lines,
-                DrawLayerParams {
-                    width,
-                    content_width,
-                    body_text_color: palette.body_text_color,
-                    heading_color: palette.heading_color,
-                    header_title_color: palette.header_title_color,
-                    suffix_color: palette.suffix_color,
-                    suffix_highlight_color: palette.suffix_highlight_color,
-                    favorite_highlight_color: palette.favorite_highlight_color,
-                    selection_bg_color: palette.selection_bg_color,
-                    layout: &layout,
-                    metrics: &metrics,
-                    line_height,
-                    normal_font,
-                    bold_font,
-                    small_font,
-                    small_bold_font,
-                    favorites: &favorites,
-                    selection: selection.as_ref(),
-                    capture: Some(&mut capture),
-                    y_offset: 0,
-                },
-            );
-            store_selection_layout(capture.layout);
+            clear_gpu_error();
+            paint_popup_to_hdc(hwnd, state, hdc, rect);
         }
-
-        SelectObject(hdc, _old_font);
         EndPaint(hwnd, &ps);
     }
+}
+
+unsafe fn paint_popup_to_hdc(hwnd: HWND, state: &AppState, hdc: HDC, rect: RECT) {
+    let width = rect.right - rect.left;
+    let palette = theme_palette(&state.settings.theme);
+    let brush = CreateSolidBrush(palette.bg_color);
+    FillRect(hdc, &rect, brush);
+    DeleteObject(brush);
+    SetBkMode(hdc, TRANSPARENT);
+
+    let fonts = fonts_for_paint(hdc, &state.settings.theme);
+    let normal_font = fonts.normal;
+    let bold_font = fonts.bold;
+    let small_font = fonts.small;
+    let small_bold_font = fonts.small_bold;
+    let old_font = SelectObject(hdc, normal_font);
+
+    let metrics = text_metrics(hdc, normal_font);
+    let line_height = metrics.tmHeight as i32 + LINE_GAP;
+    let content_width = (width - PADDING_X * 2).max(40);
+    let animation = current_animation_frame(hwnd);
+    let favorites = current_favorites_snapshot();
+
+    let header_rect = RECT {
+        left: rect.left,
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.top + HEADER_HEIGHT,
+    };
+    let header_brush = CreateSolidBrush(palette.header_bg_color);
+    FillRect(hdc, &header_rect, header_brush);
+    DeleteObject(header_brush);
+
+    let layout = header_layout(width);
+    draw_header_button(
+        hdc,
+        &layout.prev,
+        "<",
+        palette.button_bg_color,
+        palette.body_text_color,
+        normal_font,
+    );
+    draw_header_button(
+        hdc,
+        &layout.next,
+        ">",
+        palette.button_bg_color,
+        palette.body_text_color,
+        normal_font,
+    );
+    draw_header_button(
+        hdc,
+        &layout.close,
+        "X",
+        palette.button_bg_color,
+        palette.body_text_color,
+        normal_font,
+    );
+
+    let divider_rect = RECT {
+        left: rect.left,
+        top: header_rect.bottom - 1,
+        right: rect.right,
+        bottom: header_rect.bottom,
+    };
+    let divider_brush = CreateSolidBrush(palette.divider_color);
+    FillRect(hdc, &divider_rect, divider_brush);
+    DeleteObject(divider_brush);
+
+    if let Some(frame) = animation {
+        clear_selection_layout(hwnd);
+        match frame {
+            PopupAnimationFrame::Open {
+                lines,
+                title,
+                progress,
+            } => {
+                let y_offset = ((1.0 - progress) * POPUP_SWITCH_OFFSET_PX as f32).round() as i32;
+                let layer_body_text =
+                    lerp_color(palette.bg_color, palette.body_text_color, progress);
+                let layer_heading = lerp_color(palette.bg_color, palette.heading_color, progress);
+                let layer_title =
+                    lerp_color(palette.bg_color, palette.header_title_color, progress);
+                let layer_suffix = lerp_color(palette.bg_color, palette.suffix_color, progress);
+                let layer_suffix_highlight =
+                    lerp_color(palette.bg_color, palette.suffix_highlight_color, progress);
+                let layer_favorites =
+                    lerp_color(palette.bg_color, palette.favorite_highlight_color, progress);
+                draw_content_layer(
+                    hdc,
+                    title.as_str(),
+                    lines.as_ref(),
+                    DrawLayerParams {
+                        width,
+                        content_width,
+                        body_text_color: layer_body_text,
+                        heading_color: layer_heading,
+                        header_title_color: layer_title,
+                        suffix_color: layer_suffix,
+                        suffix_highlight_color: layer_suffix_highlight,
+                        favorite_highlight_color: layer_favorites,
+                        selection_bg_color: palette.selection_bg_color,
+                        layout: &layout,
+                        metrics: &metrics,
+                        line_height,
+                        normal_font,
+                        bold_font,
+                        small_font,
+                        small_bold_font,
+                        favorites: &favorites,
+                        selection: None,
+                        capture: None,
+                        y_offset,
+                    },
+                );
+            }
+            PopupAnimationFrame::Close {
+                lines,
+                title,
+                progress,
+            } => {
+                let y_offset = -((progress * POPUP_SWITCH_OFFSET_PX as f32).round() as i32);
+                let layer_body_text =
+                    lerp_color(palette.bg_color, palette.body_text_color, 1.0 - progress);
+                let layer_heading =
+                    lerp_color(palette.bg_color, palette.heading_color, 1.0 - progress);
+                let layer_title =
+                    lerp_color(palette.bg_color, palette.header_title_color, 1.0 - progress);
+                let layer_suffix =
+                    lerp_color(palette.bg_color, palette.suffix_color, 1.0 - progress);
+                let layer_suffix_highlight = lerp_color(
+                    palette.bg_color,
+                    palette.suffix_highlight_color,
+                    1.0 - progress,
+                );
+                let layer_favorites = lerp_color(
+                    palette.bg_color,
+                    palette.favorite_highlight_color,
+                    1.0 - progress,
+                );
+                draw_content_layer(
+                    hdc,
+                    title.as_str(),
+                    lines.as_ref(),
+                    DrawLayerParams {
+                        width,
+                        content_width,
+                        body_text_color: layer_body_text,
+                        heading_color: layer_heading,
+                        header_title_color: layer_title,
+                        suffix_color: layer_suffix,
+                        suffix_highlight_color: layer_suffix_highlight,
+                        favorite_highlight_color: layer_favorites,
+                        selection_bg_color: palette.selection_bg_color,
+                        layout: &layout,
+                        metrics: &metrics,
+                        line_height,
+                        normal_font,
+                        bold_font,
+                        small_font,
+                        small_bold_font,
+                        favorites: &favorites,
+                        selection: None,
+                        capture: None,
+                        y_offset,
+                    },
+                );
+            }
+            PopupAnimationFrame::Switch {
+                old_lines,
+                new_lines,
+                old_title,
+                new_title,
+                direction,
+                progress,
+            } => {
+                let dir = if direction >= 0 { 1 } else { -1 };
+                let old_offset = -dir * ((progress * POPUP_SWITCH_OFFSET_PX as f32).round() as i32);
+                let new_offset =
+                    dir * (((1.0 - progress) * POPUP_SWITCH_OFFSET_PX as f32).round() as i32);
+                let old_body_text =
+                    lerp_color(palette.bg_color, palette.body_text_color, 1.0 - progress);
+                let old_heading =
+                    lerp_color(palette.bg_color, palette.heading_color, 1.0 - progress);
+                let old_title_color =
+                    lerp_color(palette.bg_color, palette.header_title_color, 1.0 - progress);
+                let old_suffix = lerp_color(palette.bg_color, palette.suffix_color, 1.0 - progress);
+                let old_suffix_highlight = lerp_color(
+                    palette.bg_color,
+                    palette.suffix_highlight_color,
+                    1.0 - progress,
+                );
+                let old_favorites = lerp_color(
+                    palette.bg_color,
+                    palette.favorite_highlight_color,
+                    1.0 - progress,
+                );
+                let new_body_text = lerp_color(palette.bg_color, palette.body_text_color, progress);
+                let new_heading = lerp_color(palette.bg_color, palette.heading_color, progress);
+                let new_title_color =
+                    lerp_color(palette.bg_color, palette.header_title_color, progress);
+                let new_suffix = lerp_color(palette.bg_color, palette.suffix_color, progress);
+                let new_suffix_highlight =
+                    lerp_color(palette.bg_color, palette.suffix_highlight_color, progress);
+                let new_favorites =
+                    lerp_color(palette.bg_color, palette.favorite_highlight_color, progress);
+                draw_content_layer(
+                    hdc,
+                    old_title.as_str(),
+                    old_lines.as_ref(),
+                    DrawLayerParams {
+                        width,
+                        content_width,
+                        body_text_color: old_body_text,
+                        heading_color: old_heading,
+                        header_title_color: old_title_color,
+                        suffix_color: old_suffix,
+                        suffix_highlight_color: old_suffix_highlight,
+                        favorite_highlight_color: old_favorites,
+                        selection_bg_color: palette.selection_bg_color,
+                        layout: &layout,
+                        metrics: &metrics,
+                        line_height,
+                        normal_font,
+                        bold_font,
+                        small_font,
+                        small_bold_font,
+                        favorites: &favorites,
+                        selection: None,
+                        capture: None,
+                        y_offset: old_offset,
+                    },
+                );
+                draw_content_layer(
+                    hdc,
+                    new_title.as_str(),
+                    new_lines.as_ref(),
+                    DrawLayerParams {
+                        width,
+                        content_width,
+                        body_text_color: new_body_text,
+                        heading_color: new_heading,
+                        header_title_color: new_title_color,
+                        suffix_color: new_suffix,
+                        suffix_highlight_color: new_suffix_highlight,
+                        favorite_highlight_color: new_favorites,
+                        selection_bg_color: palette.selection_bg_color,
+                        layout: &layout,
+                        metrics: &metrics,
+                        line_height,
+                        normal_font,
+                        bold_font,
+                        small_font,
+                        small_bold_font,
+                        favorites: &favorites,
+                        selection: None,
+                        capture: None,
+                        y_offset: new_offset,
+                    },
+                );
+            }
+        }
+    } else {
+        let lines = build_lines(state);
+        let title = header_title(state);
+        let selection = current_selection_range(hwnd);
+        let mut capture = DrawCapture {
+            layout: SelectableLayout {
+                hwnd,
+                ..Default::default()
+            },
+        };
+        draw_content_layer(
+            hdc,
+            &title,
+            &lines,
+            DrawLayerParams {
+                width,
+                content_width,
+                body_text_color: palette.body_text_color,
+                heading_color: palette.heading_color,
+                header_title_color: palette.header_title_color,
+                suffix_color: palette.suffix_color,
+                suffix_highlight_color: palette.suffix_highlight_color,
+                favorite_highlight_color: palette.favorite_highlight_color,
+                selection_bg_color: palette.selection_bg_color,
+                layout: &layout,
+                metrics: &metrics,
+                line_height,
+                normal_font,
+                bold_font,
+                small_font,
+                small_bold_font,
+                favorites: &favorites,
+                selection: selection.as_ref(),
+                capture: Some(&mut capture),
+                y_offset: 0,
+            },
+        );
+        store_selection_layout(capture.layout);
+    }
+
+    SelectObject(hdc, old_font);
+}
+
+fn paint_popup_gpu(hwnd: HWND, state: &AppState, rect: &RECT) -> anyhow::Result<()> {
+    let width = (rect.right - rect.left).max(1);
+    let height = (rect.bottom - rect.top).max(1);
+    let profile = CrtProfile::from_settings(&state.settings.crt_profile);
+    let shutdown_progress = if matches!(profile, CrtProfile::Full) {
+        match current_animation_frame(hwnd) {
+            Some(PopupAnimationFrame::Close { progress, .. }) => progress.clamp(0.0, 1.0),
+            _ => 0.0,
+        }
+    } else {
+        0.0
+    };
+
+    let surface_lock = POPUP_GPU_SURFACE.get_or_init(|| Mutex::new(None));
+    let mut surface_guard = surface_lock
+        .lock()
+        .map_err(|_| anyhow!("GPU surface mutex poisoned"))?;
+    if surface_guard
+        .as_ref()
+        .is_none_or(|s| s.width != width || s.height != height)
+    {
+        destroy_gpu_surface(&mut surface_guard);
+        *surface_guard = Some(create_gpu_surface(width, height)?);
+    }
+    let surface = surface_guard
+        .as_mut()
+        .ok_or_else(|| anyhow!("Failed to initialize GPU surface"))?;
+
+    unsafe {
+        paint_popup_to_hdc(hwnd, state, surface.dc, *rect);
+    }
+
+    let byte_len = (width as usize)
+        .saturating_mul(height as usize)
+        .saturating_mul(4);
+    let frame = unsafe { std::slice::from_raw_parts(surface.bits as *const u8, byte_len) };
+
+    let renderer_lock = POPUP_GPU_RENDERER.get_or_init(|| Mutex::new(None));
+    let mut renderer_guard = renderer_lock
+        .lock()
+        .map_err(|_| anyhow!("GPU renderer mutex poisoned"))?;
+    let needs_new = renderer_guard
+        .as_ref()
+        .is_none_or(|renderer| renderer.hwnd() != hwnd);
+    if needs_new {
+        *renderer_guard =
+            Some(GpuPresenter::new(hwnd, width, height).context("initialize D3D11 presenter")?);
+    }
+    let renderer = renderer_guard
+        .as_mut()
+        .ok_or_else(|| anyhow!("GPU presenter unavailable"))?;
+    renderer
+        .render_bgra_frame(frame, width, height, profile, shutdown_progress)
+        .context("render CRT frame")?;
+
+    Ok(())
+}
+
+fn create_gpu_surface(width: i32, height: i32) -> anyhow::Result<GpuSurface> {
+    unsafe {
+        let dc = CreateCompatibleDC(HDC(0));
+        if dc.0 == 0 {
+            return Err(anyhow!("CreateCompatibleDC failed"));
+        }
+        let mut bmi = BITMAPINFO::default();
+        bmi.bmiHeader = BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: width,
+            biHeight: -height,
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB.0 as u32,
+            ..Default::default()
+        };
+        let mut bits_ptr: *mut std::ffi::c_void = std::ptr::null_mut();
+        let bitmap = CreateDIBSection(
+            dc,
+            &bmi,
+            DIB_RGB_COLORS,
+            &mut bits_ptr,
+            windows::Win32::Foundation::HANDLE(0),
+            0,
+        )
+        .context("CreateDIBSection failed")?;
+        let old_bitmap = SelectObject(dc, bitmap);
+        if old_bitmap.0 == 0 {
+            DeleteObject(bitmap);
+            DeleteDC(dc);
+            return Err(anyhow!("SelectObject for DIB section failed"));
+        }
+        if bits_ptr.is_null() {
+            SelectObject(dc, old_bitmap);
+            DeleteObject(bitmap);
+            DeleteDC(dc);
+            return Err(anyhow!("CreateDIBSection returned null bits pointer"));
+        }
+        Ok(GpuSurface {
+            width,
+            height,
+            dc,
+            bitmap,
+            old_bitmap,
+            bits: bits_ptr as usize,
+        })
+    }
+}
+
+fn destroy_gpu_surface(surface: &mut Option<GpuSurface>) {
+    let Some(surface) = surface.take() else {
+        return;
+    };
+    unsafe {
+        let _ = SelectObject(surface.dc, surface.old_bitmap);
+        let _ = DeleteObject(surface.bitmap);
+        let _ = DeleteDC(surface.dc);
+    }
+}
+
+fn draw_gpu_error_line(hdc: HDC, rect: &RECT, message: &str) {
+    unsafe {
+        let old = SetTextColor(hdc, rgb(255, 96, 96));
+        let clipped = fit_text_to_width(
+            hdc,
+            message,
+            (rect.right - rect.left - PADDING_X * 2).max(80),
+        );
+        let y = (rect.bottom - 18).max(HEADER_HEIGHT + 4);
+        draw_text_line(hdc, &clipped, PADDING_X, y);
+        let _ = SetTextColor(hdc, old);
+    }
+}
+
+fn record_gpu_error(message: &str) {
+    let lock = POPUP_GPU_ERROR.get_or_init(|| Mutex::new(None));
+    if let Ok(mut error) = lock.lock() {
+        *error = Some(message.to_string());
+    }
+}
+
+fn clear_gpu_error() {
+    let lock = POPUP_GPU_ERROR.get_or_init(|| Mutex::new(None));
+    if let Ok(mut error) = lock.lock() {
+        *error = None;
+    }
+}
+
+pub fn shutdown_gpu_renderer() {
+    if let Some(lock) = POPUP_GPU_RENDERER.get() {
+        if let Ok(mut renderer) = lock.lock() {
+            *renderer = None;
+        }
+    }
+    if let Some(lock) = POPUP_GPU_SURFACE.get() {
+        if let Ok(mut surface) = lock.lock() {
+            destroy_gpu_surface(&mut surface);
+        }
+    }
+    clear_gpu_error();
 }
 
 struct DrawLayerParams<'a> {
@@ -1088,12 +1274,8 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                         end: clipped_main.len(),
                         text: clipped_main.clone(),
                     };
-                    let row_segments = segments_for_row(
-                        &clipped_main,
-                        row.start,
-                        row.end,
-                        &favorite_ranges,
-                    );
+                    let row_segments =
+                        segments_for_row(&clipped_main, row.start, row.end, &favorite_ranges);
                     draw_text_line(hdc, BULLET_PREFIX, PADDING_X, y);
                     if let Some(selection) = selected_item_range {
                         draw_selection_bg_for_row(
@@ -1129,7 +1311,8 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                         );
                     }
                     if !suffix_segments.is_empty() {
-                        let main_width = text_width_with_font(hdc, params.normal_font, &clipped_main);
+                        let main_width =
+                            text_width_with_font(hdc, params.normal_font, &clipped_main);
                         let suffix_x = line_x + main_width + 4;
                         if suffix_x < (PADDING_X + params.content_width) {
                             draw_text_segments(
@@ -1148,8 +1331,12 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                     continue;
                 }
 
-                let wrapped_main =
-                    wrap_text_to_width_with_font_rows(hdc, params.normal_font, main, main_wrap_width);
+                let wrapped_main = wrap_text_to_width_with_font_rows(
+                    hdc,
+                    params.normal_font,
+                    main,
+                    main_wrap_width,
+                );
                 if wrapped_main.is_empty() {
                     y += params.line_height;
                 } else {
@@ -1415,10 +1602,7 @@ fn favorite_match_ranges(text: &str, favorites: &FavoritesSnapshot) -> Vec<(usiz
 
     let mut kept: Vec<(usize, usize)> = Vec::new();
     for range in candidates {
-        if kept
-            .iter()
-            .any(|existing| ranges_overlap(*existing, range))
-        {
+        if kept.iter().any(|existing| ranges_overlap(*existing, range)) {
             continue;
         }
         kept.push(range);
@@ -1597,11 +1781,7 @@ fn wrap_text_to_width_rows(hdc: HDC, text: &str, max_width: i32) -> Vec<WrappedR
             current_end = word.end;
         } else {
             rows.extend(split_long_token_to_width_rows(
-                hdc,
-                &clean,
-                word.start,
-                word.end,
-                limit,
+                hdc, &clean, word.start, word.end, limit,
             ));
         }
     }

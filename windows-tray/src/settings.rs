@@ -13,6 +13,8 @@ pub struct Settings {
     pub show_guest_price: bool,
     pub hide_expensive_student_meals: bool,
     pub theme: String,
+    pub renderer_backend: String,
+    pub crt_profile: String,
     pub show_allergens: bool,
     pub highlight_gluten_free: bool,
     pub highlight_veg: bool,
@@ -34,6 +36,8 @@ impl Default for Settings {
             show_guest_price: false,
             hide_expensive_student_meals: false,
             theme: "dark".to_string(),
+            renderer_backend: "gdi".to_string(),
+            crt_profile: "off".to_string(),
             show_allergens: true,
             highlight_gluten_free: false,
             highlight_veg: false,
@@ -81,6 +85,8 @@ struct RawSettings {
     show_guest_price: Option<bool>,
     hide_expensive_student_meals: Option<bool>,
     theme: Option<String>,
+    renderer_backend: Option<String>,
+    crt_profile: Option<String>,
     dark_mode: Option<bool>,
     show_allergens: Option<bool>,
     hide_allergens: Option<bool>,
@@ -114,6 +120,16 @@ fn decode_settings(data: &str) -> anyhow::Result<Settings> {
             })
         })
         .unwrap_or_else(|| defaults.theme.clone());
+    let renderer_backend = raw
+        .renderer_backend
+        .as_deref()
+        .map(normalize_renderer_backend)
+        .unwrap_or_else(|| defaults.renderer_backend.clone());
+    let crt_profile = raw
+        .crt_profile
+        .as_deref()
+        .map(normalize_crt_profile)
+        .unwrap_or_else(|| defaults.crt_profile.clone());
 
     Ok(Settings {
         restaurant_code: raw.restaurant_code.unwrap_or(defaults.restaurant_code),
@@ -129,6 +145,8 @@ fn decode_settings(data: &str) -> anyhow::Result<Settings> {
             .hide_expensive_student_meals
             .unwrap_or(defaults.hide_expensive_student_meals),
         theme,
+        renderer_backend,
+        crt_profile,
         show_allergens,
         highlight_gluten_free: raw
             .highlight_gluten_free
@@ -155,5 +173,22 @@ pub fn normalize_theme(value: &str) -> String {
         "teletext1" => "teletext1".to_string(),
         "teletext2" => "teletext2".to_string(),
         _ => "dark".to_string(),
+    }
+}
+
+pub fn normalize_renderer_backend(value: &str) -> String {
+    match value.to_ascii_lowercase().as_str() {
+        "gdi" => "gdi".to_string(),
+        "gpu" => "gpu".to_string(),
+        _ => "gdi".to_string(),
+    }
+}
+
+pub fn normalize_crt_profile(value: &str) -> String {
+    match value.to_ascii_lowercase().as_str() {
+        "off" => "off".to_string(),
+        "lite" => "lite".to_string(),
+        "full" => "full".to_string(),
+        _ => "off".to_string(),
     }
 }
