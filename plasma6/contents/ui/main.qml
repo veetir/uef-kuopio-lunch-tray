@@ -12,10 +12,12 @@ PlasmoidItem {
 
     property string apiBaseUrl: "https://www.compass-group.fi/menuapi/feed/json"
     property string apiRssBaseUrl: "https://www.compass-group.fi/menuapi/feed/rss/current-day"
+    property string meditekniaRestaurantCode: "043601"
     property var allRestaurantCatalog: [
         { code: "0437", fallbackName: "Snellmania", provider: "compass" },
         { code: "snellari-rss", fallbackName: "Cafe Snellari", provider: "compass-rss", rssCostNumber: "4370", rssUrlBase: "https://www.compass-group.fi/ravintolat-ja-ruokalistat/foodco/kaupungit/kuopio/cafe-snellari/" },
         { code: "0436", fallbackName: "Canthia", provider: "compass" },
+        { code: "043601", fallbackName: "Mediteknia", provider: "compass" },
         { code: "0439", fallbackName: "Tietoteknia", provider: "compass" },
         { code: "antell-round", fallbackName: "Antell Round", provider: "antell", antellSlug: "round", antellUrlBase: "https://antell.fi/lounas/kuopio/round/" },
         { code: "antell-highway", fallbackName: "Antell Highway", provider: "antell", antellSlug: "highway", antellUrlBase: "https://antell.fi/lounas/kuopio/highway/" },
@@ -136,6 +138,47 @@ PlasmoidItem {
             }
         }
         return filtered
+    }
+
+    function writeConfiguredRestaurantCodes(codes) {
+        var selectedMap = {}
+        var rawCodes = Array.isArray(codes) ? codes : []
+        for (var i = 0; i < rawCodes.length; i++) {
+            var code = String(rawCodes[i] || "").trim()
+            if (code) {
+                selectedMap[code] = true
+            }
+        }
+
+        var ordered = []
+        for (var j = 0; j < allRestaurantCatalog.length; j++) {
+            var catalogCode = String(allRestaurantCatalog[j].code)
+            if (selectedMap[catalogCode]) {
+                ordered.push(catalogCode)
+            }
+        }
+
+        if (ordered.length === 0 && allRestaurantCatalog.length > 0) {
+            ordered.push(String(allRestaurantCatalog[0].code))
+        }
+
+        Plasmoid.configuration.enabledRestaurantCodes = ordered.join(",")
+    }
+
+    function migrateEnabledRestaurantCodes() {
+        var migrationLevel = Number(Plasmoid.configuration.enabledRestaurantCodesMigrationLevel || 0)
+        if (migrationLevel >= 2) {
+            return
+        }
+
+        var raw = String(Plasmoid.configuration.enabledRestaurantCodes || "").trim()
+        var selectedCodes = parseConfiguredRestaurantCodes(raw)
+        if (selectedCodes.indexOf(meditekniaRestaurantCode) < 0) {
+            selectedCodes.push(meditekniaRestaurantCode)
+        }
+        writeConfiguredRestaurantCodes(selectedCodes)
+
+        Plasmoid.configuration.enabledRestaurantCodesMigrationLevel = 2
     }
 
     function defaultRestaurantCode() {
@@ -1441,6 +1484,7 @@ PlasmoidItem {
     }
 
     Component.onCompleted: {
+        migrateEnabledRestaurantCodes()
         bootstrapData()
         scheduleMidnightTimer()
         initialized = true

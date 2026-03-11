@@ -6,7 +6,7 @@ Item {
     id: page
 
     property string cfg_restaurantCode: "0437"
-    property string cfg_enabledRestaurantCodes: "0437,snellari-rss,0436,0439,antell-round,antell-highway,huomen-bioteknia"
+    property string cfg_enabledRestaurantCodes: "0437,snellari-rss,0436,043601,0439,antell-round,antell-highway,huomen-bioteknia"
     property alias cfg_refreshMinutes: refreshSpin.value
     property int cfg_manualRefreshToken: 0
     property alias cfg_showPrices: showPricesCheck.checked
@@ -27,6 +27,7 @@ Item {
         { code: "0437", label: "Ita-Suomen yliopisto/Snellmania (0437)", shortLabel: "Snellmania" },
         { code: "snellari-rss", label: "Cafe Snellari (RSS)", shortLabel: "Snellari" },
         { code: "0436", label: "Ita-Suomen yliopisto/Canthia (0436)", shortLabel: "Canthia" },
+        { code: "043601", label: "Ita-Suomen yliopisto/Mediteknia (043601)", shortLabel: "Mediteknia" },
         { code: "0439", label: "Tietoteknia (0439)", shortLabel: "Tietoteknia" },
         { code: "antell-round", label: "Antell Round", shortLabel: "Round" },
         { code: "antell-highway", label: "Antell Highway", shortLabel: "Highway" },

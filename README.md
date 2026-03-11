@@ -5,10 +5,10 @@ Unofficial system tray KDE Plasma widget for UEF Kuopio lunch menus.
 ## Features
 
 - Shows today's lunch in hover tooltip
-- Supports 
-    - Compass: Snellmania, Snellari, Canthia, Tietoteknia
-    - Antell: Round, Highway
-    - Hyvä Huomen: Bioteknia
+- Supports
+  - Compass: Snellmania, Snellari, Canthia, Tietoteknia, Mediteknia
+  - Antell: Round, Highway
+  - Hyvä Huomen: Bioteknia
 - Language switch (`fi` / `en`)
 - Configurable set of restaurants, favorite restaurant
 - Mouse-wheel cycling on tray icon to switch restaurant instantly
@@ -64,6 +64,7 @@ See [Releases](https://github.com/veetir/compass-lunch-plasmoid/releases) for
 exe downloads.
 
 ### Features
+
 - Navigate restaurants with mouse wheel, header buttons, or `Left/Right` (`A`/`D`)
 - Toggle allergens, diet highlights, and price groups
 - Themes: dark, light, blue, green, ...
@@ -73,7 +74,6 @@ exe downloads.
 
 ![Compass Lunch screenshot](windows-tray/assets/windows.png)
 
-
------
+---
 
 This project is not affiliated with or endorsed by the University of Eastern Finland or any listed restaurant operators.
