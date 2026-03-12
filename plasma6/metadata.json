@@ -1,0 +1,25 @@
+{
+    "KPlugin": {
+        "Authors": [
+            {
+                "Email": "",
+                "Name": "Veeti Reis"
+            }
+        ],
+        "Category": "Online Services",
+        "Description": "Shows today's UEF Kuopio campus lunch menus in the system tray",
+        "EnabledByDefault": true,
+        "Icon": "food",
+        "Id": "compass-lunch",
+        "License": "MIT",
+        "Name": "UEF Kuopio Lunch",
+        "ServiceTypes": [
+            "Plasma/Applet"
+        ],
+        "Version": "0.1.0",
+        "Website": "https://github.com/veetir/compass-lunch-plasmoid"
+    },
+    "X-Plasma-API": "declarativeappletscript",
+    "X-Plasma-MainScript": "ui/main.qml",
+    "X-Plasma-NotificationArea": "true"
+}
