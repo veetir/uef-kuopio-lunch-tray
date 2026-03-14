@@ -2917,6 +2917,19 @@ fn theme_palette(theme: &str) -> ThemePalette {
             button_bg_color: COLORREF(0x00142D14),
             divider_color: COLORREF(0x00142D14),
         },
+        "amber" => ThemePalette {
+            bg_color: rgb(26, 16, 6),
+            body_text_color: rgb(255, 180, 24),
+            heading_color: rgb(255, 198, 72),
+            header_title_color: rgb(255, 207, 92),
+            suffix_color: rgb(194, 120, 24),
+            suffix_highlight_color: rgb(255, 224, 120),
+            favorite_highlight_color: rgb(255, 246, 166),
+            selection_bg_color: rgb(82, 45, 8),
+            header_bg_color: rgb(56, 31, 9),
+            button_bg_color: rgb(74, 42, 12),
+            divider_color: rgb(110, 63, 18),
+        },
         "teletext1" => ThemePalette {
             bg_color: rgb(0, 0, 0),
             body_text_color: rgb(255, 255, 255),
@@ -2965,7 +2978,7 @@ fn rgb(r: u8, g: u8, b: u8) -> COLORREF {
 
 fn theme_font_family(theme: &str) -> &'static str {
     match theme {
-        "teletext1" | "teletext2" => "Consolas",
+        "amber" | "teletext1" | "teletext2" => "Consolas",
         _ => "Segoe UI",
     }
 }
