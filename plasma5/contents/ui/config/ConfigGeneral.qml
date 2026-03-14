@@ -6,7 +6,7 @@ Item {
     id: page
 
     property string cfg_restaurantCode: "0437"
-    property string cfg_enabledRestaurantCodes: "0437,snellari-rss,0436,043601,0439,antell-round,antell-highway,huomen-bioteknia"
+    property string cfg_enabledRestaurantCodes: "0437,snellari-rss,0436,043601,0439,antell-round,antell-highway,pranzeria-html,huomen-bioteknia"
     property alias cfg_refreshMinutes: refreshSpin.value
     property int cfg_manualRefreshToken: 0
     property alias cfg_showPrices: showPricesCheck.checked
@@ -31,6 +31,7 @@ Item {
         { code: "0439", label: "Tietoteknia (0439)", shortLabel: "Tietoteknia" },
         { code: "antell-round", label: "Antell Round", shortLabel: "Round" },
         { code: "antell-highway", label: "Antell Highway", shortLabel: "Highway" },
+        { code: "pranzeria-html", label: "Pranzeria Sorrento (HTML)", shortLabel: "Pranzeria" },
         { code: "huomen-bioteknia", label: "Hyvä Huomen Bioteknia (JSON)", shortLabel: "Hyvä Huomen" }
     ]
 

@@ -9,6 +9,7 @@ Unofficial system tray KDE Plasma widget for UEF Kuopio lunch menus.
   - Compass: Snellmania, Snellari, Canthia, Tietoteknia, Mediteknia
   - Antell: Round, Highway
   - Hyvä Huomen: Bioteknia
+  - Sorrento: Pranzeria
 - Language switch (`fi` / `en`)
 - Configurable set of restaurants, favorite restaurant
 - Mouse-wheel cycling on tray icon to switch restaurant instantly

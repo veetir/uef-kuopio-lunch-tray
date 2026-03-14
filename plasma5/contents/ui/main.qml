@@ -20,6 +20,7 @@ Item {
         { code: "0439", fallbackName: "Tietoteknia", provider: "compass" },
         { code: "antell-round", fallbackName: "Antell Round", provider: "antell", antellSlug: "round", antellUrlBase: "https://antell.fi/lounas/kuopio/round/" },
         { code: "antell-highway", fallbackName: "Antell Highway", provider: "antell", antellSlug: "highway", antellUrlBase: "https://antell.fi/lounas/kuopio/highway/" },
+        { code: "pranzeria-html", fallbackName: "Pranzeria Sorrento", provider: "pranzeria", pranzeriaUrlBase: "https://www.sorrento.fi/pranzeria/" },
         { code: "huomen-bioteknia", fallbackName: "Hyvä Huomen Bioteknia", provider: "huomen-json", huomenApiBase: "https://europe-west1-luncher-7cf76.cloudfunctions.net/api/v1/week/a96b7ccf-2c3d-432a-8504-971dbb6d55d3/active", huomenUrlBase: "https://hyvahuomen.fi/bioteknia/" }
     ]
     property var restaurantCatalog: filteredRestaurantCatalog(configEnabledRestaurantCodes)
@@ -32,7 +33,7 @@ Item {
     property var supportedIconNames: ["food", "compass", "map-globe", "map-flat"]
     property int maxPayloadChars: 524288
     property int maxCacheBlobChars: 1048576
-    property var allowedExternalHostSuffixes: ["compass-group.fi", "antell.fi", "hyvahuomen.fi", "github.com"]
+    property var allowedExternalHostSuffixes: ["compass-group.fi", "antell.fi", "hyvahuomen.fi", "sorrento.fi", "github.com"]
 
     property string activeRestaurantCode: "0437"
 
@@ -351,8 +352,21 @@ Item {
         return provider === "antell" || provider === "huomen-json"
     }
 
+    function isHardWeekendClosedProvider(provider) {
+        return provider === "pranzeria"
+    }
+
     function weekendNoMenuRetryDelayMs() {
         return 6 * 60 * 60 * 1000
+    }
+
+    function emptyTodayMenu() {
+        var today = todayIso()
+        return {
+            dateIso: today,
+            lunchTime: "",
+            menus: []
+        }
     }
 
     function isAllowedExternalUrl(rawUrl) {
@@ -776,6 +790,41 @@ Item {
         return best ? localDateIso(best) : ""
     }
 
+    function parsePranzeriaDayHeader(lineText) {
+        var clean = MenuFormatter.normalizeText(lineText)
+        var match = clean.match(/^(Maanantai|Tiistai|Keskiviikko|Torstai|Perjantai|Lauantai|Sunnuntai)\s+(\d{1,2}\.\d{1,2}\.\d{2,4})(?:\s+(.+))?$/i)
+        if (!match) {
+            return null
+        }
+
+        var iso = parseAntellMenuDateIso(match[2])
+        if (!iso) {
+            return null
+        }
+
+        return {
+            dateIso: iso,
+            trailing: MenuFormatter.normalizeText(match[3])
+        }
+    }
+
+    function isPranzeriaLegendLine(lineText) {
+        var clean = MenuFormatter.normalizeText(lineText)
+        if (!clean) {
+            return false
+        }
+
+        if (/^(?:L|G|M|V|VG)\s*=/.test(clean)) {
+            return true
+        }
+
+        return clean.indexOf("Laktoositon") >= 0
+            || clean.indexOf("Gluteeniton") >= 0
+            || clean.indexOf("Maidoton") >= 0
+            || clean.indexOf("Kasvis") >= 0
+            || clean.indexOf("Vegaani") >= 0
+    }
+
     function normalizeCompassRssTodayMenu(rawPayload) {
         if (!rawPayload || rawPayload.provider !== "compass-rss" || !rawPayload.providerDateValid) {
             return null
@@ -843,6 +892,31 @@ Item {
         }
     }
 
+    function normalizePranzeriaTodayMenu(rawPayload) {
+        if (!rawPayload || rawPayload.provider !== "pranzeria" || !rawPayload.providerDateValid) {
+            return null
+        }
+
+        var menuDate = MenuFormatter.normalizeText(rawPayload.menuDateIso)
+        if (!menuDate) {
+            return null
+        }
+
+        var components = Array.isArray(rawPayload.lunchLines) ? rawPayload.lunchLines.slice(0) : []
+        return {
+            dateIso: menuDate,
+            lunchTime: "",
+            menus: components.length > 0
+                ? [{
+                    sortOrder: 1,
+                    name: "Lounas",
+                    price: "",
+                    components: components
+                }]
+                : []
+        }
+    }
+
     function parseAntellPayload(code, htmlText) {
         var entry = restaurantEntryForCode(code)
         var payloadText = String(htmlText || "")
@@ -873,6 +947,80 @@ Item {
             menuDateIso: menuDateIso,
             providerDateValid: !!isDateToday,
             restaurantName: name,
+            restaurantUrl: url
+        }
+    }
+
+    function parsePranzeriaPayload(code, htmlText) {
+        var entry = restaurantEntryForCode(code)
+        var payloadText = String(htmlText || "")
+        var paragraphRegex = /<p\b[^>]*>([\s\S]*?)<\/p>/gi
+        var dayLinesByIso = {}
+        var currentDateIso = ""
+        var match
+
+        while ((match = paragraphRegex.exec(payloadText)) !== null) {
+            var line = stripHtmlText(match[1])
+            if (!line) {
+                continue
+            }
+
+            var dayHeader = parsePranzeriaDayHeader(line)
+            if (dayHeader) {
+                currentDateIso = dayHeader.dateIso
+                if (!Object.prototype.hasOwnProperty.call(dayLinesByIso, currentDateIso)) {
+                    dayLinesByIso[currentDateIso] = []
+                }
+                if (dayHeader.trailing) {
+                    dayLinesByIso[currentDateIso].push(dayHeader.trailing)
+                }
+                continue
+            }
+
+            if (!currentDateIso) {
+                continue
+            }
+
+            if (isPranzeriaLegendLine(line)) {
+                break
+            }
+
+            dayLinesByIso[currentDateIso].push(line)
+        }
+
+        var today = todayIso()
+        var providerDateValid = Object.prototype.hasOwnProperty.call(dayLinesByIso, today)
+        var menuDateIso = providerDateValid ? today : ""
+        var rawLines = providerDateValid ? dayLinesByIso[today] : []
+        var lines = []
+        for (var i = 0; i < rawLines.length; i++) {
+            var cleanLine = MenuFormatter.normalizeText(rawLines[i])
+            if (!cleanLine) {
+                continue
+            }
+            if (lines.length > 0 && lines[lines.length - 1] === cleanLine) {
+                continue
+            }
+            lines.push(cleanLine)
+        }
+
+        var fallbackName = entry ? String(entry.fallbackName || "Pranzeria Sorrento") : "Pranzeria Sorrento"
+        var url = sanitizeExternalUrl(entry && entry.pranzeriaUrlBase ? String(entry.pranzeriaUrlBase) : "", "")
+        var rawPayload = {
+            provider: "pranzeria",
+            menuDateIso: menuDateIso,
+            providerDateValid: providerDateValid,
+            lunchLines: lines,
+            restaurantName: fallbackName,
+            restaurantUrl: url
+        }
+
+        return {
+            rawPayload: rawPayload,
+            todayMenu: normalizePranzeriaTodayMenu(rawPayload),
+            menuDateIso: menuDateIso,
+            providerDateValid: providerDateValid,
+            restaurantName: fallbackName,
             restaurantUrl: url
         }
     }
@@ -1052,8 +1200,8 @@ Item {
 
     function cacheKey(code) {
         var entry = restaurantEntryForCode(code)
-        if (entry && entry.provider === "antell") {
-            return String(code) + "|antell"
+        if (entry && (entry.provider === "antell" || entry.provider === "pranzeria")) {
+            return String(code) + "|" + String(entry.provider)
         }
         return String(code) + "|" + configLanguage
     }
@@ -1164,6 +1312,14 @@ Item {
             providerDateValid = antell.providerDateValid
             restaurantName = antell.restaurantName
             restaurantUrl = antell.restaurantUrl
+        } else if (provider === "pranzeria") {
+            var pranzeria = parsePranzeriaPayload(code, payloadText)
+            parsed = pranzeria.rawPayload
+            todayMenu = pranzeria.todayMenu
+            menuDateIso = pranzeria.menuDateIso
+            providerDateValid = pranzeria.providerDateValid
+            restaurantName = pranzeria.restaurantName
+            restaurantUrl = pranzeria.restaurantUrl
         } else if (provider === "compass-rss") {
             var compassRss = parseCompassRssPayload(code, payloadText)
             parsed = compassRss.rawPayload
@@ -1223,11 +1379,7 @@ Item {
             freshToday = true
             providerDateValid = true
             menuDateIso = today
-            todayMenu = {
-                dateIso: today,
-                lunchTime: "",
-                menus: []
-            }
+            todayMenu = emptyTodayMenu()
         }
         var current = stateFor(code)
         var failureCount = Number(current.consecutiveFailures) || 0
@@ -1326,6 +1478,10 @@ Item {
                 + "&print_lunch_list_day=1"
         }
 
+        if (entry.provider === "pranzeria") {
+            return String(entry.pranzeriaUrlBase || "").trim()
+        }
+
         if (entry.provider === "compass-rss") {
             var rssCost = String(entry.rssCostNumber || "").trim()
             if (!rssCost) {
@@ -1358,6 +1514,29 @@ Item {
         var normalized = String(code)
         var current = stateFor(normalized)
         if (!manual && current.status === "loading") {
+            return
+        }
+
+        var entry = restaurantEntryForCode(normalized)
+        var provider = entry && entry.provider ? String(entry.provider) : "compass"
+        if (isHardWeekendClosedProvider(provider) && isWeekendDate(new Date())) {
+            updateState(normalized, {
+                status: "ok",
+                errorMessage: "",
+                menuDateIso: todayIso(),
+                providerDateValid: true,
+                isTodayFresh: true,
+                todayMenu: emptyTodayMenu(),
+                consecutiveFailures: 0,
+                nextRetryEpochMs: 0,
+                assumedNoMenuWeekend: false,
+                assumedNoMenuRetryEpochMs: 0,
+                restaurantName: entry ? String(entry.fallbackName || "Pranzeria Sorrento") : "Pranzeria Sorrento",
+                restaurantUrl: sanitizeExternalUrl(entry && entry.pranzeriaUrlBase ? String(entry.pranzeriaUrlBase) : "", "")
+            })
+            if (String(normalized) === activeRestaurantCode) {
+                syncSettingsLastUpdatedDisplay()
+            }
             return
         }
 

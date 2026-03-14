@@ -537,6 +537,106 @@ function shouldAssumeWeekendNoMenu(provider, nowDate) {
   return isWeekend && (provider === "antell" || provider === "huomen-json");
 }
 
+function isHardWeekendClosedProvider(provider) {
+  return provider === "pranzeria";
+}
+
+function parsePranzeriaDayHeader(lineText) {
+  const clean = normalizeText(lineText);
+  const match = clean.match(
+    /^(Maanantai|Tiistai|Keskiviikko|Torstai|Perjantai|Lauantai|Sunnuntai)\s+(\d{1,2}\.\d{1,2}\.\d{2,4})(?:\s+(.+))?$/i
+  );
+  if (!match) {
+    return null;
+  }
+
+  const dateIso = parseAntellMenuDateIso(match[2], new Date(2026, 2, 20));
+  if (!dateIso) {
+    return null;
+  }
+
+  return {
+    dateIso,
+    trailing: normalizeText(match[3]),
+  };
+}
+
+function isPranzeriaLegendLine(lineText) {
+  const clean = normalizeText(lineText);
+  if (!clean) {
+    return false;
+  }
+
+  if (/^(?:L|G|M|V|VG)\s*=/.test(clean)) {
+    return true;
+  }
+
+  return (
+    clean.includes("Laktoositon") ||
+    clean.includes("Gluteeniton") ||
+    clean.includes("Maidoton") ||
+    clean.includes("Kasvis") ||
+    clean.includes("Vegaani")
+  );
+}
+
+function parsePranzeriaDayLines(htmlText, targetDateIso) {
+  const html = String(htmlText || "");
+  const paragraphRegex = /<p\b[^>]*>([\s\S]*?)<\/p>/gi;
+  const linesByDate = {};
+  let currentDateIso = "";
+  let match;
+
+  while ((match = paragraphRegex.exec(html)) !== null) {
+    const line = stripHtmlText(match[1]);
+    if (!line) {
+      continue;
+    }
+
+    const header = parsePranzeriaDayHeader(line);
+    if (header) {
+      currentDateIso = header.dateIso;
+      if (!Object.prototype.hasOwnProperty.call(linesByDate, currentDateIso)) {
+        linesByDate[currentDateIso] = [];
+      }
+      if (header.trailing) {
+        linesByDate[currentDateIso].push(header.trailing);
+      }
+      continue;
+    }
+
+    if (!currentDateIso) {
+      continue;
+    }
+
+    if (isPranzeriaLegendLine(line)) {
+      break;
+    }
+
+    linesByDate[currentDateIso].push(line);
+  }
+
+  const providerDateValid = Object.prototype.hasOwnProperty.call(linesByDate, targetDateIso);
+  const rawLines = providerDateValid ? linesByDate[targetDateIso] : [];
+  const lines = [];
+  for (const raw of rawLines) {
+    const clean = normalizeText(raw);
+    if (!clean) {
+      continue;
+    }
+    if (lines.length > 0 && lines[lines.length - 1] === clean) {
+      continue;
+    }
+    lines.push(clean);
+  }
+
+  return {
+    providerDateValid,
+    menuDateIso: providerDateValid ? targetDateIso : "",
+    lines,
+  };
+}
+
 function checkCompassFixture(name, expectedMenuName) {
   const payload = readFixture(name);
 
@@ -657,6 +757,31 @@ function checkHuomenFixture(name) {
   assert(stale.lines.length === 0, `${name}: expected no lines for missing date`);
 }
 
+function checkPranzeriaFixture(name) {
+  const html = readTextFixture(name);
+  const friday = parsePranzeriaDayLines(html, "2026-03-20");
+  assert(friday.providerDateValid, `${name}: expected providerDateValid on 2026-03-20`);
+  assert(friday.menuDateIso === "2026-03-20", `${name}: unexpected menuDateIso: ${friday.menuDateIso}`);
+  assert(friday.lines.length >= 5, `${name}: expected at least 5 lines on Friday, got ${friday.lines.length}`);
+  assert(
+    friday.lines[0] === "Salaatti- &AntipastoBuffet",
+    `${name}: expected trailing day-header line as first entry`
+  );
+  assert(
+    friday.lines.some((line) => line.includes("Spezzatino Di Manzo")),
+    `${name}: expected Spezzatino line for Friday`
+  );
+  assert(
+    friday.lines.some((line) => line.includes("Roomalainen focacciapizzabuffet")),
+    `${name}: expected focacciapizzabuffet line for Friday`
+  );
+  assert(!friday.lines.some((line) => line.includes("Laktoositon")), `${name}: legend lines should be excluded`);
+
+  const stale = parsePranzeriaDayLines(html, "2026-03-22");
+  assert(!stale.providerDateValid, `${name}: expected stale on missing Sunday date`);
+  assert(stale.lines.length === 0, `${name}: expected no Sunday lines`);
+}
+
 function checkRetryDelays() {
   assert(retryDelayMinutes(1) === 5, "retry delay for first failure should be 5");
   assert(retryDelayMinutes(2) === 10, "retry delay for second failure should be 10");
@@ -672,6 +797,8 @@ function checkWeekendNoMenuAssumption() {
   assert(shouldAssumeWeekendNoMenu("huomen-json", saturday), "huomen-json should assume no-menu on weekend mismatch");
   assert(!shouldAssumeWeekendNoMenu("antell", monday), "antell should use normal retry flow on weekdays");
   assert(!shouldAssumeWeekendNoMenu("huomen-json", monday), "huomen-json should use normal retry flow on weekdays");
+  assert(!shouldAssumeWeekendNoMenu("pranzeria", saturday), "pranzeria should not use retry-based weekend assumption");
+  assert(isHardWeekendClosedProvider("pranzeria"), "pranzeria should be hard weekend-closed");
   assert(!shouldAssumeWeekendNoMenu("compass", saturday), "compass should not use weekend no-menu assumption");
   assert(!shouldAssumeWeekendNoMenu("compass-rss", saturday), "compass-rss should not use weekend no-menu assumption");
 }
@@ -693,9 +820,10 @@ function main() {
   );
   checkRssFixture("snellari.rss");
   checkHuomenFixture("huomen.json");
+  checkPranzeriaFixture("pranzeria-snippet.html");
   checkWeekendNoMenuAssumption();
   checkRetryDelays();
-  process.stdout.write("Parser checks passed for Compass, Antell, RSS and Huomen freshness rules\n");
+  process.stdout.write("Parser checks passed for Compass, Antell, RSS, Huomen and Pranzeria freshness rules\n");
 }
 
 main();
