@@ -3,7 +3,8 @@ use crate::cache;
 use crate::log::{log_line, set_enabled as set_log_enabled};
 use crate::model::TodayMenu;
 use crate::restaurant::{
-    available_restaurants, provider_key, restaurant_for_code, Provider,
+    available_restaurants, is_hard_closed_today, provider_key, restaurant_for_code,
+    restaurant_for_shortcut_index, Provider,
 };
 use crate::settings::{load_settings, normalize_theme, save_settings, settings_dir, Settings};
 use std::collections::{HashMap, HashSet};
@@ -140,6 +141,18 @@ impl App {
                 state.settings.language.clone(),
             )
         };
+        if is_hard_closed_today(restaurant) {
+            let result = api::closed_today_fetch_output(restaurant, &language);
+            self.apply_cached_result(&result);
+            log_line(&format!(
+                "closed-day synthetic state provider={} code={} language={}",
+                provider_key(restaurant.provider),
+                restaurant.code,
+                language
+            ));
+            return true;
+        }
+
         let cached_date = if restaurant.provider == Provider::Antell {
             cache::cache_mtime_ms(restaurant.provider, restaurant.code, &language)
                 .and_then(date_key_from_epoch_ms)
@@ -374,18 +387,24 @@ impl App {
 
         if requested_code != current_code {
             if result.ok {
-                if let Err(err) = cache::write_cache(
-                    result.provider,
-                    &requested_code,
-                    &requested_language,
-                    &result.raw_json,
-                ) {
-                    log_line(&format!(
-                        "background cache write failed code={} err={}",
-                        requested_code, err
-                    ));
+                if !result.raw_json.is_empty() {
+                    if let Err(err) = cache::write_cache(
+                        result.provider,
+                        &requested_code,
+                        &requested_language,
+                        &result.raw_json,
+                    ) {
+                        log_line(&format!(
+                            "background cache write failed code={} err={}",
+                            requested_code, err
+                        ));
+                    }
+                    self.store_memory_from_fetch_output(
+                        &requested_code,
+                        &requested_language,
+                        &result,
+                    );
                 }
-                self.store_memory_from_fetch_output(&requested_code, &requested_language, &result);
                 FetchApplyOutcome::BackgroundSuccess
             } else {
                 log_line(&format!(
@@ -412,20 +431,28 @@ impl App {
                 if let Err(err) = save_settings(&state.settings) {
                     log_line(&format!("save settings failed: {}", err));
                 }
-                if let Err(err) = cache::write_cache(
-                    state.provider,
-                    &requested_code,
-                    &requested_language,
-                    &result.raw_json,
-                ) {
-                    log_line(&format!(
-                        "cache write failed code={} language={} err={}",
-                        requested_code, requested_language, err
-                    ));
+                if !result.raw_json.is_empty() {
+                    if let Err(err) = cache::write_cache(
+                        state.provider,
+                        &requested_code,
+                        &requested_language,
+                        &result.raw_json,
+                    ) {
+                        log_line(&format!(
+                            "cache write failed code={} language={} err={}",
+                            requested_code, requested_language, err
+                        ));
+                    }
                 }
                 log_line(&format!("refresh ok code={}", requested_code));
                 drop(state);
-                self.store_memory_from_fetch_output(&requested_code, &requested_language, &result);
+                if !result.raw_json.is_empty() {
+                    self.store_memory_from_fetch_output(
+                        &requested_code,
+                        &requested_language,
+                        &result,
+                    );
+                }
                 FetchApplyOutcome::CurrentSuccess
             } else {
                 if !state.raw_payload.is_empty() {
@@ -464,6 +491,18 @@ impl App {
         state.status = FetchStatus::Idle;
         state.loading_started_epoch_ms = 0;
         state.stale_network_error = false;
+    }
+
+    pub fn set_restaurant_index(&self, index: usize) -> bool {
+        let enable_antell = {
+            let state = self.state.lock().unwrap();
+            state.settings.enable_antell_restaurants
+        };
+        let Some(restaurant) = restaurant_for_shortcut_index(index, enable_antell) else {
+            return false;
+        };
+        self.set_restaurant(restaurant.code);
+        true
     }
 
     pub fn set_language(&self, language: &str) {
@@ -630,6 +669,10 @@ impl App {
             )
         };
 
+        if is_hard_closed_today(restaurant) {
+            return;
+        }
+
         if refresh_minutes == 0 {
             return;
         }
@@ -669,6 +712,14 @@ impl App {
     pub fn check_stale_date_and_refresh(&self) {
         let should_refresh = {
             let mut state = self.state.lock().unwrap();
+            let restaurant = restaurant_for_code(
+                &state.settings.restaurant_code,
+                state.settings.enable_antell_restaurants,
+            );
+            if is_hard_closed_today(restaurant) {
+                state.stale_date = false;
+                false
+            } else {
             let today_key = today_key();
             if !state.payload_date.is_empty() {
                 let stale = state.payload_date != today_key;
@@ -677,6 +728,7 @@ impl App {
             } else {
                 state.stale_date = false;
                 false
+            }
             }
         };
         if should_refresh {
@@ -721,6 +773,9 @@ impl App {
         let mut queued = 0usize;
         for restaurant in restaurants {
             if restaurant.code == current_code {
+                continue;
+            }
+            if is_hard_closed_today(restaurant) {
                 continue;
             }
             let stale_or_missing = match cache::cache_mtime_ms(
@@ -783,7 +838,13 @@ fn today_key() -> String {
 }
 
 fn update_stale_date(state: &mut AppState) {
-    if !state.payload_date.is_empty() {
+    let restaurant = restaurant_for_code(
+        &state.settings.restaurant_code,
+        state.settings.enable_antell_restaurants,
+    );
+    if is_hard_closed_today(restaurant) {
+        state.stale_date = false;
+    } else if !state.payload_date.is_empty() {
         state.stale_date = state.payload_date != today_key();
     } else {
         state.stale_date = false;

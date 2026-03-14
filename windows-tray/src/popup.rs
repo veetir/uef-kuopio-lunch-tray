@@ -7,7 +7,7 @@ use crate::format::{
     text_for, PriceGroups,
 };
 use crate::model::TodayMenu;
-use crate::restaurant::{available_restaurants, Provider, Restaurant};
+use crate::restaurant::{available_restaurants, is_hard_closed_today, Provider, Restaurant};
 use crate::settings::Settings;
 use crate::util::to_wstring;
 use std::cmp::{max, min};
@@ -2161,20 +2161,24 @@ fn max_today_cached_layout_budget(
     let mut max_content_width_px: Option<i32> = None;
 
     for restaurant in available_restaurants(settings.enable_antell_restaurants) {
-        let raw = match cache::read_cache(restaurant.provider, restaurant.code, &settings.language)
-        {
-            Some(payload) => payload,
-            None => continue,
-        };
+        let parsed = if is_hard_closed_today(restaurant) {
+            api::closed_today_fetch_output(restaurant, &settings.language)
+        } else {
+            let raw = match cache::read_cache(restaurant.provider, restaurant.code, &settings.language)
+            {
+                Some(payload) => payload,
+                None => continue,
+            };
 
-        let parsed = match api::parse_cached_payload(
-            &raw,
-            restaurant.provider,
-            restaurant,
-            &settings.language,
-        ) {
-            Ok(value) => value,
-            Err(_) => continue,
+            match api::parse_cached_payload(
+                &raw,
+                restaurant.provider,
+                restaurant,
+                &settings.language,
+            ) {
+                Ok(value) => value,
+                Err(_) => continue,
+            }
         };
 
         if !parsed.ok || !is_today_valid_cache(&parsed, restaurant, settings, today_key) {
@@ -2217,6 +2221,10 @@ fn is_today_valid_cache(
     settings: &Settings,
     today_key: &str,
 ) -> bool {
+    if is_hard_closed_today(restaurant) {
+        return true;
+    }
+
     match restaurant.provider {
         Provider::Antell => {
             cache::cache_mtime_ms(restaurant.provider, restaurant.code, &settings.language)

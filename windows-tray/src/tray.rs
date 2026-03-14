@@ -1,5 +1,6 @@
 use crate::app::AppState;
 use crate::log::log_line;
+use crate::restaurant::available_restaurants;
 use crate::util::to_wstring;
 use std::path::{Path, PathBuf};
 use windows::core::PCWSTR;
@@ -23,6 +24,9 @@ pub const CMD_RESTAURANT_SNELLARI_RSS: u16 = 2004;
 pub const CMD_RESTAURANT_HUOMEN_BIOTEKNIA: u16 = 2005;
 pub const CMD_RESTAURANT_ANTELL_HIGHWAY: u16 = 2006;
 pub const CMD_RESTAURANT_ANTELL_ROUND: u16 = 2007;
+pub const CMD_RESTAURANT_MEDITEKNIA: u16 = 2008;
+pub const CMD_RESTAURANT_PRANZERIA: u16 = 2009;
+pub const CMD_RESTAURANT_CAARI: u16 = 2010;
 pub const CMD_LANGUAGE_FI: u16 = 2101;
 pub const CMD_LANGUAGE_EN: u16 = 2102;
 pub const CMD_TOGGLE_SHOW_PRICES: u16 = 2201;
@@ -50,6 +54,38 @@ pub const CMD_REFRESH_240: u16 = 2402;
 pub const CMD_REFRESH_1440: u16 = 2403;
 pub const CMD_QUIT: u16 = 2999;
 const TRAY_ICON_ID: u32 = 1;
+
+pub fn restaurant_command_id(code: &str) -> Option<u16> {
+    match code {
+        "0437" => Some(CMD_RESTAURANT_0437),
+        "snellari-rss" => Some(CMD_RESTAURANT_SNELLARI_RSS),
+        "0436" => Some(CMD_RESTAURANT_0436),
+        "0439" => Some(CMD_RESTAURANT_0439),
+        "huomen-bioteknia" => Some(CMD_RESTAURANT_HUOMEN_BIOTEKNIA),
+        "antell-round" => Some(CMD_RESTAURANT_ANTELL_ROUND),
+        "antell-highway" => Some(CMD_RESTAURANT_ANTELL_HIGHWAY),
+        "043601" => Some(CMD_RESTAURANT_MEDITEKNIA),
+        "pranzeria-html" => Some(CMD_RESTAURANT_PRANZERIA),
+        "3488" => Some(CMD_RESTAURANT_CAARI),
+        _ => None,
+    }
+}
+
+pub fn restaurant_code_for_command(cmd: u16) -> Option<&'static str> {
+    match cmd {
+        CMD_RESTAURANT_0437 => Some("0437"),
+        CMD_RESTAURANT_SNELLARI_RSS => Some("snellari-rss"),
+        CMD_RESTAURANT_0436 => Some("0436"),
+        CMD_RESTAURANT_0439 => Some("0439"),
+        CMD_RESTAURANT_HUOMEN_BIOTEKNIA => Some("huomen-bioteknia"),
+        CMD_RESTAURANT_ANTELL_ROUND => Some("antell-round"),
+        CMD_RESTAURANT_ANTELL_HIGHWAY => Some("antell-highway"),
+        CMD_RESTAURANT_MEDITEKNIA => Some("043601"),
+        CMD_RESTAURANT_PRANZERIA => Some("pranzeria-html"),
+        CMD_RESTAURANT_CAARI => Some("3488"),
+        _ => None,
+    }
+}
 
 pub fn add_tray_icon(hwnd: HWND, callback_message: u32) -> anyhow::Result<()> {
     unsafe {
@@ -201,48 +237,16 @@ fn build_context_menu(state: &AppState) -> HMENU {
         let menu = CreatePopupMenu().expect("CreatePopupMenu");
 
         let restaurant_menu = CreatePopupMenu().expect("CreatePopupMenu");
-        append_menu_item(
-            restaurant_menu,
-            CMD_RESTAURANT_0437,
-            "Snellmania",
-            state.settings.restaurant_code == "0437",
-        );
-        append_menu_item(
-            restaurant_menu,
-            CMD_RESTAURANT_SNELLARI_RSS,
-            "Snellari",
-            state.settings.restaurant_code == "snellari-rss",
-        );
-        append_menu_item(
-            restaurant_menu,
-            CMD_RESTAURANT_0436,
-            "Canthia",
-            state.settings.restaurant_code == "0436",
-        );
-        append_menu_item(
-            restaurant_menu,
-            CMD_RESTAURANT_0439,
-            "Tietoteknia",
-            state.settings.restaurant_code == "0439",
-        );
-        append_menu_item(
-            restaurant_menu,
-            CMD_RESTAURANT_HUOMEN_BIOTEKNIA,
-            "Hyvä Huomen",
-            state.settings.restaurant_code == "huomen-bioteknia",
-        );
-        append_menu_item(
-            restaurant_menu,
-            CMD_RESTAURANT_ANTELL_ROUND,
-            "Antell Round",
-            state.settings.restaurant_code == "antell-round",
-        );
-        append_menu_item(
-            restaurant_menu,
-            CMD_RESTAURANT_ANTELL_HIGHWAY,
-            "Antell Highway",
-            state.settings.restaurant_code == "antell-highway",
-        );
+        for restaurant in available_restaurants(state.settings.enable_antell_restaurants) {
+            if let Some(cmd) = restaurant_command_id(restaurant.code) {
+                append_menu_item(
+                    restaurant_menu,
+                    cmd,
+                    restaurant.name,
+                    state.settings.restaurant_code == restaurant.code,
+                );
+            }
+        }
         let _ = AppendMenuW(
             menu,
             MF_POPUP,

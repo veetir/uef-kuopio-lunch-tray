@@ -18,6 +18,7 @@ fn cache_filename(provider: Provider, code: &str, language: &str) -> String {
         Provider::CompassRss => "xml",
         Provider::Antell => "html",
         Provider::HuomenJson => "json",
+        Provider::PranzeriaHtml => "html",
     };
     format!(
         "{}__{}__{}.{}",
@@ -34,6 +35,7 @@ fn legacy_cache_path(provider: Provider, code: &str, language: &str) -> PathBuf 
         Provider::CompassRss => "xml",
         Provider::Antell => "html",
         Provider::HuomenJson => "json",
+        Provider::PranzeriaHtml => "html",
     };
     let filename = format!("{}|{}|{}.{}", provider_key(provider), code, language, ext);
     cache_dir().join(filename)

@@ -1,6 +1,7 @@
 use crate::app::{App, FetchApplyOutcome, FetchMessage};
 use crate::log::log_line;
 use crate::popup;
+use crate::restaurant::available_restaurants;
 use crate::tray;
 use crate::util::to_wstring;
 use time::{OffsetDateTime, Time};
@@ -283,7 +284,11 @@ pub unsafe extern "system" fn popup_wndproc(
                 0x27 | 0x44 => {
                     cycle_popup_restaurant(hwnd, app, 1);
                 }
-                _ => {}
+                _ => {
+                    if let Some(index) = popup_shortcut_index(key) {
+                        select_popup_restaurant_index(hwnd, app, index);
+                    }
+                }
             }
             LRESULT(0)
         }
@@ -375,50 +380,60 @@ fn cycle_popup_restaurant(hwnd: HWND, app: &App, direction: i32) {
     popup::begin_switch_animation(hwnd, &old_state, &new_state, direction);
 }
 
+fn popup_shortcut_index(key: u32) -> Option<usize> {
+    match key {
+        0x31..=0x39 => Some((key - 0x31) as usize),
+        0x30 => Some(9),
+        0x61..=0x69 => Some((key - 0x61) as usize),
+        0x60 => Some(9),
+        _ => None,
+    }
+}
+
+fn select_popup_restaurant_index(hwnd: HWND, app: &App, index: usize) {
+    let old_state = app.snapshot();
+    let restaurants = available_restaurants(old_state.settings.enable_antell_restaurants);
+    let old_index = restaurants
+        .iter()
+        .position(|restaurant| restaurant.code == old_state.settings.restaurant_code)
+        .unwrap_or(0);
+
+    if !app.set_restaurant_index(index) {
+        return;
+    }
+
+    let _ = app.load_cache_for_current();
+    app.check_stale_date_and_refresh();
+    app.maybe_refresh_on_selection();
+
+    let new_state = app.snapshot();
+    let new_index = restaurants
+        .iter()
+        .position(|restaurant| restaurant.code == new_state.settings.restaurant_code)
+        .unwrap_or(index);
+    if new_index == old_index {
+        return;
+    }
+
+    let direction = if new_index > old_index { 1 } else { -1 };
+    popup::resize_popup_keep_position(hwnd, &new_state);
+    popup::begin_switch_animation(hwnd, &old_state, &new_state, direction);
+}
+
 fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
+    if let Some(code) = tray::restaurant_code_for_command(cmd) {
+        app.set_restaurant(code);
+        let _ = app.load_cache_for_current();
+        app.check_stale_date_and_refresh();
+        app.maybe_refresh_on_selection();
+        if popup_is_visible(app.hwnd_popup()) {
+            let state = app.snapshot();
+            popup::resize_popup_keep_position(app.hwnd_popup(), &state);
+        }
+        return;
+    }
+
     match cmd {
-        tray::CMD_RESTAURANT_0437 => {
-            app.set_restaurant("0437");
-            let _ = app.load_cache_for_current();
-            app.check_stale_date_and_refresh();
-            app.maybe_refresh_on_selection();
-        }
-        tray::CMD_RESTAURANT_SNELLARI_RSS => {
-            app.set_restaurant("snellari-rss");
-            let _ = app.load_cache_for_current();
-            app.check_stale_date_and_refresh();
-            app.maybe_refresh_on_selection();
-        }
-        tray::CMD_RESTAURANT_0439 => {
-            app.set_restaurant("0439");
-            let _ = app.load_cache_for_current();
-            app.check_stale_date_and_refresh();
-            app.maybe_refresh_on_selection();
-        }
-        tray::CMD_RESTAURANT_0436 => {
-            app.set_restaurant("0436");
-            let _ = app.load_cache_for_current();
-            app.check_stale_date_and_refresh();
-            app.maybe_refresh_on_selection();
-        }
-        tray::CMD_RESTAURANT_HUOMEN_BIOTEKNIA => {
-            app.set_restaurant("huomen-bioteknia");
-            let _ = app.load_cache_for_current();
-            app.check_stale_date_and_refresh();
-            app.maybe_refresh_on_selection();
-        }
-        tray::CMD_RESTAURANT_ANTELL_HIGHWAY => {
-            app.set_restaurant("antell-highway");
-            let _ = app.load_cache_for_current();
-            app.check_stale_date_and_refresh();
-            app.maybe_refresh_on_selection();
-        }
-        tray::CMD_RESTAURANT_ANTELL_ROUND => {
-            app.set_restaurant("antell-round");
-            let _ = app.load_cache_for_current();
-            app.check_stale_date_and_refresh();
-            app.maybe_refresh_on_selection();
-        }
         tray::CMD_LANGUAGE_FI => {
             app.set_language("fi");
             let _ = app.load_cache_for_current();
