@@ -129,7 +129,11 @@ impl App {
         let settings = load_settings();
         set_log_enabled(settings.enable_logging);
         let state = AppState {
-            provider: restaurant_for_code(&settings.restaurant_code, settings.enable_antell_restaurants).provider,
+            provider: restaurant_for_code(
+                &settings.restaurant_code,
+                settings.enable_antell_restaurants,
+            )
+            .provider,
             settings,
             status: FetchStatus::Idle,
             loading_started_epoch_ms: 0,
@@ -451,7 +455,8 @@ impl App {
             let mut state = self.state.lock().unwrap();
             let mut settings = state.settings.clone();
             settings.restaurant_code = code.to_string();
-            let target = fetch_target_for_code(&settings, code, state.settings.enable_antell_restaurants);
+            let target =
+                fetch_target_for_code(&settings, code, state.settings.enable_antell_restaurants);
             let is_current = state.settings.restaurant_code == code;
             if is_current && options.mark_loading_when_empty && state.raw_payload.is_empty() {
                 state.status = FetchStatus::Loading;
@@ -464,13 +469,7 @@ impl App {
         };
 
         if is_hard_closed_today(target.restaurant) {
-            log_fetch_probe(
-                "gate",
-                &context,
-                &target,
-                "skip",
-                "hard_closed_today",
-            );
+            log_fetch_probe("gate", &context, &target, "skip", "hard_closed_today");
             return false;
         }
 
@@ -480,7 +479,10 @@ impl App {
             if entry.in_flight {
                 let detail = format!(
                     "in_flight=true last_reason={}",
-                    entry.last_reason.map(|reason| reason.as_str()).unwrap_or("-")
+                    entry
+                        .last_reason
+                        .map(|reason| reason.as_str())
+                        .unwrap_or("-")
                 );
                 log_fetch_probe("gate", &context, &target, "skip", &detail);
                 return false;
@@ -492,7 +494,10 @@ impl App {
                     "cooldown_remaining_ms={} failures={} last_reason={}",
                     remaining_ms,
                     entry.consecutive_failures,
-                    entry.last_reason.map(|reason| reason.as_str()).unwrap_or("-")
+                    entry
+                        .last_reason
+                        .map(|reason| reason.as_str())
+                        .unwrap_or("-")
                 );
                 log_fetch_probe("gate", &context, &target, "skip", &detail);
                 return false;
@@ -557,9 +562,10 @@ impl App {
                 state.settings.enable_antell_restaurants,
             )
         };
-        let current_target = fetch_target_for_values(&current_code, &current_language, enable_antell);
-        let is_current_request =
-            requested_code == current_code && requested_effective_language == current_target.effective_language;
+        let current_target =
+            fetch_target_for_values(&current_code, &current_language, enable_antell);
+        let is_current_request = requested_code == current_code
+            && requested_effective_language == current_target.effective_language;
         let alias_language = if is_current_request && current_language != requested_language {
             Some(current_language.clone())
         } else {
@@ -686,8 +692,7 @@ impl App {
         }
 
         for language in languages {
-            if let Err(err) =
-                cache::write_cache(result.provider, code, language, &result.raw_json)
+            if let Err(err) = cache::write_cache(result.provider, code, language, &result.raw_json)
             {
                 log_line(&format!(
                     "cache write failed code={} language={} err={}",
@@ -793,8 +798,7 @@ impl App {
 
     pub fn toggle_hide_expensive_student_meals(&self) {
         let mut state = self.state.lock().unwrap();
-        state.settings.hide_expensive_student_meals =
-            !state.settings.hide_expensive_student_meals;
+        state.settings.hide_expensive_student_meals = !state.settings.hide_expensive_student_meals;
         let _ = save_settings(&state.settings);
     }
 
@@ -983,10 +987,7 @@ impl App {
         if entry.cooldown_until_epoch_ms <= now {
             1_000
         } else {
-            entry
-                .cooldown_until_epoch_ms
-                .saturating_sub(now)
-                .max(1_000) as u32
+            entry.cooldown_until_epoch_ms.saturating_sub(now).max(1_000) as u32
         }
     }
 
@@ -1004,7 +1005,10 @@ impl App {
 
         let (settings, current_code) = {
             let state = self.state.lock().unwrap();
-            (state.settings.clone(), state.settings.restaurant_code.clone())
+            (
+                state.settings.clone(),
+                state.settings.restaurant_code.clone(),
+            )
         };
         let today = today_key();
         let restaurants = available_restaurants(settings.enable_antell_restaurants);
@@ -1019,12 +1023,19 @@ impl App {
                     restaurant,
                     ui_language: settings.language.clone(),
                     effective_language: effective_fetch_language(restaurant, &settings.language),
-                    key: request_state_key(restaurant.code, &effective_fetch_language(restaurant, &settings.language)),
+                    key: request_state_key(
+                        restaurant.code,
+                        &effective_fetch_language(restaurant, &settings.language),
+                    ),
                 };
                 log_probe_skip("prefetch", &target, "hard_closed_today");
                 continue;
             }
-            let target = fetch_target_for_code(&settings, restaurant.code, settings.enable_antell_restaurants);
+            let target = fetch_target_for_code(
+                &settings,
+                restaurant.code,
+                settings.enable_antell_restaurants,
+            );
             let need = match cache::cache_mtime_ms(
                 restaurant.provider,
                 restaurant.code,
@@ -1170,7 +1181,12 @@ fn fetch_target_for_values(code: &str, language: &str, enable_antell: bool) -> F
 fn today_key() -> String {
     let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
     let date = now.date();
-    format!("{:04}-{:02}-{:02}", date.year(), date.month() as u8, date.day())
+    format!(
+        "{:04}-{:02}-{:02}",
+        date.year(),
+        date.month() as u8,
+        date.day()
+    )
 }
 
 fn update_stale_date(state: &mut AppState) {
@@ -1198,7 +1214,12 @@ fn date_key_from_epoch_ms(ms: i64) -> Option<String> {
     let offset = time::UtcOffset::current_local_offset().unwrap_or(time::UtcOffset::UTC);
     let local = dt.to_offset(offset);
     let date = local.date();
-    Some(format!("{:04}-{:02}-{:02}", date.year(), date.month() as u8, date.day()))
+    Some(format!(
+        "{:04}-{:02}-{:02}",
+        date.year(),
+        date.month() as u8,
+        date.day()
+    ))
 }
 
 fn is_probable_network_error(message: &str) -> bool {

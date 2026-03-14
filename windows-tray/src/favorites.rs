@@ -175,7 +175,11 @@ mod tests {
 
     #[test]
     fn removes_near_miss_single_char_variant() {
-        let input = vec!["lasagn".to_string(), "lasagne".to_string(), "pizza".to_string()];
+        let input = vec![
+            "lasagn".to_string(),
+            "lasagne".to_string(),
+            "pizza".to_string(),
+        ];
         let out = remove_variant_family(input, "lasagne");
         assert_eq!(out, vec!["pizza".to_string()]);
     }
@@ -194,14 +198,21 @@ mod tests {
 
     #[test]
     fn keeps_unrelated_inner_substrings() {
-        let input = vec!["ham".to_string(), "hamburger".to_string(), "soup".to_string()];
+        let input = vec![
+            "ham".to_string(),
+            "hamburger".to_string(),
+            "soup".to_string(),
+        ];
         let out = remove_variant_family(input, "ham");
         assert_eq!(out, vec!["hamburger".to_string(), "soup".to_string()]);
     }
 
     #[test]
     fn family_rule_matches_case_insensitively() {
-        assert!(is_variant_family("lasagne", "LASAGN".to_lowercase().as_str()));
+        assert!(is_variant_family(
+            "lasagne",
+            "LASAGN".to_lowercase().as_str()
+        ));
         assert!(is_variant_family("tofu teriyaki", "tofu"));
         assert!(!is_variant_family("hamburger", "ham"));
     }

@@ -43,9 +43,8 @@ fn set_run_value(path: &str) -> anyhow::Result<()> {
     let subkey = to_wstring(RUN_KEY);
     let value = to_wstring(VALUE_NAME);
     let path_wide = to_wstring(path);
-    let data = unsafe {
-        std::slice::from_raw_parts(path_wide.as_ptr() as *const u8, path_wide.len() * 2)
-    };
+    let data =
+        unsafe { std::slice::from_raw_parts(path_wide.as_ptr() as *const u8, path_wide.len() * 2) };
 
     unsafe {
         let mut key = HKEY::default();

@@ -139,13 +139,23 @@ pub fn fetch_today(settings: &Settings, context: &FetchContext) -> FetchOutput {
     result
 }
 
-fn fetch_compass(settings: &Settings, restaurant: Restaurant, context: &FetchContext) -> FetchOutput {
+fn fetch_compass(
+    settings: &Settings,
+    restaurant: Restaurant,
+    context: &FetchContext,
+) -> FetchOutput {
     let fetch_language = compass_fetch_language(restaurant, &settings.language);
     let url = format!(
         "https://www.compass-group.fi/menuapi/feed/json?costNumber={}&language={}",
         restaurant.code, fetch_language
     );
-    log_fetch_attempt(context, restaurant, &settings.language, fetch_language, &url);
+    log_fetch_attempt(
+        context,
+        restaurant,
+        &settings.language,
+        fetch_language,
+        &url,
+    );
     let client = match Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
@@ -242,7 +252,13 @@ fn fetch_compass_rss(
         "https://www.compass-group.fi/menuapi/feed/rss/current-day?costNumber={}&language={}",
         rss_cost_number, settings.language
     );
-    log_fetch_attempt(context, restaurant, &settings.language, &settings.language, &url);
+    log_fetch_attempt(
+        context,
+        restaurant,
+        &settings.language,
+        &settings.language,
+        &url,
+    );
 
     let client = match Client::builder()
         .timeout(std::time::Duration::from_secs(10))
@@ -290,7 +306,11 @@ fn fetch_compass_rss(
     }
 }
 
-fn fetch_huomen(settings: &Settings, restaurant: Restaurant, context: &FetchContext) -> FetchOutput {
+fn fetch_huomen(
+    settings: &Settings,
+    restaurant: Restaurant,
+    context: &FetchContext,
+) -> FetchOutput {
     let huomen_api_base = match restaurant.huomen_api_base {
         Some(value) if !value.trim().is_empty() => value.trim(),
         _ => {
@@ -316,7 +336,13 @@ fn fetch_huomen(settings: &Settings, restaurant: Restaurant, context: &FetchCont
         "{}{}language={}",
         huomen_api_base, separator, settings.language
     );
-    log_fetch_attempt(context, restaurant, &settings.language, &settings.language, &url);
+    log_fetch_attempt(
+        context,
+        restaurant,
+        &settings.language,
+        &settings.language,
+        &url,
+    );
 
     let client = match Client::builder()
         .timeout(std::time::Duration::from_secs(10))
@@ -515,7 +541,11 @@ fn normalize_menus(set_menus: Vec<ApiSetMenu>) -> Vec<MenuGroup> {
         .collect()
 }
 
-fn fetch_antell(settings: &Settings, restaurant: Restaurant, context: &FetchContext) -> FetchOutput {
+fn fetch_antell(
+    settings: &Settings,
+    restaurant: Restaurant,
+    context: &FetchContext,
+) -> FetchOutput {
     let today_key = local_today_key();
     let slug = match restaurant.antell_slug {
         Some(s) => s,
@@ -544,7 +574,13 @@ fn fetch_antell(settings: &Settings, restaurant: Restaurant, context: &FetchCont
             slug, weekday
         )
     };
-    log_fetch_attempt(context, restaurant, &settings.language, &settings.language, &url);
+    log_fetch_attempt(
+        context,
+        restaurant,
+        &settings.language,
+        &settings.language,
+        &url,
+    );
     let client = match Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
@@ -609,8 +645,16 @@ fn fetch_pranzeria(
     restaurant: Restaurant,
     context: &FetchContext,
 ) -> FetchOutput {
-    let url = restaurant.url.unwrap_or("https://www.sorrento.fi/pranzeria/");
-    log_fetch_attempt(context, restaurant, &settings.language, &settings.language, url);
+    let url = restaurant
+        .url
+        .unwrap_or("https://www.sorrento.fi/pranzeria/");
+    log_fetch_attempt(
+        context,
+        restaurant,
+        &settings.language,
+        &settings.language,
+        url,
+    );
     let client = match Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
@@ -1497,18 +1541,17 @@ mod tests {
         let today_menu = parsed.today_menu.expect("today_menu");
         assert_eq!(today_menu.menus.len(), 1);
         assert_eq!(today_menu.menus[0].name, "Lounas");
-        assert_eq!(today_menu.menus[0].components[0], "Salaatti- &AntipastoBuffet");
-        assert!(
-            today_menu.menus[0]
-                .components
-                .iter()
-                .any(|line| line.contains("Spezzatino Di Manzo"))
+        assert_eq!(
+            today_menu.menus[0].components[0],
+            "Salaatti- &AntipastoBuffet"
         );
-        assert!(
-            !today_menu.menus[0]
-                .components
-                .iter()
-                .any(|line| line.contains("Laktoositon"))
-        );
+        assert!(today_menu.menus[0]
+            .components
+            .iter()
+            .any(|line| line.contains("Spezzatino Di Manzo")));
+        assert!(!today_menu.menus[0]
+            .components
+            .iter()
+            .any(|line| line.contains("Laktoositon")));
     }
 }
