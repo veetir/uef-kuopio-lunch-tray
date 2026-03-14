@@ -146,10 +146,10 @@ pub unsafe extern "system" fn tray_wndproc(
             let app = &*(app);
             match wparam.0 as usize {
                 TIMER_REFRESH => {
-                    app.start_refresh();
+                    app.refresh_current_from_timer();
                 }
                 TIMER_MIDNIGHT => {
-                    app.start_refresh();
+                    app.refresh_current_at_midnight();
                     schedule_midnight_timer(hwnd);
                 }
                 TIMER_HOVER_CHECK => {
@@ -179,7 +179,6 @@ pub unsafe extern "system" fn tray_wndproc(
                 match outcome {
                     FetchApplyOutcome::CurrentSuccess => {
                         cancel_retry_timer(hwnd);
-                        app.reset_retry_backoff();
                         app.prefetch_enabled_restaurants();
                         let state = app.snapshot();
                         if popup_is_visible(app.hwnd_popup()) {
@@ -189,7 +188,7 @@ pub unsafe extern "system" fn tray_wndproc(
                         }
                     }
                     FetchApplyOutcome::CurrentFailure => {
-                        let delay = app.next_retry_delay_ms();
+                        let delay = app.current_retry_delay_ms();
                         schedule_retry_timer(hwnd, delay);
                         let state = app.snapshot();
                         if popup_is_visible(app.hwnd_popup()) {
@@ -386,7 +385,6 @@ fn cycle_popup_restaurant(hwnd: HWND, app: &App, direction: i32) {
     popup::press_navigation_button(hwnd, direction);
     app.cycle_restaurant(direction);
     let _ = app.load_cache_for_current();
-    app.check_stale_date_and_refresh();
     app.maybe_refresh_on_selection();
     let new_state = app.snapshot();
     popup::resize_popup_keep_position(hwnd, &new_state);
@@ -416,7 +414,6 @@ fn select_popup_restaurant_index(hwnd: HWND, app: &App, index: usize) {
     }
 
     let _ = app.load_cache_for_current();
-    app.check_stale_date_and_refresh();
     app.maybe_refresh_on_selection();
 
     let new_state = app.snapshot();
@@ -437,7 +434,6 @@ fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
     if let Some(code) = tray::restaurant_code_for_command(cmd) {
         app.set_restaurant(code);
         let _ = app.load_cache_for_current();
-        app.check_stale_date_and_refresh();
         app.maybe_refresh_on_selection();
         if popup_is_visible(app.hwnd_popup()) {
             let state = app.snapshot();
@@ -450,14 +446,12 @@ fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
         tray::CMD_LANGUAGE_FI => {
             app.set_language("fi");
             let _ = app.load_cache_for_current();
-            app.check_stale_date_and_refresh();
-            app.maybe_refresh_on_selection();
+            app.maybe_refresh_on_language_switch();
         }
         tray::CMD_LANGUAGE_EN => {
             app.set_language("en");
             let _ = app.load_cache_for_current();
-            app.check_stale_date_and_refresh();
-            app.maybe_refresh_on_selection();
+            app.maybe_refresh_on_language_switch();
         }
         tray::CMD_TOGGLE_SHOW_PRICES => {
             app.toggle_show_prices();
@@ -554,7 +548,7 @@ fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
             app.open_appdata_dir();
         }
         tray::CMD_REFRESH_NOW => {
-            app.start_refresh();
+            app.refresh_current_manually();
         }
         tray::CMD_REFRESH_OFF => {
             app.set_refresh_minutes(0);

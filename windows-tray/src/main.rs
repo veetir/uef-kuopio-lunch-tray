@@ -17,6 +17,7 @@ mod util;
 mod winmsg;
 
 use crate::app::App;
+use crate::api::{FetchContext, FetchMode, FetchReason};
 use crate::format::{
     date_and_time_line, menu_heading, normalize_text, split_component_suffix, student_price_eur,
     text_for, PriceGroups,
@@ -103,8 +104,7 @@ fn main() -> anyhow::Result<()> {
         app.set_hwnds(tray_hwnd, popup_hwnd);
         let _ = app.load_cache_for_current();
         winmsg::schedule_timers(tray_hwnd, app.refresh_minutes());
-        app.check_stale_date_and_refresh();
-        app.start_refresh();
+        app.maybe_refresh_on_startup();
 
         if !no_tray {
             match tray::add_tray_icon(tray_hwnd, winmsg::WM_TRAY_CALLBACK) {
@@ -147,7 +147,10 @@ fn ensure_console() {
 fn ensure_console() {}
 
 fn print_today_menu_with_settings(settings: &crate::settings::Settings) -> anyhow::Result<()> {
-    let result = api::fetch_today(settings);
+    let result = api::fetch_today(
+        settings,
+        &FetchContext::new(FetchMode::Direct, FetchReason::PrintTodayCli),
+    );
     if !result.ok {
         eprintln!(
             "{}: {}",

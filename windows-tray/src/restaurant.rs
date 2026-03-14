@@ -169,6 +169,13 @@ pub fn compass_fetch_language(restaurant: Restaurant, requested_language: &str) 
     }
 }
 
+pub fn effective_fetch_language(restaurant: Restaurant, requested_language: &str) -> String {
+    match restaurant.provider {
+        Provider::Compass => compass_fetch_language(restaurant, requested_language).to_string(),
+        _ => requested_language.to_string(),
+    }
+}
+
 pub fn is_hard_closed_today(restaurant: Restaurant) -> bool {
     let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
     is_hard_closed_on_weekday(restaurant, now.weekday())
