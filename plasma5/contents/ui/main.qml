@@ -12,6 +12,7 @@ Item {
     property string apiBaseUrl: "https://www.compass-group.fi/menuapi/feed/json"
     property string apiRssBaseUrl: "https://www.compass-group.fi/menuapi/feed/rss/current-day"
     property string meditekniaRestaurantCode: "043601"
+    property string pranzeriaRestaurantCode: "pranzeria-html"
     property var allRestaurantCatalog: [
         { code: "0437", fallbackName: "Snellmania", provider: "compass" },
         { code: "snellari-rss", fallbackName: "Cafe Snellari", provider: "compass-rss", rssCostNumber: "4370", rssUrlBase: "https://www.compass-group.fi/ravintolat-ja-ruokalistat/foodco/kaupungit/kuopio/cafe-snellari/" },
@@ -170,18 +171,21 @@ Item {
 
     function migrateEnabledRestaurantCodes() {
         var migrationLevel = Number(plasmoid.configuration.enabledRestaurantCodesMigrationLevel || 0)
-        if (migrationLevel >= 2) {
+        if (migrationLevel >= 3) {
             return
         }
 
         var raw = String(plasmoid.configuration.enabledRestaurantCodes || "").trim()
         var selectedCodes = parseConfiguredRestaurantCodes(raw)
-        if (selectedCodes.indexOf(meditekniaRestaurantCode) < 0) {
+        if (migrationLevel < 2 && selectedCodes.indexOf(meditekniaRestaurantCode) < 0) {
             selectedCodes.push(meditekniaRestaurantCode)
+        }
+        if (selectedCodes.indexOf(pranzeriaRestaurantCode) < 0) {
+            selectedCodes.push(pranzeriaRestaurantCode)
         }
         writeConfiguredRestaurantCodes(selectedCodes)
 
-        plasmoid.configuration.enabledRestaurantCodesMigrationLevel = 2
+        plasmoid.configuration.enabledRestaurantCodesMigrationLevel = 3
     }
 
     function defaultRestaurantCode() {

@@ -13,6 +13,7 @@ PlasmoidItem {
     property string apiBaseUrl: "https://www.compass-group.fi/menuapi/feed/json"
     property string apiRssBaseUrl: "https://www.compass-group.fi/menuapi/feed/rss/current-day"
     property string meditekniaRestaurantCode: "043601"
+    property string pranzeriaRestaurantCode: "pranzeria-html"
     property var allRestaurantCatalog: [
         { code: "0437", fallbackName: "Snellmania", provider: "compass" },
         { code: "snellari-rss", fallbackName: "Cafe Snellari", provider: "compass-rss", rssCostNumber: "4370", rssUrlBase: "https://www.compass-group.fi/ravintolat-ja-ruokalistat/foodco/kaupungit/kuopio/cafe-snellari/" },
@@ -24,7 +25,10 @@ PlasmoidItem {
         { code: "pranzeria-html", fallbackName: "Pranzeria Sorrento", provider: "pranzeria", pranzeriaUrlBase: "https://www.sorrento.fi/pranzeria/" },
         { code: "huomen-bioteknia", fallbackName: "Hyvä Huomen Bioteknia", provider: "huomen-json", huomenApiBase: "https://europe-west1-luncher-7cf76.cloudfunctions.net/api/v1/week/a96b7ccf-2c3d-432a-8504-971dbb6d55d3/active", huomenUrlBase: "https://hyvahuomen.fi/bioteknia/" }
     ]
-    property var restaurantCatalog: filteredRestaurantCatalog(configEnabledRestaurantCodes)
+    property var restaurantCatalog: {
+        var filtered = filteredRestaurantCatalog(configEnabledRestaurantCodes)
+        return Array.isArray(filtered) ? filtered : []
+    }
 
     property var restaurantStates: ({})
     property var requestSerialByCode: ({})
@@ -171,18 +175,21 @@ PlasmoidItem {
 
     function migrateEnabledRestaurantCodes() {
         var migrationLevel = Number(Plasmoid.configuration.enabledRestaurantCodesMigrationLevel || 0)
-        if (migrationLevel >= 2) {
+        if (migrationLevel >= 3) {
             return
         }
 
         var raw = String(Plasmoid.configuration.enabledRestaurantCodes || "").trim()
         var selectedCodes = parseConfiguredRestaurantCodes(raw)
-        if (selectedCodes.indexOf(meditekniaRestaurantCode) < 0) {
+        if (migrationLevel < 2 && selectedCodes.indexOf(meditekniaRestaurantCode) < 0) {
             selectedCodes.push(meditekniaRestaurantCode)
+        }
+        if (selectedCodes.indexOf(pranzeriaRestaurantCode) < 0) {
+            selectedCodes.push(pranzeriaRestaurantCode)
         }
         writeConfiguredRestaurantCodes(selectedCodes)
 
-        Plasmoid.configuration.enabledRestaurantCodesMigrationLevel = 2
+        Plasmoid.configuration.enabledRestaurantCodesMigrationLevel = 3
     }
 
     function defaultRestaurantCode() {
@@ -194,9 +201,10 @@ PlasmoidItem {
     }
 
     function restaurantCodes() {
+        var catalog = Array.isArray(restaurantCatalog) ? restaurantCatalog : []
         var list = []
-        for (var i = 0; i < restaurantCatalog.length; i++) {
-            list.push(String(restaurantCatalog[i].code))
+        for (var i = 0; i < catalog.length; i++) {
+            list.push(String(catalog[i].code))
         }
         return list
     }
@@ -209,9 +217,10 @@ PlasmoidItem {
 
     function restaurantEntryForCode(code) {
         var normalized = String(code || "")
-        for (var i = 0; i < restaurantCatalog.length; i++) {
-            if (String(restaurantCatalog[i].code) === normalized) {
-                return restaurantCatalog[i]
+        var catalog = Array.isArray(restaurantCatalog) ? restaurantCatalog : []
+        for (var i = 0; i < catalog.length; i++) {
+            if (String(catalog[i].code) === normalized) {
+                return catalog[i]
             }
         }
         return null
@@ -219,9 +228,10 @@ PlasmoidItem {
 
     function restaurantLabelForCode(code) {
         var normalized = String(code || "")
-        for (var i = 0; i < restaurantCatalog.length; i++) {
-            if (restaurantCatalog[i].code === normalized) {
-                return restaurantCatalog[i].fallbackName
+        var catalog = Array.isArray(restaurantCatalog) ? restaurantCatalog : []
+        for (var i = 0; i < catalog.length; i++) {
+            if (catalog[i].code === normalized) {
+                return catalog[i].fallbackName
             }
         }
         return "Restaurant " + normalized
@@ -1854,12 +1864,15 @@ PlasmoidItem {
 
     compactRepresentation: Item {
         id: compactRoot
-        implicitWidth: PlasmaCore.Units.iconSizes.smallMedium
-        implicitHeight: PlasmaCore.Units.iconSizes.smallMedium
+        implicitWidth: Kirigami.Units.iconSizes.smallMedium
+        implicitHeight: Kirigami.Units.iconSizes.smallMedium
 
         Kirigami.Icon {
             anchors.fill: parent
-            source: Plasmoid.icon
+            source: {
+                var _ = modelVersion
+                return activeIconName()
+            }
             active: compactMouse.containsMouse
         }
 

@@ -42,6 +42,8 @@ Install (Plasma 6):
 
 ```bash
 kpackagetool6 -t Plasma/Applet -i "$PWD/plasma6"
+kbuildsycoca6
+systemctl --user restart plasma-plasmashell.service
 ```
 
 Upgrade existing install:
@@ -49,6 +51,8 @@ Upgrade existing install:
 ```bash
 git pull
 kpackagetool6 -t Plasma/Applet -u "$PWD/plasma6"
+kbuildsycoca6
+systemctl --user restart plasma-plasmashell.service
 ```
 
 Remove:

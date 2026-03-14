@@ -38,7 +38,7 @@
       <default>food</default>
     </entry>
     <entry name="enabledRestaurantCodes" type="String">
-      <default>0437,snellari-rss,0436,043601,0439,antell-round,antell-highway,huomen-bioteknia</default>
+      <default>0437,snellari-rss,0436,043601,0439,antell-round,antell-highway,pranzeria-html,huomen-bioteknia</default>
     </entry>
     <entry name="enabledRestaurantCodesMigrationLevel" type="Int">
       <default>0</default>
