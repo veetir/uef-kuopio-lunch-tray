@@ -237,6 +237,8 @@ PlasmoidItem {
             isTodayFresh: false,
             consecutiveFailures: 0,
             nextRetryEpochMs: 0,
+            assumedNoMenuWeekend: false,
+            assumedNoMenuRetryEpochMs: 0,
             restaurantName: "",
             restaurantUrl: ""
         }
@@ -336,6 +338,19 @@ PlasmoidItem {
             return 10
         }
         return 15
+    }
+
+    function isWeekendDate(dateObj) {
+        var day = (dateObj || new Date()).getDay()
+        return day === 0 || day === 6
+    }
+
+    function isWeekendNoMenuProvider(provider) {
+        return provider === "antell" || provider === "huomen-json"
+    }
+
+    function weekendNoMenuRetryDelayMs() {
+        return 6 * 60 * 60 * 1000
     }
 
     function weekdayToken(dateObj) {
@@ -1028,11 +1043,14 @@ PlasmoidItem {
     function setErrorStateForCode(code, message) {
         var current = stateFor(code)
         if (isStateFreshForToday(current)) {
+            var keepWeekendAssumed = !!current.assumedNoMenuWeekend
             updateState(code, {
                 status: "ok",
                 errorMessage: "",
                 consecutiveFailures: 0,
-                nextRetryEpochMs: 0
+                nextRetryEpochMs: 0,
+                assumedNoMenuWeekend: keepWeekendAssumed,
+                assumedNoMenuRetryEpochMs: keepWeekendAssumed ? (Date.now() + weekendNoMenuRetryDelayMs()) : 0
             })
             return
         }
@@ -1043,7 +1061,9 @@ PlasmoidItem {
             errorMessage: message,
             isTodayFresh: false,
             consecutiveFailures: failureCount,
-            nextRetryEpochMs: Date.now() + retryDelayMinutes(failureCount) * 60 * 1000
+            nextRetryEpochMs: Date.now() + retryDelayMinutes(failureCount) * 60 * 1000,
+            assumedNoMenuWeekend: false,
+            assumedNoMenuRetryEpochMs: 0
         })
         retryTimer.start()
     }
@@ -1118,23 +1138,44 @@ PlasmoidItem {
         }
 
         var updatedMs = fromCache ? (Number(cachedTimestamp) || 0) : Date.now()
-        var freshToday = !!providerDateValid && menuDateIso === todayIso()
+        var today = todayIso()
+        var freshToday = !!providerDateValid && menuDateIso === today
+        var assumeWeekendNoMenu = !freshToday && isWeekendNoMenuProvider(provider) && isWeekendDate(new Date())
+        if (assumeWeekendNoMenu) {
+            freshToday = true
+            providerDateValid = true
+            menuDateIso = today
+            todayMenu = {
+                dateIso: today,
+                lunchTime: "",
+                menus: []
+            }
+        }
         var current = stateFor(code)
         var failureCount = Number(current.consecutiveFailures) || 0
 
-        if (!freshToday && !fromCache) {
+        if (assumeWeekendNoMenu) {
+            failureCount = 0
+        } else if (!freshToday && !fromCache) {
             failureCount += 1
         } else if (freshToday) {
             failureCount = 0
         }
 
         var nextRetryEpochMs = Number(current.nextRetryEpochMs) || 0
-        if (freshToday) {
+        var assumedNoMenuRetryEpochMs = Number(current.assumedNoMenuRetryEpochMs) || 0
+        if (assumeWeekendNoMenu) {
             nextRetryEpochMs = 0
+            assumedNoMenuRetryEpochMs = Date.now() + weekendNoMenuRetryDelayMs()
+        } else if (freshToday) {
+            nextRetryEpochMs = 0
+            assumedNoMenuRetryEpochMs = 0
         } else if (!fromCache) {
             nextRetryEpochMs = Date.now() + retryDelayMinutes(failureCount) * 60 * 1000
+            assumedNoMenuRetryEpochMs = 0
         } else if (!isFinite(nextRetryEpochMs) || nextRetryEpochMs < 0) {
             nextRetryEpochMs = 0
+            assumedNoMenuRetryEpochMs = 0
         }
 
         updateState(code, {
@@ -1149,11 +1190,13 @@ PlasmoidItem {
             isTodayFresh: freshToday,
             consecutiveFailures: failureCount,
             nextRetryEpochMs: nextRetryEpochMs,
+            assumedNoMenuWeekend: assumeWeekendNoMenu,
+            assumedNoMenuRetryEpochMs: assumedNoMenuRetryEpochMs,
             restaurantName: restaurantName,
             restaurantUrl: restaurantUrl
         })
 
-        if (!freshToday && !fromCache) {
+        if ((!freshToday && !fromCache) || assumeWeekendNoMenu) {
             retryTimer.start()
         }
 
@@ -1317,6 +1360,15 @@ PlasmoidItem {
             var code = codes[i]
             var state = stateFor(code)
             var dueMs = Number(state.nextRetryEpochMs) || 0
+            var assumedDueMs = Number(state.assumedNoMenuRetryEpochMs) || 0
+
+            if (state.assumedNoMenuWeekend && assumedDueMs > 0) {
+                hasPendingRetry = true
+                if (assumedDueMs <= nowMs) {
+                    fetchRestaurant(code, false)
+                }
+                continue
+            }
 
             if (!dueMs || isStateFreshForToday(state)) {
                 continue

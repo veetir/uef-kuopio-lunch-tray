@@ -383,9 +383,19 @@ Item {
             text: "Use mouse wheel on tray icon to switch restaurant"
         }
 
-        QQC2.Button {
-            text: "Refresh menus now"
-            onClicked: cfg_manualRefreshToken = cfg_manualRefreshToken + 1
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 8
+
+            QQC2.Button {
+                text: "Refresh menus now"
+                onClicked: cfg_manualRefreshToken = cfg_manualRefreshToken + 1
+            }
+
+            QQC2.Button {
+                text: "Report issue"
+                onClicked: Qt.openUrlExternally("https://github.com/veetir/uef-kuopio-lunch-tray/issues")
+            }
         }
 
         QQC2.Label {

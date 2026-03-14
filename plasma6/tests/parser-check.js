@@ -530,6 +530,13 @@ function retryDelayMinutes(failureCount) {
   return 15;
 }
 
+function shouldAssumeWeekendNoMenu(provider, nowDate) {
+  const date = nowDate instanceof Date ? nowDate : new Date();
+  const day = date.getDay();
+  const isWeekend = day === 0 || day === 6;
+  return isWeekend && (provider === "antell" || provider === "huomen-json");
+}
+
 function checkCompassFixture(name, expectedMenuName) {
   const payload = readFixture(name);
 
@@ -657,6 +664,18 @@ function checkRetryDelays() {
   assert(retryDelayMinutes(8) === 15, "retry delay should stay at 15 after third failure");
 }
 
+function checkWeekendNoMenuAssumption() {
+  const saturday = new Date(2026, 2, 14);
+  const monday = new Date(2026, 2, 16);
+
+  assert(shouldAssumeWeekendNoMenu("antell", saturday), "antell should assume no-menu on weekend mismatch");
+  assert(shouldAssumeWeekendNoMenu("huomen-json", saturday), "huomen-json should assume no-menu on weekend mismatch");
+  assert(!shouldAssumeWeekendNoMenu("antell", monday), "antell should use normal retry flow on weekdays");
+  assert(!shouldAssumeWeekendNoMenu("huomen-json", monday), "huomen-json should use normal retry flow on weekdays");
+  assert(!shouldAssumeWeekendNoMenu("compass", saturday), "compass should not use weekend no-menu assumption");
+  assert(!shouldAssumeWeekendNoMenu("compass-rss", saturday), "compass-rss should not use weekend no-menu assumption");
+}
+
 function main() {
   checkCompassFixture("output-en.json", "Lunch");
   checkCompassFixture("output-fi.json", "Annosruoka");
@@ -674,6 +693,7 @@ function main() {
   );
   checkRssFixture("snellari.rss");
   checkHuomenFixture("huomen.json");
+  checkWeekendNoMenuAssumption();
   checkRetryDelays();
   process.stdout.write("Parser checks passed for Compass, Antell, RSS and Huomen freshness rules\n");
 }
