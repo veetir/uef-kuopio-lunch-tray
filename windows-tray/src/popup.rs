@@ -11,6 +11,8 @@ use crate::restaurant::{available_restaurants, is_hard_closed_today, Provider, R
 use crate::settings::Settings;
 use crate::util::to_wstring;
 use std::cmp::{max, min};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::sync::{Mutex, OnceLock};
 use time::{OffsetDateTime, UtcOffset};
 use windows::core::PCWSTR;
@@ -44,9 +46,12 @@ const POPUP_CLOSE_ANIM_MS: i64 = 90;
 const POPUP_SWITCH_ANIM_MS: i64 = 120;
 const POPUP_SWITCH_OFFSET_PX: i32 = 6;
 const FAVORITES_RELOAD_INTERVAL_MS: i64 = 1000;
+const POPUP_DESIRED_SIZE_CACHE_LIMIT: usize = 32;
 const BULLET_PREFIX: &str = "▸ ";
 
 static POPUP_LINE_BUDGET_CACHE: OnceLock<Mutex<Option<PopupLineBudgetCache>>> = OnceLock::new();
+static POPUP_LINE_SIGNATURE_CACHE: OnceLock<Mutex<Option<PopupLineSignatureCache>>> = OnceLock::new();
+static POPUP_DESIRED_SIZE_CACHE: OnceLock<Mutex<Vec<PopupDesiredSizeCacheEntry>>> = OnceLock::new();
 static POPUP_ANIMATION: OnceLock<Mutex<Option<PopupAnimation>>> = OnceLock::new();
 static FAVORITES_CACHE: OnceLock<Mutex<FavoritesCache>> = OnceLock::new();
 static POPUP_SELECTION_STATE: OnceLock<Mutex<PopupSelectionState>> = OnceLock::new();
@@ -103,6 +108,43 @@ struct PopupLineBudgetCache {
     signatures: Vec<RestaurantCacheSignature>,
     max_wrapped_lines: Option<usize>,
     max_content_width_px: Option<i32>,
+}
+
+#[derive(Debug, Clone)]
+struct PopupLineSignatureCache {
+    key: PopupLineBudgetKey,
+    signatures: Vec<RestaurantCacheSignature>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PopupDesiredSizeKey {
+    restaurant_code: String,
+    language: String,
+    theme: String,
+    widget_scale: String,
+    dpi_y: i32,
+    show_prices: bool,
+    show_student_price: bool,
+    show_staff_price: bool,
+    show_guest_price: bool,
+    hide_expensive_student_meals: bool,
+    show_allergens: bool,
+    highlight_gluten_free: bool,
+    highlight_veg: bool,
+    highlight_lactose_free: bool,
+    status_tag: u8,
+    stale_date: bool,
+    stale_network_error: bool,
+    payload_date: String,
+    error_message: String,
+    raw_payload_hash: u64,
+}
+
+#[derive(Debug, Clone)]
+struct PopupDesiredSizeCacheEntry {
+    key: PopupDesiredSizeKey,
+    width: i32,
+    height: i32,
 }
 
 #[derive(Debug, Clone)]
@@ -347,8 +389,28 @@ pub fn resize_popup_keep_position(hwnd: HWND, state: &AppState) {
             y: rect.bottom,
         };
         let (x, y) = position_near_point(width, height, anchor);
+        if rect.left == x
+            && rect.top == y
+            && (rect.right - rect.left) == width
+            && (rect.bottom - rect.top) == height
+        {
+            InvalidateRect(hwnd, None, true);
+            return;
+        }
         let _ = SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, SWP_SHOWWINDOW);
         InvalidateRect(hwnd, None, true);
+    }
+}
+
+pub fn invalidate_layout_budget_cache() {
+    let budget_cache = POPUP_LINE_BUDGET_CACHE.get_or_init(|| Mutex::new(None));
+    if let Ok(mut guard) = budget_cache.lock() {
+        *guard = None;
+    }
+
+    let signature_cache = POPUP_LINE_SIGNATURE_CACHE.get_or_init(|| Mutex::new(None));
+    if let Ok(mut guard) = signature_cache.lock() {
+        *guard = None;
     }
 }
 
@@ -2018,6 +2080,13 @@ fn desired_size(hwnd: HWND, state: &AppState) -> (i32, i32) {
     unsafe {
         let hdc = windows::Win32::Graphics::Gdi::GetDC(hwnd);
         let dpi_y = GetDeviceCaps(hdc, LOGPIXELSY);
+        if let Some(key) = desired_size_cache_key(state, dpi_y) {
+            if let Some(size) = cached_desired_size(&key) {
+                windows::Win32::Graphics::Gdi::ReleaseDC(hwnd, hdc);
+                return size;
+            }
+        }
+
         let scale = popup_scale(&state.settings);
         let (normal_font, bold_font, small_font, small_bold_font) =
             create_fonts(hdc, &state.settings.theme, scale.factor);
@@ -2071,7 +2140,11 @@ fn desired_size(hwnd: HWND, state: &AppState) -> (i32, i32) {
         DeleteObject(small_bold_font);
         windows::Win32::Graphics::Gdi::ReleaseDC(hwnd, hdc);
 
-        (width, height.max(scale.header_height + scale_px(120, scale.factor)))
+        let size = (width, height.max(scale.header_height + scale_px(120, scale.factor)));
+        if let Some(key) = desired_size_cache_key(state, dpi_y) {
+            update_desired_size_cache(key, size);
+        }
+        size
     }
 }
 
@@ -2249,7 +2322,7 @@ fn popup_cached_layout_budget(
 ) -> CachedLayoutBudget {
     let today_key = local_today_key();
     let key = line_budget_key(&state.settings, &today_key, dpi_y);
-    let signatures = cache_signatures(&state.settings);
+    let signatures = cache_signatures(&state.settings, &key);
     if let Some(budget) = cached_line_budget(&key, &signatures) {
         return budget;
     }
@@ -2287,7 +2360,19 @@ fn line_budget_key(settings: &Settings, today_key: &str, dpi_y: i32) -> PopupLin
     }
 }
 
-fn cache_signatures(settings: &Settings) -> Vec<RestaurantCacheSignature> {
+fn cache_signatures(
+    settings: &Settings,
+    key: &PopupLineBudgetKey,
+) -> Vec<RestaurantCacheSignature> {
+    let cache = POPUP_LINE_SIGNATURE_CACHE.get_or_init(|| Mutex::new(None));
+    if let Ok(guard) = cache.lock() {
+        if let Some(entry) = guard.as_ref() {
+            if entry.key == *key {
+                return entry.signatures.clone();
+            }
+        }
+    }
+
     let mut signatures = Vec::new();
     for restaurant in available_restaurants(settings.enable_antell_restaurants) {
         let mtime_ms =
@@ -2298,6 +2383,14 @@ fn cache_signatures(settings: &Settings) -> Vec<RestaurantCacheSignature> {
             mtime_ms,
         });
     }
+
+    if let Ok(mut guard) = cache.lock() {
+        *guard = Some(PopupLineSignatureCache {
+            key: key.clone(),
+            signatures: signatures.clone(),
+        });
+    }
+
     signatures
 }
 
@@ -2332,6 +2425,78 @@ fn update_line_budget_cache(
             max_content_width_px: budget.max_content_width_px,
         });
     }
+}
+
+fn desired_size_cache_key(state: &AppState, dpi_y: i32) -> Option<PopupDesiredSizeKey> {
+    if state.status == FetchStatus::Loading {
+        return None;
+    }
+
+    Some(PopupDesiredSizeKey {
+        restaurant_code: state.settings.restaurant_code.clone(),
+        language: state.settings.language.clone(),
+        theme: state.settings.theme.clone(),
+        widget_scale: state.settings.widget_scale.clone(),
+        dpi_y,
+        show_prices: state.settings.show_prices,
+        show_student_price: state.settings.show_student_price,
+        show_staff_price: state.settings.show_staff_price,
+        show_guest_price: state.settings.show_guest_price,
+        hide_expensive_student_meals: state.settings.hide_expensive_student_meals,
+        show_allergens: state.settings.show_allergens,
+        highlight_gluten_free: state.settings.highlight_gluten_free,
+        highlight_veg: state.settings.highlight_veg,
+        highlight_lactose_free: state.settings.highlight_lactose_free,
+        status_tag: fetch_status_tag(state.status),
+        stale_date: state.stale_date,
+        stale_network_error: state.stale_network_error,
+        payload_date: state.payload_date.clone(),
+        error_message: state.error_message.clone(),
+        raw_payload_hash: raw_payload_hash(state),
+    })
+}
+
+fn cached_desired_size(key: &PopupDesiredSizeKey) -> Option<(i32, i32)> {
+    let cache = POPUP_DESIRED_SIZE_CACHE.get_or_init(|| Mutex::new(Vec::new()));
+    let mut guard = cache.lock().ok()?;
+    let index = guard.iter().position(|entry| entry.key == *key)?;
+    let entry = guard.remove(index);
+    let size = (entry.width, entry.height);
+    guard.push(entry);
+    Some(size)
+}
+
+fn update_desired_size_cache(key: PopupDesiredSizeKey, size: (i32, i32)) {
+    let cache = POPUP_DESIRED_SIZE_CACHE.get_or_init(|| Mutex::new(Vec::new()));
+    if let Ok(mut guard) = cache.lock() {
+        if let Some(index) = guard.iter().position(|entry| entry.key == key) {
+            guard.remove(index);
+        }
+        guard.push(PopupDesiredSizeCacheEntry {
+            key,
+            width: size.0,
+            height: size.1,
+        });
+        while guard.len() > POPUP_DESIRED_SIZE_CACHE_LIMIT {
+            guard.remove(0);
+        }
+    }
+}
+
+fn fetch_status_tag(status: FetchStatus) -> u8 {
+    match status {
+        FetchStatus::Idle => 0,
+        FetchStatus::Loading => 1,
+        FetchStatus::Ok => 2,
+        FetchStatus::Stale => 3,
+        FetchStatus::Error => 4,
+    }
+}
+
+fn raw_payload_hash(state: &AppState) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    state.raw_payload.hash(&mut hasher);
+    hasher.finish()
 }
 
 fn max_today_cached_layout_budget(

@@ -11,9 +11,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DefWindowProcW, DestroyWindow, GetCursorPos, GetWindowLongPtrW, GetWindowRect, KillTimer,
     LoadCursorW, PostQuitMessage, RegisterClassExW, SetForegroundWindow, SetTimer,
     SetWindowLongPtrW, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, IDC_ARROW,
-    WM_ACTIVATE, WM_APP, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_KEYDOWN, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_PAINT, WM_RBUTTONUP,
-    WM_TIMER, WNDCLASSEXW,
+    WM_ACTIVATE, WM_APP, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_DPICHANGED, WM_KEYDOWN,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_PAINT,
+    WM_RBUTTONUP, WM_TIMER, WNDCLASSEXW,
 };
 
 pub const TRAY_WND_CLASS: &str = "CompassLunchTrayWindow";
@@ -178,6 +178,7 @@ pub unsafe extern "system" fn tray_wndproc(
                 let outcome = app.apply_fetch_message(message);
                 match outcome {
                     FetchApplyOutcome::CurrentSuccess => {
+                        popup::invalidate_layout_budget_cache();
                         cancel_retry_timer(hwnd);
                         app.prefetch_enabled_restaurants();
                         let state = app.snapshot();
@@ -195,8 +196,10 @@ pub unsafe extern "system" fn tray_wndproc(
                             popup::resize_popup_keep_position(app.hwnd_popup(), &state);
                         }
                     }
-                    FetchApplyOutcome::BackgroundSuccess | FetchApplyOutcome::BackgroundFailure => {
+                    FetchApplyOutcome::BackgroundSuccess => {
+                        popup::invalidate_layout_budget_cache();
                     }
+                    FetchApplyOutcome::BackgroundFailure => {}
                 }
             }
             LRESULT(0)
@@ -236,6 +239,20 @@ pub unsafe extern "system" fn popup_wndproc(
                 let app = &*(app);
                 let state = app.snapshot();
                 popup::paint_popup(hwnd, &state);
+            }
+            LRESULT(0)
+        }
+        WM_DPICHANGED => {
+            let app = app_from_hwnd(hwnd);
+            if !app.is_null() {
+                let app = &*(app);
+                let dpi_x = (wparam.0 & 0xFFFF) as u16;
+                let dpi_y = ((wparam.0 >> 16) & 0xFFFF) as u16;
+                log_line(&format!("popup dpi changed: {}x{}", dpi_x, dpi_y));
+                if popup_is_visible(hwnd) {
+                    let state = app.snapshot();
+                    popup::resize_popup_keep_position(hwnd, &state);
+                }
             }
             LRESULT(0)
         }

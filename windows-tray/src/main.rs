@@ -16,8 +16,8 @@ mod tray;
 mod util;
 mod winmsg;
 
-use crate::app::App;
 use crate::api::{FetchContext, FetchMode, FetchReason};
+use crate::app::App;
 use crate::format::{
     date_and_time_line, menu_heading, normalize_text, split_component_suffix, student_price_eur,
     text_for, PriceGroups,
@@ -47,6 +47,7 @@ fn main() -> anyhow::Result<()> {
 
     unsafe {
         log::log_line("app start");
+        enable_dpi_awareness();
         let hinstance = GetModuleHandleW(None)?;
         winmsg::register_window_classes(hinstance.into())?;
 
@@ -132,6 +133,33 @@ fn main() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+#[cfg(target_os = "windows")]
+fn enable_dpi_awareness() {
+    use windows::Win32::UI::HiDpi::{
+        SetProcessDpiAwareness, SetProcessDpiAwarenessContext,
+        DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, PROCESS_PER_MONITOR_DPI_AWARE,
+    };
+
+    unsafe {
+        match SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) {
+            Ok(()) => log::log_line("dpi awareness enabled: per-monitor v2"),
+            Err(primary_err) => match SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE) {
+                Ok(()) => log::log_line(&format!(
+                    "dpi awareness enabled: per-monitor fallback after v2 failed: {}",
+                    primary_err
+                )),
+                Err(fallback_err) => log::log_line(&format!(
+                    "dpi awareness setup failed: per-monitor v2 error={}, fallback error={}",
+                    primary_err, fallback_err
+                )),
+            },
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn enable_dpi_awareness() {}
 
 #[cfg(target_os = "windows")]
 fn ensure_console() {
