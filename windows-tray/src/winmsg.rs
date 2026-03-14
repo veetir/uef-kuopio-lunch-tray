@@ -4,6 +4,7 @@ use crate::popup;
 use crate::restaurant::available_restaurants;
 use crate::tray;
 use crate::util::to_wstring;
+use std::sync::{Mutex, OnceLock};
 use time::{OffsetDateTime, Time};
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
@@ -27,6 +28,9 @@ pub const TIMER_MIDNIGHT: usize = 2;
 pub const TIMER_HOVER_CHECK: usize = 3;
 pub const TIMER_STALE_CHECK: usize = 4;
 pub const TIMER_RETRY_FETCH: usize = 5;
+const TRAY_CLOSE_SUPPRESS_OPEN_MS: i64 = 250;
+
+static LAST_POPUP_CLOSE_REQUEST_MS: OnceLock<Mutex<i64>> = OnceLock::new();
 
 pub fn register_window_classes(
     hinstance: windows::Win32::Foundation::HINSTANCE,
@@ -90,13 +94,17 @@ pub unsafe extern "system" fn tray_wndproc(
             match event {
                 WM_MOUSEMOVE => {}
                 WM_LBUTTONUP => {
-                    log_line("tray left click toggle popup");
+                    log_line("tray left click");
                     let popup_hwnd = app.hwnd_popup();
                     if popup_is_visible(popup_hwnd) {
+                        note_popup_close_request();
                         app.persist_settings();
                         let state = app.snapshot();
                         popup::begin_close_animation(popup_hwnd, &state);
+                    } else if popup_close_requested_recently() {
+                        log_line("tray left click ignored: popup close in progress/recent");
                     } else {
+                        log_line("tray left click open popup");
                         let state = app.snapshot();
                         if let Some(rect) = tray::tray_icon_rect(hwnd) {
                             popup::show_popup_for_tray_icon(popup_hwnd, &state, rect);
@@ -260,6 +268,7 @@ pub unsafe extern "system" fn popup_wndproc(
             let app = app_from_hwnd(hwnd);
             if wparam.0 == 0 {
                 popup::cancel_text_selection(hwnd);
+                note_popup_close_request();
                 if !app.is_null() {
                     let app = &*(app);
                     app.persist_settings();
@@ -649,6 +658,29 @@ fn schedule_retry_timer(hwnd: HWND, delay_ms: u32) {
 fn cancel_retry_timer(hwnd: HWND) {
     unsafe {
         let _ = KillTimer(hwnd, TIMER_RETRY_FETCH);
+    }
+}
+
+fn now_epoch_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+fn note_popup_close_request() {
+    let store = LAST_POPUP_CLOSE_REQUEST_MS.get_or_init(|| Mutex::new(0));
+    if let Ok(mut guard) = store.lock() {
+        *guard = now_epoch_ms();
+    }
+}
+
+fn popup_close_requested_recently() -> bool {
+    let store = LAST_POPUP_CLOSE_REQUEST_MS.get_or_init(|| Mutex::new(0));
+    let now = now_epoch_ms();
+    match store.lock() {
+        Ok(guard) => now.saturating_sub(*guard) <= TRAY_CLOSE_SUPPRESS_OPEN_MS,
+        Err(_) => false,
     }
 }
 

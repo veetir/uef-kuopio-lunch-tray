@@ -929,7 +929,7 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
                     title,
                     progress,
                 } => {
-                    let y_offset = -((progress * scale.switch_offset_px as f32).round() as i32);
+                    let y_offset = 0;
                     let layer_body_text =
                         lerp_color(palette.bg_color, palette.body_text_color, 1.0 - progress);
                     let layer_heading =
