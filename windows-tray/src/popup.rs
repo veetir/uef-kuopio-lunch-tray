@@ -11,8 +11,6 @@ use crate::restaurant::{available_restaurants, is_hard_closed_today, Provider, R
 use crate::settings::Settings;
 use crate::util::to_wstring;
 use std::cmp::{max, min};
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 use std::sync::{Mutex, OnceLock};
 use time::{OffsetDateTime, UtcOffset};
 use windows::core::PCWSTR;
@@ -31,7 +29,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 const PADDING_X: i32 = 12;
 const PADDING_Y: i32 = 10;
 const LINE_GAP: i32 = 2;
-const ANCHOR_GAP: i32 = 10;
+const ANCHOR_GAP: i32 = 0;
 const POPUP_MAX_WIDTH: i32 = 525;
 const POPUP_MIN_WIDTH: i32 = 320;
 const HEADER_HEIGHT: i32 = 46;
@@ -48,9 +46,11 @@ const POPUP_SWITCH_OFFSET_PX: i32 = 6;
 const FAVORITES_RELOAD_INTERVAL_MS: i64 = 1000;
 const POPUP_DESIRED_SIZE_CACHE_LIMIT: usize = 32;
 const BULLET_PREFIX: &str = "▸ ";
+const HEADER_TITLE_BUTTON_MARGIN: i32 = 12;
 
 static POPUP_LINE_BUDGET_CACHE: OnceLock<Mutex<Option<PopupLineBudgetCache>>> = OnceLock::new();
-static POPUP_LINE_SIGNATURE_CACHE: OnceLock<Mutex<Option<PopupLineSignatureCache>>> = OnceLock::new();
+static POPUP_LINE_SIGNATURE_CACHE: OnceLock<Mutex<Option<PopupLineSignatureCache>>> =
+    OnceLock::new();
 static POPUP_DESIRED_SIZE_CACHE: OnceLock<Mutex<Vec<PopupDesiredSizeCacheEntry>>> = OnceLock::new();
 static POPUP_ANIMATION: OnceLock<Mutex<Option<PopupAnimation>>> = OnceLock::new();
 static FAVORITES_CACHE: OnceLock<Mutex<FavoritesCache>> = OnceLock::new();
@@ -118,7 +118,8 @@ struct PopupLineSignatureCache {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PopupDesiredSizeKey {
-    restaurant_code: String,
+    today_key: String,
+    enable_antell_restaurants: bool,
     language: String,
     theme: String,
     widget_scale: String,
@@ -132,12 +133,6 @@ struct PopupDesiredSizeKey {
     highlight_gluten_free: bool,
     highlight_veg: bool,
     highlight_lactose_free: bool,
-    status_tag: u8,
-    stale_date: bool,
-    stale_network_error: bool,
-    payload_date: String,
-    error_message: String,
-    raw_payload_hash: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -323,7 +318,7 @@ fn popup_scale(settings: &Settings) -> PopupScale {
         padding_x,
         padding_y,
         line_gap: scale_px(LINE_GAP, factor).max(1),
-        anchor_gap: scale_px(ANCHOR_GAP, factor).max(4),
+        anchor_gap: scale_px(ANCHOR_GAP, factor).max(0),
         max_width,
         min_width,
         max_content_width,
@@ -411,6 +406,11 @@ pub fn invalidate_layout_budget_cache() {
     let signature_cache = POPUP_LINE_SIGNATURE_CACHE.get_or_init(|| Mutex::new(None));
     if let Ok(mut guard) = signature_cache.lock() {
         *guard = None;
+    }
+
+    let desired_size_cache = POPUP_DESIRED_SIZE_CACHE.get_or_init(|| Mutex::new(Vec::new()));
+    if let Ok(mut guard) = desired_size_cache.lock() {
+        guard.clear();
     }
 }
 
@@ -1156,18 +1156,16 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
         SetTextColor(hdc, params.header_title_color);
     }
 
-    let clipped_title = fit_text_to_width(
-        hdc,
-        title,
-        (params.layout.close.left - params.layout.next.right - scale_px(24, params.scale.factor))
-            .max(scale_px(40, params.scale.factor)),
-    );
-    let title_width = text_width(hdc, &clipped_title);
-    let title_x = ((params.width - title_width) / 2)
-        .max(params.layout.next.right + scale_px(12, params.scale.factor));
+    let full_title = normalize_text(title);
+    let title_width = text_width(hdc, &full_title);
+    let title_button_margin = scale_px(HEADER_TITLE_BUTTON_MARGIN, params.scale.factor);
+    let min_title_x = params.layout.next.right + title_button_margin;
+    let max_title_x =
+        (params.layout.close.left - title_width - title_button_margin).max(min_title_x);
+    let title_x = ((params.width - title_width) / 2).clamp(min_title_x, max_title_x);
     let title_y =
         ((params.scale.header_height - params.metrics.tmHeight as i32) / 2 - 1) + params.y_offset;
-    draw_text_line(hdc, &clipped_title, title_x, title_y);
+    draw_text_line(hdc, &full_title, title_x, title_y);
 
     let bullet_width = text_width_with_font(hdc, params.normal_font, BULLET_PREFIX);
     let main_wrap_width = (params.content_width - bullet_width).max(24);
@@ -1259,12 +1257,8 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                         end: clipped_main.len(),
                         text: clipped_main.clone(),
                     };
-                    let row_segments = segments_for_row(
-                        &clipped_main,
-                        row.start,
-                        row.end,
-                        &favorite_ranges,
-                    );
+                    let row_segments =
+                        segments_for_row(&clipped_main, row.start, row.end, &favorite_ranges);
                     draw_text_line(hdc, BULLET_PREFIX, params.scale.padding_x, y);
                     if let Some(selection) = selected_item_range {
                         draw_selection_bg_for_row(
@@ -1300,7 +1294,8 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                         );
                     }
                     if !suffix_segments.is_empty() {
-                        let main_width = text_width_with_font(hdc, params.normal_font, &clipped_main);
+                        let main_width =
+                            text_width_with_font(hdc, params.normal_font, &clipped_main);
                         let suffix_x = line_x + main_width + 4;
                         if suffix_x < (params.scale.padding_x + params.content_width) {
                             draw_text_segments(
@@ -1319,8 +1314,12 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                     continue;
                 }
 
-                let wrapped_main =
-                    wrap_text_to_width_with_font_rows(hdc, params.normal_font, main, main_wrap_width);
+                let wrapped_main = wrap_text_to_width_with_font_rows(
+                    hdc,
+                    params.normal_font,
+                    main,
+                    main_wrap_width,
+                );
                 if wrapped_main.is_empty() {
                     y += params.line_height;
                 } else {
@@ -1397,12 +1396,7 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                                 SetTextColor(hdc, params.suffix_color);
                             }
                             for row in wrapped_suffix {
-                                draw_text_line(
-                                    hdc,
-                                    &row,
-                                    params.scale.padding_x + bullet_width,
-                                    y,
-                                );
+                                draw_text_line(hdc, &row, params.scale.padding_x + bullet_width, y);
                                 y += params.line_height;
                             }
                         }
@@ -1591,10 +1585,7 @@ fn favorite_match_ranges(text: &str, favorites: &FavoritesSnapshot) -> Vec<(usiz
 
     let mut kept: Vec<(usize, usize)> = Vec::new();
     for range in candidates {
-        if kept
-            .iter()
-            .any(|existing| ranges_overlap(*existing, range))
-        {
+        if kept.iter().any(|existing| ranges_overlap(*existing, range)) {
             continue;
         }
         kept.push(range);
@@ -1773,11 +1764,7 @@ fn wrap_text_to_width_rows(hdc: HDC, text: &str, max_width: i32) -> Vec<WrappedR
             current_end = word.end;
         } else {
             rows.extend(split_long_token_to_width_rows(
-                hdc,
-                &clean,
-                word.start,
-                word.end,
-                limit,
+                hdc, &clean, word.start, word.end, limit,
             ));
         }
     }
@@ -2054,6 +2041,20 @@ fn header_title(state: &AppState) -> String {
     format!("{} ({}/{})", list[index].name, index + 1, list.len())
 }
 
+fn max_header_title_width(hdc: HDC, font: HFONT, settings: &Settings) -> i32 {
+    let list = available_restaurants(settings.enable_antell_restaurants);
+    if list.is_empty() {
+        return text_width_with_font(hdc, font, "Compass Lunch");
+    }
+    let total = list.len();
+    let mut max_width = 0;
+    for (idx, restaurant) in list.iter().enumerate() {
+        let title = format!("{} ({}/{})", restaurant.name, idx + 1, total);
+        max_width = max(max_width, text_width_with_font(hdc, font, &title));
+    }
+    max_width
+}
+
 fn text_metrics(hdc: HDC, font: HFONT) -> TEXTMETRICW {
     unsafe {
         let old = SelectObject(hdc, font);
@@ -2131,16 +2132,31 @@ fn desired_size(hwnd: HWND, state: &AppState) -> (i32, i32) {
         target_lines = target_lines.min(MAX_DYNAMIC_LINES);
         let metrics = text_metrics(hdc, normal_font);
         let line_height = metrics.tmHeight as i32 + scale.line_gap;
-        let height = scale.header_height + (target_lines as i32 * line_height) + scale.padding_y * 2;
-        let width = (target_content_width + scale.padding_x * 2)
-            .clamp(scale.min_width, scale.max_width);
+        let height =
+            scale.header_height + (target_lines as i32 * line_height) + scale.padding_y * 2;
+        let title_width = max_header_title_width(hdc, bold_font, &state.settings);
+        let title_button_margin = scale_px(HEADER_TITLE_BUTTON_MARGIN, scale.factor);
+        let header_reserved = scale.padding_x * 2
+            + scale.header_button_size * 3
+            + scale.header_button_gap
+            + title_button_margin * 2;
+        let header_required_width = title_width + header_reserved;
+        let width_candidate = max(
+            target_content_width + scale.padding_x * 2,
+            header_required_width,
+        );
+        let max_width = max(scale.max_width, header_required_width);
+        let width = width_candidate.clamp(scale.min_width, max_width);
         DeleteObject(normal_font);
         DeleteObject(bold_font);
         DeleteObject(small_font);
         DeleteObject(small_bold_font);
         windows::Win32::Graphics::Gdi::ReleaseDC(hwnd, hdc);
 
-        let size = (width, height.max(scale.header_height + scale_px(120, scale.factor)));
+        let size = (
+            width,
+            height.max(scale.header_height + scale_px(120, scale.factor)),
+        );
         if let Some(key) = desired_size_cache_key(state, dpi_y) {
             update_desired_size_cache(key, size);
         }
@@ -2433,7 +2449,8 @@ fn desired_size_cache_key(state: &AppState, dpi_y: i32) -> Option<PopupDesiredSi
     }
 
     Some(PopupDesiredSizeKey {
-        restaurant_code: state.settings.restaurant_code.clone(),
+        today_key: local_today_key(),
+        enable_antell_restaurants: state.settings.enable_antell_restaurants,
         language: state.settings.language.clone(),
         theme: state.settings.theme.clone(),
         widget_scale: state.settings.widget_scale.clone(),
@@ -2447,12 +2464,6 @@ fn desired_size_cache_key(state: &AppState, dpi_y: i32) -> Option<PopupDesiredSi
         highlight_gluten_free: state.settings.highlight_gluten_free,
         highlight_veg: state.settings.highlight_veg,
         highlight_lactose_free: state.settings.highlight_lactose_free,
-        status_tag: fetch_status_tag(state.status),
-        stale_date: state.stale_date,
-        stale_network_error: state.stale_network_error,
-        payload_date: state.payload_date.clone(),
-        error_message: state.error_message.clone(),
-        raw_payload_hash: raw_payload_hash(state),
     })
 }
 
@@ -2483,22 +2494,6 @@ fn update_desired_size_cache(key: PopupDesiredSizeKey, size: (i32, i32)) {
     }
 }
 
-fn fetch_status_tag(status: FetchStatus) -> u8 {
-    match status {
-        FetchStatus::Idle => 0,
-        FetchStatus::Loading => 1,
-        FetchStatus::Ok => 2,
-        FetchStatus::Stale => 3,
-        FetchStatus::Error => 4,
-    }
-}
-
-fn raw_payload_hash(state: &AppState) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    state.raw_payload.hash(&mut hasher);
-    hasher.finish()
-}
-
 fn max_today_cached_layout_budget(
     state: &AppState,
     today_key: &str,
@@ -2517,11 +2512,11 @@ fn max_today_cached_layout_budget(
         let parsed = if is_hard_closed_today(restaurant) {
             api::closed_today_fetch_output(restaurant, &settings.language)
         } else {
-            let raw = match cache::read_cache(restaurant.provider, restaurant.code, &settings.language)
-            {
-                Some(payload) => payload,
-                None => continue,
-            };
+            let raw =
+                match cache::read_cache(restaurant.provider, restaurant.code, &settings.language) {
+                    Some(payload) => payload,
+                    None => continue,
+                };
 
             match api::parse_cached_payload(
                 &raw,
@@ -2680,7 +2675,12 @@ fn position_near_point(width: i32, height: i32, point: POINT) -> (i32, i32) {
     }
 }
 
-fn position_near_tray_rect(width: i32, height: i32, tray_rect: RECT, anchor_gap: i32) -> (i32, i32) {
+fn position_near_tray_rect(
+    width: i32,
+    height: i32,
+    tray_rect: RECT,
+    anchor_gap: i32,
+) -> (i32, i32) {
     unsafe {
         let center = POINT {
             x: (tray_rect.left + tray_rect.right) / 2,
@@ -2917,18 +2917,15 @@ fn hit_test_row_for_item(
         .copied()
         .find(|row| y >= row.top && y <= row.bottom)
         .or_else(|| {
-            item_rows
-                .iter()
-                .copied()
-                .min_by_key(|row| {
-                    if y < row.top {
-                        row.top - y
-                    } else if y > row.bottom {
-                        y - row.bottom
-                    } else {
-                        0
-                    }
-                })
+            item_rows.iter().copied().min_by_key(|row| {
+                if y < row.top {
+                    row.top - y
+                } else if y > row.bottom {
+                    y - row.bottom
+                } else {
+                    0
+                }
+            })
         })?;
     let local = row_byte_index_from_x(row, x);
     Some((row, row.start + local))
