@@ -1,10 +1,26 @@
 .pragma library
 
+var MAX_MENU_HEADING_CHARS = 140;
+var MAX_MENU_PRICE_CHARS = 96;
+var MAX_COMPONENT_MAIN_CHARS = 220;
+
 function normalizeText(value) {
     if (value === null || value === undefined) {
         return "";
     }
     return String(value).replace(/\s*\n+\s*/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function truncateDisplayText(value, maxChars) {
+    var clean = normalizeText(value);
+    var limit = Number(maxChars) || 0;
+    if (limit <= 0 || clean.length <= limit) {
+        return clean;
+    }
+    if (limit <= 3) {
+        return clean.slice(0, limit);
+    }
+    return clean.slice(0, limit - 3) + "...";
 }
 
 function escapeHtml(value) {
@@ -259,12 +275,12 @@ function shouldHideMenuByStudentPrice(menu, hideExpensiveStudentMeals, isCompass
 }
 
 function menuHeading(menu, showPrices, showStudentPrice, showStaffPrice, showGuestPrice, isCompassProvider) {
-    var heading = normalizeText(menu.name);
+    var heading = truncateDisplayText(menu && menu.name, MAX_MENU_HEADING_CHARS);
     if (!heading) {
         heading = "Menu";
     }
 
-    var price = normalizeText(menu.price);
+    var price = truncateDisplayText(menu && menu.price, MAX_MENU_PRICE_CHARS);
     if (showPrices && price) {
         if (isCompassProvider) {
             price = formatCompassPrice(price, showStudentPrice, showStaffPrice, showGuestPrice);
@@ -316,10 +332,11 @@ function shouldHighlightTag(tag, highlightGlutenFree, highlightVeg, highlightLac
 
 function plainComponentLine(component, showAllergens) {
     var parts = splitComponentSuffix(component);
+    var main = truncateDisplayText(parts.main, MAX_COMPONENT_MAIN_CHARS);
     if (shouldShowAllergens(showAllergens) || !parts.suffix) {
-        return parts.main + (parts.suffix ? " " + parts.suffix : "");
+        return main + (parts.suffix ? " " + parts.suffix : "");
     }
-    return parts.main;
+    return main;
 }
 
 function highlightSuffixRich(suffix, highlightGlutenFree, highlightVeg, highlightLactoseFree) {
@@ -432,7 +449,7 @@ function buildTooltipSubTextRich(language, fetchState, errorMessage, lastUpdated
                 var component = normalizeText(components[j]);
                 if (component) {
                     var parts = splitComponentSuffix(component);
-                    var componentLine = "&nbsp;&nbsp;&nbsp;▸ " + escapeHtml(parts.main);
+                    var componentLine = "&nbsp;&nbsp;&nbsp;▸ " + escapeHtml(truncateDisplayText(parts.main, MAX_COMPONENT_MAIN_CHARS));
                     if (parts.suffix && shouldShowAllergens(showAllergens)) {
                         componentLine += " <small><font color=\"#808080\">" + highlightSuffixRich(parts.suffix, highlightGlutenFree, highlightVeg, highlightLactoseFree) + "</font></small>";
                     }

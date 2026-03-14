@@ -30,6 +30,9 @@ Item {
     property int modelVersion: 0
     property bool initialized: false
     property var supportedIconNames: ["food", "compass", "map-globe", "map-flat"]
+    property int maxPayloadChars: 524288
+    property int maxCacheBlobChars: 1048576
+    property var allowedExternalHostSuffixes: ["compass-group.fi", "antell.fi", "hyvahuomen.fi", "github.com"]
 
     property string activeRestaurantCode: "0437"
 
@@ -352,6 +355,49 @@ Item {
         return 6 * 60 * 60 * 1000
     }
 
+    function isAllowedExternalUrl(rawUrl) {
+        var value = MenuFormatter.normalizeText(rawUrl)
+        if (!value || !/^https:\/\//i.test(value)) {
+            return false
+        }
+
+        var match = value.match(/^https:\/\/([^\/?#:]+)(?::\d+)?(?:[\/?#]|$)/i)
+        if (!match) {
+            return false
+        }
+
+        var host = String(match[1] || "").toLowerCase()
+        if (!host) {
+            return false
+        }
+
+        for (var i = 0; i < allowedExternalHostSuffixes.length; i++) {
+            var suffix = String(allowedExternalHostSuffixes[i] || "").toLowerCase()
+            if (!suffix) {
+                continue
+            }
+            if (host === suffix || host.slice(-(suffix.length + 1)) === ("." + suffix)) {
+                return true
+            }
+        }
+
+        return false
+    }
+
+    function sanitizeExternalUrl(rawUrl, fallbackUrl) {
+        var primary = MenuFormatter.normalizeText(rawUrl)
+        if (isAllowedExternalUrl(primary)) {
+            return primary
+        }
+
+        var fallback = MenuFormatter.normalizeText(fallbackUrl)
+        if (isAllowedExternalUrl(fallback)) {
+            return fallback
+        }
+
+        return ""
+    }
+
     function weekdayToken(dateObj) {
         var names = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"]
         return names[dateObj.getDay()] || "monday"
@@ -374,8 +420,9 @@ Item {
     }
 
     function stripHtmlText(rawHtml) {
-        var withoutTags = String(rawHtml || "").replace(/<[^>]*>/g, " ")
-        return MenuFormatter.normalizeText(decodeHtmlEntities(withoutTags))
+        var decoded = decodeHtmlEntities(rawHtml)
+        var withoutTags = String(decoded || "").replace(/<[^>]*>/g, " ")
+        return MenuFormatter.normalizeText(withoutTags)
     }
 
     function parseAntellSections(htmlText) {
@@ -809,7 +856,7 @@ Item {
         var name = location
             ? (location.toLowerCase().indexOf("antell") === 0 ? location : ("Antell " + location))
             : fallbackName
-        var url = entry && entry.antellUrlBase ? String(entry.antellUrlBase) : ""
+        var url = sanitizeExternalUrl(entry && entry.antellUrlBase ? String(entry.antellUrlBase) : "", "")
         var rawPayload = {
             provider: "antell",
             htmlText: payloadText,
@@ -848,7 +895,8 @@ Item {
         var components = parseRssComponents(descriptionRaw)
         var fallbackName = entry ? String(entry.fallbackName || "Compass Lunch") : "Compass Lunch"
         var name = channelTitle || fallbackName
-        var url = itemLink || (entry && entry.rssUrlBase ? String(entry.rssUrlBase) : "")
+        var fallbackUrl = entry && entry.rssUrlBase ? String(entry.rssUrlBase) : ""
+        var url = sanitizeExternalUrl(itemLink, fallbackUrl)
 
         var rawPayload = {
             provider: "compass-rss",
@@ -911,7 +959,7 @@ Item {
         var menuDateIso = providerDateValid ? expectedIso : ""
         var restaurantName = localizedField(data.location && data.location.name)
             || (entry ? String(entry.fallbackName || "Huomen Lunch") : "Huomen Lunch")
-        var restaurantUrl = entry && entry.huomenUrlBase ? String(entry.huomenUrlBase) : ""
+        var restaurantUrl = sanitizeExternalUrl(entry && entry.huomenUrlBase ? String(entry.huomenUrlBase) : "", "")
         var rawPayload = {
             provider: "huomen-json",
             menuDateIso: menuDateIso,
@@ -1011,8 +1059,18 @@ Item {
     }
 
     function loadCacheStore() {
+        var blob = String(cache.cacheBlob || "{}")
+        if (blob.length > maxCacheBlobChars) {
+            cacheStore = {}
+            try {
+                cache.cacheBlob = "{}"
+            } catch (e1) {
+            }
+            return
+        }
+
         try {
-            var parsed = JSON.parse(cache.cacheBlob || "{}")
+            var parsed = JSON.parse(blob)
             if (parsed && typeof parsed === "object") {
                 cacheStore = parsed
             } else {
@@ -1020,18 +1078,39 @@ Item {
             }
         } catch (e) {
             cacheStore = {}
+            try {
+                cache.cacheBlob = "{}"
+            } catch (e2) {
+            }
         }
     }
 
     function saveCacheEntry(code, payloadText, updatedEpochMs) {
-        cacheStore[cacheKey(code)] = {
-            payload: payloadText,
+        var payload = String(payloadText || "")
+        if (payload.length > maxPayloadChars) {
+            return
+        }
+
+        var key = cacheKey(code)
+        var previous = Object.prototype.hasOwnProperty.call(cacheStore, key) ? cacheStore[key] : undefined
+        cacheStore[key] = {
+            payload: payload,
             lastUpdatedEpochMs: Number(updatedEpochMs) || 0
         }
 
         try {
-            cache.cacheBlob = JSON.stringify(cacheStore)
+            var serialized = JSON.stringify(cacheStore)
+            if (serialized.length <= maxCacheBlobChars) {
+                cache.cacheBlob = serialized
+                return
+            }
         } catch (e) {
+        }
+
+        if (previous !== undefined) {
+            cacheStore[key] = previous
+        } else {
+            delete cacheStore[key]
         }
     }
 
@@ -1133,7 +1212,7 @@ Item {
             menuDateIso = normalizedCompass.menuDateIso
             providerDateValid = normalizedCompass.providerDateValid
             restaurantName = MenuFormatter.normalizeText(parsed.RestaurantName) || "Compass Lunch"
-            restaurantUrl = MenuFormatter.normalizeText(parsed.RestaurantUrl)
+            restaurantUrl = sanitizeExternalUrl(parsed.RestaurantUrl, "")
         }
 
         var updatedMs = fromCache ? (Number(cachedTimestamp) || 0) : Date.now()
@@ -1311,7 +1390,12 @@ Item {
             }
 
             if (xhr.status >= 200 && xhr.status < 300) {
-                applyPayloadForCode(normalized, xhr.responseText, false, 0)
+                var responseText = String(xhr.responseText || "")
+                if (responseText.length > maxPayloadChars) {
+                    setErrorStateForCode(normalized, "Payload too large")
+                    return
+                }
+                applyPayloadForCode(normalized, responseText, false, 0)
             } else {
                 setErrorStateForCode(normalized, "HTTP " + xhr.status)
             }
@@ -1424,11 +1508,12 @@ Item {
 
     function tooltipMainText() {
         var state = stateFor(activeRestaurantCode)
-        var title = state.restaurantName || "Compass Lunch"
+        var title = MenuFormatter.truncateDisplayText(state.restaurantName || "Compass Lunch", 160)
+        var safeTitle = MenuFormatter.escapeHtml(title)
         if (state.status === "stale" && !state.isTodayFresh) {
-            return "[STALE] " + title
+            return "[STALE] " + safeTitle
         }
-        return title
+        return safeTitle
     }
 
     function tooltipSubText() {
@@ -1607,8 +1692,9 @@ Item {
             onClicked: {
                 if (mouse.button === Qt.MiddleButton) {
                     var state = root.stateFor(root.activeRestaurantCode)
-                    if (state.restaurantUrl) {
-                        Qt.openUrlExternally(state.restaurantUrl)
+                    var safeUrl = root.sanitizeExternalUrl(state.restaurantUrl, "")
+                    if (safeUrl) {
+                        Qt.openUrlExternally(safeUrl)
                         return
                     }
                 }
