@@ -6,7 +6,9 @@ use crate::restaurant::{
     available_restaurants, is_hard_closed_today, provider_key, restaurant_for_code,
     restaurant_for_shortcut_index, Provider,
 };
-use crate::settings::{load_settings, normalize_theme, save_settings, settings_dir, Settings};
+use crate::settings::{
+    load_settings, normalize_theme, normalize_widget_scale, save_settings, settings_dir, Settings,
+};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use time::OffsetDateTime;
@@ -696,6 +698,12 @@ impl App {
     pub fn set_theme(&self, theme: &str) {
         let mut state = self.state.lock().unwrap();
         state.settings.theme = normalize_theme(theme);
+        let _ = save_settings(&state.settings);
+    }
+
+    pub fn set_widget_scale(&self, value: &str) {
+        let mut state = self.state.lock().unwrap();
+        state.settings.widget_scale = normalize_widget_scale(value);
         let _ = save_settings(&state.settings);
     }
 

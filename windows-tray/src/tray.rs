@@ -47,6 +47,9 @@ pub const CMD_TOGGLE_LOGGING: u16 = 2216;
 pub const CMD_OPEN_APPDATA_DIR: u16 = 2217;
 pub const CMD_THEME_TELETEXT1: u16 = 2218;
 pub const CMD_THEME_TELETEXT2: u16 = 2219;
+pub const CMD_WIDGET_SCALE_NORMAL: u16 = 2225;
+pub const CMD_WIDGET_SCALE_125: u16 = 2226;
+pub const CMD_WIDGET_SCALE_150: u16 = 2227;
 pub const CMD_REFRESH_NOW: u16 = 2301;
 pub const CMD_REFRESH_OFF: u16 = 2400;
 pub const CMD_REFRESH_60: u16 = 2401;
@@ -389,6 +392,31 @@ fn build_context_menu(state: &AppState) -> HMENU {
             MF_POPUP,
             theme_menu.0 as usize,
             PCWSTR(to_wstring("Theme").as_ptr()),
+        );
+        let widget_scale_menu = CreatePopupMenu().expect("CreatePopupMenu");
+        append_menu_item(
+            widget_scale_menu,
+            CMD_WIDGET_SCALE_NORMAL,
+            "Normal",
+            state.settings.widget_scale == "normal",
+        );
+        append_menu_item(
+            widget_scale_menu,
+            CMD_WIDGET_SCALE_125,
+            "125%",
+            state.settings.widget_scale == "125",
+        );
+        append_menu_item(
+            widget_scale_menu,
+            CMD_WIDGET_SCALE_150,
+            "150%",
+            state.settings.widget_scale == "150",
+        );
+        let _ = AppendMenuW(
+            menu,
+            MF_POPUP,
+            widget_scale_menu.0 as usize,
+            PCWSTR(to_wstring("Widget size").as_ptr()),
         );
         append_menu_toggle(
             menu,

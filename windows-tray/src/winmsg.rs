@@ -256,9 +256,16 @@ pub unsafe extern "system" fn popup_wndproc(
             LRESULT(0)
         }
         WM_LBUTTONDOWN => {
+            let app = app_from_hwnd(hwnd);
+            if app.is_null() {
+                return LRESULT(0);
+            }
+            let app = &*(app);
             let x = (lparam.0 as u32 & 0xFFFF) as i16 as i32;
             let y = ((lparam.0 as u32 >> 16) & 0xFFFF) as i16 as i32;
-            if popup::header_button_at(hwnd, x, y).is_none() && popup::begin_text_selection(hwnd, x, y)
+            let state = app.snapshot();
+            if popup::header_button_at(hwnd, &state.settings, x, y).is_none()
+                && popup::begin_text_selection(hwnd, x, y)
             {
                 return LRESULT(0);
             }
@@ -310,7 +317,8 @@ pub unsafe extern "system" fn popup_wndproc(
                 let _ = popup::finish_text_selection(hwnd, x, y);
                 return LRESULT(0);
             }
-            if let Some(action) = popup::header_button_at(hwnd, x, y) {
+            let state = app.snapshot();
+            if let Some(action) = popup::header_button_at(hwnd, &state.settings, x, y) {
                 match action {
                     popup::HeaderButtonAction::Prev => {
                         cycle_popup_restaurant(hwnd, app, -1);
@@ -362,6 +370,10 @@ pub unsafe extern "system" fn popup_wndproc(
                 popup::tick_animation(hwnd);
                 return LRESULT(0);
             }
+            if wparam.0 as usize == popup::POPUP_HEADER_PRESS_TIMER_ID {
+                popup::tick_header_button_press(hwnd);
+                return LRESULT(0);
+            }
             LRESULT(0)
         }
         WM_DESTROY => LRESULT(0),
@@ -371,6 +383,7 @@ pub unsafe extern "system" fn popup_wndproc(
 
 fn cycle_popup_restaurant(hwnd: HWND, app: &App, direction: i32) {
     let old_state = app.snapshot();
+    popup::press_navigation_button(hwnd, direction);
     app.cycle_restaurant(direction);
     let _ = app.load_cache_for_current();
     app.check_stale_date_and_refresh();
@@ -518,6 +531,15 @@ fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
                 let state = app.snapshot();
                 popup::resize_popup_keep_position(app.hwnd_popup(), &state);
             }
+        }
+        tray::CMD_WIDGET_SCALE_NORMAL => {
+            app.set_widget_scale("normal");
+        }
+        tray::CMD_WIDGET_SCALE_125 => {
+            app.set_widget_scale("125");
+        }
+        tray::CMD_WIDGET_SCALE_150 => {
+            app.set_widget_scale("150");
         }
         tray::CMD_TOGGLE_STARTUP => {
             let enable = !crate::startup::is_enabled();

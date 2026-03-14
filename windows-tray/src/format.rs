@@ -158,6 +158,22 @@ pub fn split_component_suffix(component: &str) -> (String, String) {
     (normalized_main, suffix)
 }
 
+pub fn renderable_menu_components(group: &MenuGroup) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for component in &group.components {
+        let component = normalize_text(component);
+        if component.is_empty() {
+            continue;
+        }
+        let (main, suffix) = split_component_suffix(&component);
+        if main.is_empty() {
+            continue;
+        }
+        out.push((main, suffix));
+    }
+    out
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ParenthesizedGroup {
     Tokens(Vec<String>),
@@ -507,7 +523,8 @@ fn parse_price_value(text: &str) -> Option<f32> {
 
 #[cfg(test)]
 mod tests {
-    use super::split_component_suffix;
+    use super::{renderable_menu_components, split_component_suffix};
+    use crate::model::MenuGroup;
 
     #[test]
     fn extracts_compass_suffix_with_parentheses() {
@@ -558,5 +575,43 @@ mod tests {
             "Lihapullia, pippuri-rakuunakastiketta ja kermaperunaa"
         );
         assert_eq!(suffix, "(G, L)");
+    }
+
+    #[test]
+    fn skips_empty_renderable_components() {
+        let group = MenuGroup {
+            name: "Lunch".to_string(),
+            price: String::new(),
+            components: vec![],
+        };
+        assert!(renderable_menu_components(&group).is_empty());
+    }
+
+    #[test]
+    fn skips_blank_renderable_components() {
+        let group = MenuGroup {
+            name: "Lunch".to_string(),
+            price: String::new(),
+            components: vec!["".to_string(), "   ".to_string(), "\n\t".to_string()],
+        };
+        assert!(renderable_menu_components(&group).is_empty());
+    }
+
+    #[test]
+    fn keeps_only_valid_renderable_components() {
+        let group = MenuGroup {
+            name: "Lunch".to_string(),
+            price: String::new(),
+            components: vec![
+                "".to_string(),
+                " ".to_string(),
+                "Soup (L)".to_string(),
+                "()".to_string(),
+            ],
+        };
+        assert_eq!(
+            renderable_menu_components(&group),
+            vec![("Soup".to_string(), "(L)".to_string())]
+        );
     }
 }
