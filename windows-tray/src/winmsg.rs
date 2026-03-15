@@ -10,11 +10,12 @@ use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
     DefWindowProcW, DestroyWindow, GetCursorPos, GetWindowLongPtrW, GetWindowRect, KillTimer,
-    LoadCursorW, PostQuitMessage, RegisterClassExW, SetForegroundWindow, SetTimer,
+    LoadCursorW, MessageBoxW, PostQuitMessage, RegisterClassExW, SetForegroundWindow, SetTimer,
     SetWindowLongPtrW, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, IDC_ARROW,
-    WM_ACTIVATE, WM_APP, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_DPICHANGED, WM_KEYDOWN,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_PAINT,
-    WM_RBUTTONUP, WM_SETTINGCHANGE, WM_THEMECHANGED, WM_TIMER, WNDCLASSEXW,
+    IDYES, MB_DEFBUTTON2, MB_ICONWARNING, MB_YESNO, WM_ACTIVATE, WM_APP, WM_COMMAND,
+    WM_CONTEXTMENU, WM_DESTROY, WM_DPICHANGED, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_PAINT, WM_RBUTTONUP,
+    WM_SETTINGCHANGE, WM_THEMECHANGED, WM_TIMER, WNDCLASSEXW,
 };
 
 pub const TRAY_WND_CLASS: &str = "CompassLunchTrayWindow";
@@ -602,6 +603,10 @@ fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
             }
         }
         tray::CMD_TOGGLE_LOGGING => {
+            let is_enabled = app.snapshot().settings.enable_logging;
+            if !is_enabled && !confirm_enable_logging(hwnd) {
+                return;
+            }
             app.toggle_logging();
         }
         tray::CMD_OPEN_APPDATA_DIR => {
@@ -637,6 +642,23 @@ fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
     if popup_is_visible(app.hwnd_popup()) {
         let state = app.snapshot();
         popup::resize_popup_keep_position(app.hwnd_popup(), &state);
+    }
+}
+
+fn confirm_enable_logging(hwnd: HWND) -> bool {
+    let title = to_wstring("Enable logging?");
+    let message = to_wstring(
+        "Diagnostic logging writes app activity to a file in the App Data folder.\n\
+The file can grow over time while logging is enabled.\n\n\
+Do you want to enable logging now?",
+    );
+    unsafe {
+        MessageBoxW(
+            hwnd,
+            PCWSTR(message.as_ptr()),
+            PCWSTR(title.as_ptr()),
+            MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2,
+        ) == IDYES
     }
 }
 
