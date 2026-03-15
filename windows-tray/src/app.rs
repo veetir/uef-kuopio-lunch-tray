@@ -880,6 +880,21 @@ impl App {
         }
     }
 
+    pub fn open_feedback_url(&self) {
+        let url = "https://github.com/veetir/uef-kuopio-lunch-tray/issues";
+        let wide = crate::util::to_wstring(url);
+        unsafe {
+            windows::Win32::UI::Shell::ShellExecuteW(
+                None,
+                windows::core::PCWSTR(crate::util::to_wstring("open").as_ptr()),
+                windows::core::PCWSTR(wide.as_ptr()),
+                windows::core::PCWSTR::null(),
+                windows::core::PCWSTR::null(),
+                windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL,
+            );
+        }
+    }
+
     pub fn refresh_minutes(&self) -> u32 {
         let state = self.state.lock().unwrap();
         state.settings.refresh_minutes

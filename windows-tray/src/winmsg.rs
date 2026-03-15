@@ -603,6 +603,9 @@ fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
             app.set_refresh_minutes(1440);
             schedule_refresh_timer(hwnd, 1440);
         }
+        tray::CMD_SUBMIT_FEEDBACK => {
+            app.open_feedback_url();
+        }
         tray::CMD_QUIT => unsafe {
             let _ = DestroyWindow(hwnd);
         },
