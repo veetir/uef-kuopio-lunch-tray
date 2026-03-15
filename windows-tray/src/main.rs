@@ -168,12 +168,7 @@ fn acquire_single_instance_guard() -> anyhow::Result<Option<SingleInstanceGuard>
             let class_name = to_wstring(winmsg::TRAY_WND_CLASS);
             let existing = FindWindowW(PCWSTR(class_name.as_ptr()), PCWSTR::null());
             if existing.0 != 0 {
-                let _ = PostMessageW(
-                    existing,
-                    winmsg::WM_APP_SHOW_EXISTING,
-                    WPARAM(0),
-                    LPARAM(0),
-                );
+                let _ = PostMessageW(existing, winmsg::WM_APP_SHOW_EXISTING, WPARAM(0), LPARAM(0));
             }
         }
         return Ok(None);

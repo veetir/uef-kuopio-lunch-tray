@@ -96,6 +96,8 @@ struct StartOptions {
     bypass_cooldown: bool,
 }
 
+const STALE_NO_MENU_COOLDOWN_MS: u32 = 10 * 60_000;
+
 pub struct App {
     pub no_tray: bool,
     state: Arc<Mutex<AppState>>,
@@ -572,6 +574,8 @@ impl App {
             None
         };
         let cooldown_ms = self.finish_request_state(&request_key, &context, result.ok, now);
+        let stale_no_menu_cooldown_ms =
+            self.apply_stale_no_menu_cooldown(&request_key, &result, now);
 
         if !is_current_request {
             if result.ok {
@@ -588,6 +592,16 @@ impl App {
                     requested_effective_language,
                     request_key,
                 ));
+                if stale_no_menu_cooldown_ms > 0 {
+                    log_line(&format!(
+                        "fetch cooldown mode=background reason={} code={} request_key={} cooldown_ms={} detail=stale_no_today_menu payload_date={}",
+                        context.reason.as_str(),
+                        requested_code,
+                        request_key,
+                        stale_no_menu_cooldown_ms,
+                        result.payload_date,
+                    ));
+                }
                 FetchApplyOutcome::BackgroundSuccess
             } else {
                 log_line(&format!(
@@ -628,6 +642,16 @@ impl App {
                     requested_effective_language,
                     request_key,
                 ));
+                if stale_no_menu_cooldown_ms > 0 {
+                    log_line(&format!(
+                        "fetch cooldown mode=current reason={} code={} request_key={} cooldown_ms={} detail=stale_no_today_menu payload_date={}",
+                        context.reason.as_str(),
+                        requested_code,
+                        request_key,
+                        stale_no_menu_cooldown_ms,
+                        result.payload_date,
+                    ));
+                }
                 drop(state);
                 let mut languages = vec![requested_language.as_str()];
                 if let Some(alias_language) = alias_language.as_deref() {
@@ -659,6 +683,27 @@ impl App {
                 FetchApplyOutcome::CurrentFailure
             }
         }
+    }
+
+    fn apply_stale_no_menu_cooldown(
+        &self,
+        request_key: &str,
+        result: &FetchOutput,
+        now: i64,
+    ) -> u32 {
+        if !result.ok || result.today_menu.is_some() {
+            return 0;
+        }
+        let payload_date = result.payload_date.trim();
+        if payload_date.is_empty() || payload_date == today_key() {
+            return 0;
+        }
+        let mut request_states = self.request_states.lock().unwrap();
+        let Some(entry) = request_states.get_mut(request_key) else {
+            return 0;
+        };
+        entry.cooldown_until_epoch_ms = now.saturating_add(STALE_NO_MENU_COOLDOWN_MS as i64);
+        STALE_NO_MENU_COOLDOWN_MS
     }
 
     fn finish_request_state(

@@ -169,7 +169,11 @@ pub fn tray_icon_rect(hwnd: HWND) -> Option<RECT> {
 fn select_tray_icon() -> HICON {
     let icons = *TRAY_ICONS.get_or_init(load_tray_icons);
     let system_light = system_uses_light_theme().unwrap_or(false);
-    if system_light { icons.dark } else { icons.light }
+    if system_light {
+        icons.dark
+    } else {
+        icons.light
+    }
 }
 
 fn load_tray_icons() -> TrayIconSet {
@@ -272,7 +276,11 @@ fn system_uses_light_theme() -> Option<bool> {
         )
         .is_ok()
     };
-    if ok { Some(data != 0) } else { None }
+    if ok {
+        Some(data != 0)
+    } else {
+        None
+    }
 }
 
 pub fn show_context_menu(hwnd: HWND, state: &AppState) {
