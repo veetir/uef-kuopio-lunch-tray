@@ -3,12 +3,15 @@ use crate::log::log_line;
 use crate::restaurant::available_restaurants;
 use crate::util::to_wstring;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT, WPARAM};
 use windows::Win32::System::LibraryLoader::{GetModuleFileNameW, GetModuleHandleW};
+use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD};
 use windows::Win32::UI::Shell::{
     Shell_NotifyIconGetRect, Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD,
-    NIM_DELETE, NIM_SETVERSION, NOTIFYICONDATAW, NOTIFYICONIDENTIFIER, NOTIFYICON_VERSION_4,
+    NIM_DELETE, NIM_MODIFY, NIM_SETVERSION, NOTIFYICONDATAW, NOTIFYICONIDENTIFIER,
+    NOTIFYICON_VERSION_4,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, GetCursorPos, LoadIconW, LoadImageW, PostMessageW,
@@ -58,6 +61,18 @@ pub const CMD_REFRESH_240: u16 = 2402;
 pub const CMD_REFRESH_1440: u16 = 2403;
 pub const CMD_QUIT: u16 = 2999;
 const TRAY_ICON_ID: u32 = 1;
+const TRAY_ICON_RESOURCE_LIGHT: u16 = 1;
+const TRAY_ICON_RESOURCE_DARK: u16 = 2;
+const PERSONALIZE_KEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize";
+const SYSTEM_USES_LIGHT_THEME: &str = "SystemUsesLightTheme";
+
+#[derive(Clone, Copy)]
+struct TrayIconSet {
+    light: HICON,
+    dark: HICON,
+}
+
+static TRAY_ICONS: OnceLock<TrayIconSet> = OnceLock::new();
 
 pub fn restaurant_command_id(code: &str) -> Option<u16> {
     match code {
@@ -93,7 +108,7 @@ pub fn restaurant_code_for_command(cmd: u16) -> Option<&'static str> {
 
 pub fn add_tray_icon(hwnd: HWND, callback_message: u32) -> anyhow::Result<()> {
     unsafe {
-        let icon = load_icon();
+        let icon = select_tray_icon();
         let mut data = NOTIFYICONDATAW::default();
         data.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
         data.hWnd = hwnd;
@@ -118,6 +133,20 @@ pub fn add_tray_icon(hwnd: HWND, callback_message: u32) -> anyhow::Result<()> {
     Ok(())
 }
 
+pub fn refresh_tray_icon(hwnd: HWND) {
+    unsafe {
+        let mut data = NOTIFYICONDATAW::default();
+        data.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
+        data.hWnd = hwnd;
+        data.uID = TRAY_ICON_ID;
+        data.uFlags = NIF_ICON;
+        data.hIcon = select_tray_icon();
+        if !Shell_NotifyIconW(NIM_MODIFY, &mut data).as_bool() {
+            log_line("tray icon refresh failed");
+        }
+    }
+}
+
 pub fn remove_tray_icon(hwnd: HWND) {
     unsafe {
         let mut data = NOTIFYICONDATAW::default();
@@ -136,26 +165,39 @@ pub fn tray_icon_rect(hwnd: HWND) -> Option<RECT> {
     unsafe { Shell_NotifyIconGetRect(&ident).ok() }
 }
 
-fn load_icon() -> HICON {
-    if let Some(icon) = load_icon_from_resource() {
-        log_line("using tray icon from resources");
-        return icon;
-    }
-    if let Some(path) = find_icon_path() {
-        if let Some(icon) = load_icon_from_file(&path) {
-            log_line(&format!("using tray icon: {}", path.display()));
-            return icon;
-        }
-    }
-    unsafe { LoadIconW(None, PCWSTR(32512u16 as *const u16)).unwrap_or_default() }
+fn select_tray_icon() -> HICON {
+    let icons = *TRAY_ICONS.get_or_init(load_tray_icons);
+    let system_light = system_uses_light_theme().unwrap_or(false);
+    if system_light { icons.dark } else { icons.light }
 }
 
-fn load_icon_from_resource() -> Option<HICON> {
+fn load_tray_icons() -> TrayIconSet {
+    let fallback = unsafe { LoadIconW(None, PCWSTR(32512u16 as *const u16)).unwrap_or_default() };
+    let light = load_icon_variant("icon-light.ico", TRAY_ICON_RESOURCE_LIGHT).unwrap_or(fallback);
+    let dark = load_icon_variant("icon-dark.ico", TRAY_ICON_RESOURCE_DARK).unwrap_or(light);
+    log_line("tray icon set loaded");
+    TrayIconSet { light, dark }
+}
+
+fn load_icon_variant(file_name: &str, resource_id: u16) -> Option<HICON> {
+    if let Some(icon) = load_icon_from_resource(resource_id) {
+        return Some(icon);
+    }
+    if let Some(path) = find_icon_path(file_name) {
+        if let Some(icon) = load_icon_from_file(&path) {
+            log_line(&format!("using tray icon from file: {}", path.display()));
+            return Some(icon);
+        }
+    }
+    None
+}
+
+fn load_icon_from_resource(resource_id: u16) -> Option<HICON> {
     let hinstance = unsafe { GetModuleHandleW(None) }.ok()?;
     unsafe {
         let handle = LoadImageW(
             hinstance,
-            PCWSTR(1u16 as *const u16),
+            PCWSTR(resource_id as usize as *const u16),
             IMAGE_ICON,
             0,
             0,
@@ -182,7 +224,7 @@ fn load_icon_from_file(path: &Path) -> Option<HICON> {
     }
 }
 
-fn find_icon_path() -> Option<PathBuf> {
+fn find_icon_path(file_name: &str) -> Option<PathBuf> {
     let mut buffer = [0u16; 260];
     let len = unsafe { GetModuleFileNameW(None, &mut buffer) } as usize;
     if len == 0 {
@@ -193,19 +235,15 @@ fn find_icon_path() -> Option<PathBuf> {
     let exe_dir = exe_path.parent()?.to_path_buf();
 
     let candidates = [
-        exe_dir.join("assets").join("icon.ico"),
-        exe_dir.join("..").join("assets").join("icon.ico"),
-        exe_dir
-            .join("..")
-            .join("..")
-            .join("assets")
-            .join("icon.ico"),
+        exe_dir.join("assets").join(file_name),
+        exe_dir.join("..").join("assets").join(file_name),
+        exe_dir.join("..").join("..").join("assets").join(file_name),
         exe_dir
             .join("..")
             .join("..")
             .join("..")
             .join("assets")
-            .join("icon.ico"),
+            .join(file_name),
     ];
 
     for candidate in candidates {
@@ -214,6 +252,26 @@ fn find_icon_path() -> Option<PathBuf> {
         }
     }
     None
+}
+
+fn system_uses_light_theme() -> Option<bool> {
+    let key = to_wstring(PERSONALIZE_KEY);
+    let value = to_wstring(SYSTEM_USES_LIGHT_THEME);
+    let mut data: u32 = 0;
+    let mut size = std::mem::size_of::<u32>() as u32;
+    let ok = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            PCWSTR(key.as_ptr()),
+            PCWSTR(value.as_ptr()),
+            RRF_RT_REG_DWORD,
+            None,
+            Some((&mut data as *mut u32).cast()),
+            Some(&mut size),
+        )
+        .is_ok()
+    };
+    if ok { Some(data != 0) } else { None }
 }
 
 pub fn show_context_menu(hwnd: HWND, state: &AppState) {

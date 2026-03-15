@@ -14,7 +14,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SetWindowLongPtrW, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, IDC_ARROW,
     WM_ACTIVATE, WM_APP, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_DPICHANGED, WM_KEYDOWN,
     WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_PAINT,
-    WM_RBUTTONUP, WM_TIMER, WNDCLASSEXW,
+    WM_RBUTTONUP, WM_SETTINGCHANGE, WM_THEMECHANGED, WM_TIMER, WNDCLASSEXW,
 };
 
 pub const TRAY_WND_CLASS: &str = "CompassLunchTrayWindow";
@@ -136,6 +136,10 @@ pub unsafe extern "system" fn tray_wndproc(
             LRESULT(0)
         }
         WM_MOUSEWHEEL => LRESULT(0),
+        WM_SETTINGCHANGE | WM_THEMECHANGED => {
+            tray::refresh_tray_icon(hwnd);
+            LRESULT(0)
+        }
         WM_COMMAND => {
             let app = app_from_hwnd(hwnd);
             if app.is_null() {
