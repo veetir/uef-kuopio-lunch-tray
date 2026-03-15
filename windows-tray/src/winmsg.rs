@@ -22,6 +22,7 @@ pub const POPUP_WND_CLASS: &str = "CompassLunchPopupWindow";
 
 pub const WM_TRAY_CALLBACK: u32 = WM_APP + 1;
 pub const WM_APP_FETCH_COMPLETE: u32 = WM_APP + 2;
+pub const WM_APP_SHOW_EXISTING: u32 = WM_APP + 3;
 
 pub const TIMER_REFRESH: usize = 1;
 pub const TIMER_MIDNIGHT: usize = 2;
@@ -136,6 +137,28 @@ pub unsafe extern "system" fn tray_wndproc(
             LRESULT(0)
         }
         WM_MOUSEWHEEL => LRESULT(0),
+        WM_APP_SHOW_EXISTING => {
+            let app = app_from_hwnd(hwnd);
+            if app.is_null() {
+                return LRESULT(0);
+            }
+            let app = &*(app);
+            let popup_hwnd = app.hwnd_popup();
+            if popup_is_visible(popup_hwnd) {
+                let _ = SetForegroundWindow(popup_hwnd);
+            } else {
+                let state = app.snapshot();
+                if let Some(rect) = tray::tray_icon_rect(hwnd) {
+                    popup::show_popup_for_tray_icon(popup_hwnd, &state, rect);
+                } else if let Some(cursor_point) = cursor_point() {
+                    popup::show_popup_at(popup_hwnd, &state, cursor_point);
+                } else {
+                    popup::show_popup(popup_hwnd, &state);
+                }
+                let _ = SetForegroundWindow(popup_hwnd);
+            }
+            LRESULT(0)
+        }
         WM_SETTINGCHANGE | WM_THEMECHANGED => {
             tray::refresh_tray_icon(hwnd);
             LRESULT(0)

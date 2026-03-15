@@ -26,11 +26,12 @@ use crate::restaurant::{restaurant_for_code, Provider};
 use crate::settings::load_settings;
 use crate::util::to_wstring;
 use windows::core::PCWSTR;
-use windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Threading::{CreateMutexW, OpenMutexW, MUTEX_ALL_ACCESS};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DispatchMessageW, GetMessageW, TranslateMessage, MSG, SW_HIDE,
-    WS_EX_TOOLWINDOW, WS_OVERLAPPEDWINDOW, WS_POPUP,
+    CreateWindowExW, DispatchMessageW, FindWindowW, GetMessageW, PostMessageW, TranslateMessage,
+    MSG, SW_HIDE, WS_EX_TOOLWINDOW, WS_OVERLAPPEDWINDOW, WS_POPUP,
 };
 
 fn main() -> anyhow::Result<()> {
@@ -44,6 +45,12 @@ fn main() -> anyhow::Result<()> {
         ensure_console();
         return print_today_menu_with_settings(&boot_settings);
     }
+
+    let _single_instance_guard = match acquire_single_instance_guard() {
+        Ok(Some(guard)) => Some(guard),
+        Ok(None) => return Ok(()),
+        Err(err) => return Err(err),
+    };
 
     unsafe {
         log::log_line("app start");
@@ -132,6 +139,48 @@ fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(target_os = "windows")]
+struct SingleInstanceGuard(windows::Win32::Foundation::HANDLE);
+
+#[cfg(target_os = "windows")]
+impl Drop for SingleInstanceGuard {
+    fn drop(&mut self) {
+        unsafe {
+            if !self.0.is_invalid() {
+                let _ = windows::Win32::Foundation::CloseHandle(self.0);
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn acquire_single_instance_guard() -> anyhow::Result<Option<SingleInstanceGuard>> {
+    const INSTANCE_MUTEX_NAME: &str = "Local\\UEFKuopioLunchTray.Singleton";
+    let mutex_name = to_wstring(INSTANCE_MUTEX_NAME);
+    if let Ok(existing_mutex) =
+        unsafe { OpenMutexW(MUTEX_ALL_ACCESS, false, PCWSTR(mutex_name.as_ptr())) }
+    {
+        log::log_line("second instance launch detected, focusing existing instance");
+        unsafe {
+            let _ = windows::Win32::Foundation::CloseHandle(existing_mutex);
+            let class_name = to_wstring(winmsg::TRAY_WND_CLASS);
+            let existing = FindWindowW(PCWSTR(class_name.as_ptr()), PCWSTR::null());
+            if existing.0 != 0 {
+                let _ = PostMessageW(
+                    existing,
+                    winmsg::WM_APP_SHOW_EXISTING,
+                    WPARAM(0),
+                    LPARAM(0),
+                );
+            }
+        }
+        return Ok(None);
+    }
+
+    let mutex = unsafe { CreateMutexW(None, false, PCWSTR(mutex_name.as_ptr()))? };
+    Ok(Some(SingleInstanceGuard(mutex)))
 }
 
 #[cfg(target_os = "windows")]
