@@ -314,7 +314,7 @@ fn build_context_menu(state: &AppState) -> HMENU {
             menu,
             MF_POPUP,
             restaurant_menu.0 as usize,
-            PCWSTR(to_wstring("Restaurant").as_ptr()),
+            PCWSTR(to_wstring("Default restaurant").as_ptr()),
         );
 
         let language_menu = CreatePopupMenu().expect("CreatePopupMenu");
@@ -335,6 +335,83 @@ fn build_context_menu(state: &AppState) -> HMENU {
             MF_POPUP,
             language_menu.0 as usize,
             PCWSTR(to_wstring("Language").as_ptr()),
+        );
+
+        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+
+        let theme_menu = CreatePopupMenu().expect("CreatePopupMenu");
+        append_menu_item(
+            theme_menu,
+            CMD_THEME_LIGHT,
+            "Light",
+            state.settings.theme == "light",
+        );
+        append_menu_item(
+            theme_menu,
+            CMD_THEME_DARK,
+            "Dark",
+            state.settings.theme == "dark",
+        );
+        append_menu_item(
+            theme_menu,
+            CMD_THEME_BLUE,
+            "Blue",
+            state.settings.theme == "blue",
+        );
+        append_menu_item(
+            theme_menu,
+            CMD_THEME_GREEN,
+            "Green",
+            state.settings.theme == "green",
+        );
+        append_menu_item(
+            theme_menu,
+            CMD_THEME_AMBER,
+            "Amber",
+            state.settings.theme == "amber",
+        );
+        append_menu_item(
+            theme_menu,
+            CMD_THEME_TELETEXT1,
+            "Teletext 1",
+            state.settings.theme == "teletext1",
+        );
+        append_menu_item(
+            theme_menu,
+            CMD_THEME_TELETEXT2,
+            "Teletext 2",
+            state.settings.theme == "teletext2",
+        );
+        let _ = AppendMenuW(
+            menu,
+            MF_POPUP,
+            theme_menu.0 as usize,
+            PCWSTR(to_wstring("Theme").as_ptr()),
+        );
+        let widget_scale_menu = CreatePopupMenu().expect("CreatePopupMenu");
+        append_menu_item(
+            widget_scale_menu,
+            CMD_WIDGET_SCALE_NORMAL,
+            "Normal",
+            state.settings.widget_scale == "normal",
+        );
+        append_menu_item(
+            widget_scale_menu,
+            CMD_WIDGET_SCALE_125,
+            "125%",
+            state.settings.widget_scale == "125",
+        );
+        append_menu_item(
+            widget_scale_menu,
+            CMD_WIDGET_SCALE_150,
+            "150%",
+            state.settings.widget_scale == "150",
+        );
+        let _ = AppendMenuW(
+            menu,
+            MF_POPUP,
+            widget_scale_menu.0 as usize,
+            PCWSTR(to_wstring("Widget size").as_ptr()),
         );
 
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
@@ -410,109 +487,8 @@ fn build_context_menu(state: &AppState) -> HMENU {
             highlight_menu.0 as usize,
             PCWSTR(to_wstring("Highlight allergens").as_ptr()),
         );
-        let theme_menu = CreatePopupMenu().expect("CreatePopupMenu");
-        append_menu_item(
-            theme_menu,
-            CMD_THEME_LIGHT,
-            "Light",
-            state.settings.theme == "light",
-        );
-        append_menu_item(
-            theme_menu,
-            CMD_THEME_DARK,
-            "Dark",
-            state.settings.theme == "dark",
-        );
-        append_menu_item(
-            theme_menu,
-            CMD_THEME_BLUE,
-            "Blue",
-            state.settings.theme == "blue",
-        );
-        append_menu_item(
-            theme_menu,
-            CMD_THEME_GREEN,
-            "Green",
-            state.settings.theme == "green",
-        );
-        append_menu_item(
-            theme_menu,
-            CMD_THEME_AMBER,
-            "Amber",
-            state.settings.theme == "amber",
-        );
-        append_menu_item(
-            theme_menu,
-            CMD_THEME_TELETEXT1,
-            "Teletext 1",
-            state.settings.theme == "teletext1",
-        );
-        append_menu_item(
-            theme_menu,
-            CMD_THEME_TELETEXT2,
-            "Teletext 2",
-            state.settings.theme == "teletext2",
-        );
-        let _ = AppendMenuW(
-            menu,
-            MF_POPUP,
-            theme_menu.0 as usize,
-            PCWSTR(to_wstring("Theme").as_ptr()),
-        );
-        let widget_scale_menu = CreatePopupMenu().expect("CreatePopupMenu");
-        append_menu_item(
-            widget_scale_menu,
-            CMD_WIDGET_SCALE_NORMAL,
-            "Normal",
-            state.settings.widget_scale == "normal",
-        );
-        append_menu_item(
-            widget_scale_menu,
-            CMD_WIDGET_SCALE_125,
-            "125%",
-            state.settings.widget_scale == "125",
-        );
-        append_menu_item(
-            widget_scale_menu,
-            CMD_WIDGET_SCALE_150,
-            "150%",
-            state.settings.widget_scale == "150",
-        );
-        let _ = AppendMenuW(
-            menu,
-            MF_POPUP,
-            widget_scale_menu.0 as usize,
-            PCWSTR(to_wstring("Widget size").as_ptr()),
-        );
-        append_menu_toggle(
-            menu,
-            CMD_TOGGLE_STARTUP,
-            "Run at startup",
-            crate::startup::is_enabled(),
-        );
-        let developer_menu = CreatePopupMenu().expect("CreatePopupMenu");
-        append_menu_toggle(
-            developer_menu,
-            CMD_TOGGLE_LOGGING,
-            "Enable logging",
-            state.settings.enable_logging,
-        );
-        append_menu_item(
-            developer_menu,
-            CMD_OPEN_APPDATA_DIR,
-            "Open app data folder",
-            false,
-        );
-        let _ = AppendMenuW(
-            menu,
-            MF_POPUP,
-            developer_menu.0 as usize,
-            PCWSTR(to_wstring("Developer").as_ptr()),
-        );
 
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-
-        append_menu_item(menu, CMD_REFRESH_NOW, "Refresh now", false);
 
         let refresh_menu = CreatePopupMenu().expect("CreatePopupMenu");
         append_menu_item(
@@ -545,8 +521,36 @@ fn build_context_menu(state: &AppState) -> HMENU {
             refresh_menu.0 as usize,
             PCWSTR(to_wstring("Auto refresh").as_ptr()),
         );
+        append_menu_item(menu, CMD_REFRESH_NOW, "Refresh now", false);
 
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+
+        append_menu_toggle(
+            menu,
+            CMD_TOGGLE_STARTUP,
+            "Run at startup",
+            crate::startup::is_enabled(),
+        );
+        let developer_menu = CreatePopupMenu().expect("CreatePopupMenu");
+        append_menu_toggle(
+            developer_menu,
+            CMD_TOGGLE_LOGGING,
+            "Enable logging",
+            state.settings.enable_logging,
+        );
+        append_menu_item(
+            developer_menu,
+            CMD_OPEN_APPDATA_DIR,
+            "Open app data folder",
+            false,
+        );
+        let _ = AppendMenuW(
+            menu,
+            MF_POPUP,
+            developer_menu.0 as usize,
+            PCWSTR(to_wstring("Developer").as_ptr()),
+        );
+
         append_menu_item(menu, CMD_SUBMIT_FEEDBACK, "Submit feedback", false);
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
         append_menu_item(menu, CMD_QUIT, "Quit", false);
