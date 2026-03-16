@@ -1,27 +1,36 @@
-# Lunch Plasmoid
+# UEF Kuopio Lunch Tray App
 
-Unofficial system tray KDE Plasma widget for UEF Kuopio lunch menus.
+## Supported restaurants
 
-## Features
+- Compass: Snellmania, Snellari, Canthia, Tietoteknia, Mediteknia, Caari
+- Antell: Round, Highway
+- Hyvä Huomen: Bioteknia
+- Sorrento: Pranzeria
+
+## Windows app
+
+See [Releases](https://github.com/veetir/compass-lunch-plasmoid/releases) for
+exe downloads.
+
+### Features
+
+- Navigate restaurants with mouse wheel, header buttons, `Left/Right` (`A`/`D`), or number keys
+- Toggle allergens, diet highlights, and price groups
+- Themes: dark, light, blue, green, amber, teletext ...
+- Highlight favorite dishes
+- Run at startup
+
+![Compass Lunch screenshot](windows-tray/assets/windows.png)
+
+## KDE Plasma widget
+
+### Features
 
 - Shows today's lunch in hover tooltip
-- Supports
-  - Compass: Snellmania, Snellari, Canthia, Tietoteknia, Mediteknia
-  - Antell: Round, Highway
-  - Hyvä Huomen: Bioteknia
-  - Sorrento: Pranzeria
 - Language switch (`fi` / `en`)
 - Configurable set of restaurants, favorite restaurant
 - Mouse-wheel cycling on tray icon to switch restaurant instantly
 - Middle-click icon to open restaurant web page
-- Automatic and manual refresh
-
-## Screenshot
-
-<p>
-  <img src="plasma6/docs/image.png" alt="Compass Lunch widget" width="49%" />
-  <img src="plasma6/docs/settings.png" alt="Compass Lunch settings" width="49%" />
-</p>
 
 ## Install / Update / Remove
 
@@ -63,21 +72,12 @@ kpackagetool6 -t Plasma/Applet -r compass-lunch
 
 On Plasma 5, run the same commands but use `kpackagetool5` and `"$PWD/plasma5"` instead.
 
-## Windows version
+## Screenshot
 
-See [Releases](https://github.com/veetir/compass-lunch-plasmoid/releases) for
-exe downloads.
-
-### Features
-
-- Navigate restaurants with mouse wheel, header buttons, or `Left/Right` (`A`/`D`)
-- Toggle allergens, diet highlights, and price groups
-- Themes: dark, light, blue, green, ...
-- Highlight favorite dishes
-- Automatic/manual refresh
-- Run at startup
-
-![Compass Lunch screenshot](windows-tray/assets/windows.png)
+<p>
+  <img src="plasma6/docs/image.png" alt="Compass Lunch widget" width="49%" />
+  <img src="plasma6/docs/settings.png" alt="Compass Lunch settings" width="49%" />
+</p>
 
 ---
 

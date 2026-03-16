@@ -1,7 +1,11 @@
 use crate::antell;
 use crate::format::{normalize_optional, normalize_text};
+use crate::log::log_line;
 use crate::model::{ApiResponse, ApiSetMenu, MenuGroup, TodayMenu};
-use crate::restaurant::{restaurant_for_code, Provider, Restaurant};
+use crate::restaurant::{
+    compass_fetch_language, effective_fetch_language, is_hard_closed_today, provider_key,
+    restaurant_for_code, Provider, Restaurant,
+};
 use crate::settings::Settings;
 use anyhow::{anyhow, Context};
 use html_escape::decode_html_entities;
@@ -10,6 +14,85 @@ use reqwest::blocking::Client;
 use serde_json::Value;
 use std::collections::HashSet;
 use time::{Month, OffsetDateTime};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FetchMode {
+    Current,
+    Background,
+    Direct,
+}
+
+impl FetchMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Current => "current",
+            Self::Background => "background",
+            Self::Direct => "direct",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FetchReason {
+    StartupMissingCache,
+    StartupStaleDate,
+    StartupRefreshInterval,
+    ManualRefresh,
+    RefreshTimer,
+    MidnightRollover,
+    StaleDateCheck,
+    RetryTimer,
+    SelectionMissingCache,
+    SelectionStaleDate,
+    SelectionRefreshInterval,
+    LanguageSwitchMissingCache,
+    LanguageSwitchStaleDate,
+    LanguageSwitchRefreshInterval,
+    PrefetchMissingCache,
+    PrefetchStaleDate,
+    PrintTodayCli,
+}
+
+impl FetchReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::StartupMissingCache => "startup_missing_cache",
+            Self::StartupStaleDate => "startup_stale_date",
+            Self::StartupRefreshInterval => "startup_refresh_interval",
+            Self::ManualRefresh => "manual_refresh",
+            Self::RefreshTimer => "refresh_timer",
+            Self::MidnightRollover => "midnight_rollover",
+            Self::StaleDateCheck => "stale_date_check",
+            Self::RetryTimer => "retry_timer",
+            Self::SelectionMissingCache => "selection_missing_cache",
+            Self::SelectionStaleDate => "selection_stale_date",
+            Self::SelectionRefreshInterval => "selection_refresh_interval",
+            Self::LanguageSwitchMissingCache => "language_switch_missing_cache",
+            Self::LanguageSwitchStaleDate => "language_switch_stale_date",
+            Self::LanguageSwitchRefreshInterval => "language_switch_refresh_interval",
+            Self::PrefetchMissingCache => "prefetch_missing_cache",
+            Self::PrefetchStaleDate => "prefetch_stale_date",
+            Self::PrintTodayCli => "print_today_cli",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct FetchContext {
+    pub mode: FetchMode,
+    pub reason: FetchReason,
+    pub detail: String,
+}
+
+impl FetchContext {
+    pub fn new(mode: FetchMode, reason: FetchReason) -> Self {
+        Self {
+            mode,
+            reason,
+            detail: String::new(),
+        }
+    }
+}
 
 pub struct FetchOutput {
     pub ok: bool,
@@ -22,23 +105,56 @@ pub struct FetchOutput {
     pub payload_date: String,
 }
 
-pub fn fetch_today(settings: &Settings) -> FetchOutput {
+pub fn fetch_today(settings: &Settings, context: &FetchContext) -> FetchOutput {
     let restaurant = restaurant_for_code(
         &settings.restaurant_code,
         settings.enable_antell_restaurants,
     );
-    match restaurant.provider {
-        Provider::Compass => fetch_compass(settings, restaurant),
-        Provider::CompassRss => fetch_compass_rss(settings, restaurant),
-        Provider::Antell => fetch_antell(settings, restaurant),
-        Provider::HuomenJson => fetch_huomen(settings, restaurant),
+    let fetch_language = effective_fetch_language(restaurant, &settings.language);
+    if is_hard_closed_today(restaurant) {
+        log_fetch_skip(
+            context,
+            restaurant,
+            &settings.language,
+            &fetch_language,
+            "hard_closed_today",
+            "",
+        );
+        return closed_today_fetch_output(restaurant, &settings.language);
     }
+    let result = match restaurant.provider {
+        Provider::Compass => fetch_compass(settings, restaurant, context),
+        Provider::CompassRss => fetch_compass_rss(settings, restaurant, context),
+        Provider::Antell => fetch_antell(settings, restaurant, context),
+        Provider::HuomenJson => fetch_huomen(settings, restaurant, context),
+        Provider::PranzeriaHtml => fetch_pranzeria(settings, restaurant, context),
+    };
+    log_fetch_result(
+        context,
+        restaurant,
+        &settings.language,
+        &fetch_language,
+        &result,
+    );
+    result
 }
 
-fn fetch_compass(settings: &Settings, restaurant: Restaurant) -> FetchOutput {
+fn fetch_compass(
+    settings: &Settings,
+    restaurant: Restaurant,
+    context: &FetchContext,
+) -> FetchOutput {
+    let fetch_language = compass_fetch_language(restaurant, &settings.language);
     let url = format!(
         "https://www.compass-group.fi/menuapi/feed/json?costNumber={}&language={}",
-        restaurant.code, settings.language
+        restaurant.code, fetch_language
+    );
+    log_fetch_attempt(
+        context,
+        restaurant,
+        &settings.language,
+        fetch_language,
+        &url,
     );
     let client = match Client::builder()
         .timeout(std::time::Duration::from_secs(10))
@@ -111,7 +227,11 @@ fn fetch_compass(settings: &Settings, restaurant: Restaurant) -> FetchOutput {
     parse_response(api, raw_json)
 }
 
-fn fetch_compass_rss(settings: &Settings, restaurant: Restaurant) -> FetchOutput {
+fn fetch_compass_rss(
+    settings: &Settings,
+    restaurant: Restaurant,
+    context: &FetchContext,
+) -> FetchOutput {
     let rss_cost_number = match restaurant.rss_cost_number {
         Some(value) if !value.trim().is_empty() => value.trim(),
         _ => {
@@ -131,6 +251,13 @@ fn fetch_compass_rss(settings: &Settings, restaurant: Restaurant) -> FetchOutput
     let url = format!(
         "https://www.compass-group.fi/menuapi/feed/rss/current-day?costNumber={}&language={}",
         rss_cost_number, settings.language
+    );
+    log_fetch_attempt(
+        context,
+        restaurant,
+        &settings.language,
+        &settings.language,
+        &url,
     );
 
     let client = match Client::builder()
@@ -179,7 +306,11 @@ fn fetch_compass_rss(settings: &Settings, restaurant: Restaurant) -> FetchOutput
     }
 }
 
-fn fetch_huomen(settings: &Settings, restaurant: Restaurant) -> FetchOutput {
+fn fetch_huomen(
+    settings: &Settings,
+    restaurant: Restaurant,
+    context: &FetchContext,
+) -> FetchOutput {
     let huomen_api_base = match restaurant.huomen_api_base {
         Some(value) if !value.trim().is_empty() => value.trim(),
         _ => {
@@ -204,6 +335,13 @@ fn fetch_huomen(settings: &Settings, restaurant: Restaurant) -> FetchOutput {
     let url = format!(
         "{}{}language={}",
         huomen_api_base, separator, settings.language
+    );
+    log_fetch_attempt(
+        context,
+        restaurant,
+        &settings.language,
+        &settings.language,
+        &url,
     );
 
     let client = match Client::builder()
@@ -270,6 +408,10 @@ pub fn parse_cached_payload(
     restaurant: Restaurant,
     language: &str,
 ) -> anyhow::Result<FetchOutput> {
+    if is_hard_closed_today(restaurant) {
+        return Ok(closed_today_fetch_output(restaurant, language));
+    }
+
     match provider {
         Provider::Compass => {
             let api: ApiResponse =
@@ -291,7 +433,26 @@ pub fn parse_cached_payload(
                 payload_date: String::new(),
             })
         }
+        Provider::PranzeriaHtml => Ok(parse_pranzeria_payload(raw_payload, restaurant)),
         Provider::HuomenJson => parse_huomen_payload(raw_payload, restaurant, language),
+    }
+}
+
+pub fn closed_today_fetch_output(restaurant: Restaurant, _language: &str) -> FetchOutput {
+    let today = local_today_key();
+    FetchOutput {
+        ok: true,
+        error_message: String::new(),
+        today_menu: Some(TodayMenu {
+            date_iso: today.clone(),
+            lunch_time: String::new(),
+            menus: Vec::new(),
+        }),
+        restaurant_name: restaurant.name.to_string(),
+        restaurant_url: restaurant.url.unwrap_or_default().to_string(),
+        provider: restaurant.provider,
+        raw_json: String::new(),
+        payload_date: today,
     }
 }
 
@@ -380,7 +541,11 @@ fn normalize_menus(set_menus: Vec<ApiSetMenu>) -> Vec<MenuGroup> {
         .collect()
 }
 
-fn fetch_antell(settings: &Settings, restaurant: Restaurant) -> FetchOutput {
+fn fetch_antell(
+    settings: &Settings,
+    restaurant: Restaurant,
+    context: &FetchContext,
+) -> FetchOutput {
     let today_key = local_today_key();
     let slug = match restaurant.antell_slug {
         Some(s) => s,
@@ -409,6 +574,13 @@ fn fetch_antell(settings: &Settings, restaurant: Restaurant) -> FetchOutput {
             slug, weekday
         )
     };
+    log_fetch_attempt(
+        context,
+        restaurant,
+        &settings.language,
+        &settings.language,
+        &url,
+    );
     let client = match Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
@@ -465,6 +637,252 @@ fn fetch_antell(settings: &Settings, restaurant: Restaurant) -> FetchOutput {
             raw_json: String::new(),
             payload_date: String::new(),
         },
+    }
+}
+
+fn fetch_pranzeria(
+    settings: &Settings,
+    restaurant: Restaurant,
+    context: &FetchContext,
+) -> FetchOutput {
+    let url = restaurant
+        .url
+        .unwrap_or("https://www.sorrento.fi/pranzeria/");
+    log_fetch_attempt(
+        context,
+        restaurant,
+        &settings.language,
+        &settings.language,
+        url,
+    );
+    let client = match Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+    {
+        Ok(c) => c,
+        Err(err) => {
+            return FetchOutput {
+                ok: false,
+                error_message: err.to_string(),
+                today_menu: None,
+                restaurant_name: restaurant.name.to_string(),
+                restaurant_url: url.to_string(),
+                provider: Provider::PranzeriaHtml,
+                raw_json: String::new(),
+                payload_date: String::new(),
+            };
+        }
+    };
+
+    match client.get(url).send() {
+        Ok(resp) => match resp.text() {
+            Ok(text) => parse_pranzeria_payload(&text, restaurant),
+            Err(err) => FetchOutput {
+                ok: false,
+                error_message: err.to_string(),
+                today_menu: None,
+                restaurant_name: restaurant.name.to_string(),
+                restaurant_url: url.to_string(),
+                provider: Provider::PranzeriaHtml,
+                raw_json: String::new(),
+                payload_date: String::new(),
+            },
+        },
+        Err(err) => FetchOutput {
+            ok: false,
+            error_message: err.to_string(),
+            today_menu: None,
+            restaurant_name: restaurant.name.to_string(),
+            restaurant_url: url.to_string(),
+            provider: Provider::PranzeriaHtml,
+            raw_json: String::new(),
+            payload_date: String::new(),
+        },
+    }
+}
+
+fn log_fetch_attempt(
+    context: &FetchContext,
+    restaurant: Restaurant,
+    ui_language: &str,
+    fetch_language: &str,
+    url: &str,
+) {
+    let detail = if context.detail.is_empty() {
+        String::new()
+    } else {
+        format!(" detail={}", context.detail)
+    };
+    log_line(&format!(
+        "fetch request mode={} reason={} code={} provider={} ui_language={} fetch_language={} url={}{}",
+        context.mode.as_str(),
+        context.reason.as_str(),
+        restaurant.code,
+        provider_key(restaurant.provider),
+        ui_language,
+        fetch_language,
+        url,
+        detail,
+    ));
+}
+
+fn log_fetch_skip(
+    context: &FetchContext,
+    restaurant: Restaurant,
+    ui_language: &str,
+    fetch_language: &str,
+    decision: &str,
+    extra: &str,
+) {
+    let extra = if extra.is_empty() {
+        String::new()
+    } else {
+        format!(" {}", extra)
+    };
+    let detail = if context.detail.is_empty() {
+        String::new()
+    } else {
+        format!(" detail={}", context.detail)
+    };
+    log_line(&format!(
+        "fetch skip mode={} reason={} decision={} code={} provider={} ui_language={} fetch_language={}{}{}",
+        context.mode.as_str(),
+        context.reason.as_str(),
+        decision,
+        restaurant.code,
+        provider_key(restaurant.provider),
+        ui_language,
+        fetch_language,
+        detail,
+        extra,
+    ));
+}
+
+fn log_fetch_result(
+    context: &FetchContext,
+    restaurant: Restaurant,
+    ui_language: &str,
+    fetch_language: &str,
+    result: &FetchOutput,
+) {
+    let payload_date = if result.payload_date.is_empty() {
+        "-".to_string()
+    } else {
+        result.payload_date.clone()
+    };
+    let detail = if context.detail.is_empty() {
+        String::new()
+    } else {
+        format!(" detail={}", context.detail)
+    };
+    let err = if result.error_message.is_empty() {
+        String::new()
+    } else {
+        format!(" err={}", result.error_message.replace('\n', " "))
+    };
+    log_line(&format!(
+        "fetch result mode={} reason={} code={} provider={} ui_language={} fetch_language={} ok={} payload_date={} has_today_menu={}{}{}",
+        context.mode.as_str(),
+        context.reason.as_str(),
+        restaurant.code,
+        provider_key(restaurant.provider),
+        ui_language,
+        fetch_language,
+        result.ok,
+        payload_date,
+        result.today_menu.is_some(),
+        detail,
+        err,
+    ));
+}
+
+fn parse_pranzeria_payload(html_text: &str, restaurant: Restaurant) -> FetchOutput {
+    let payload_text = html_text.to_string();
+    let paragraph_re = match Regex::new(r"(?is)<p\b[^>]*>([\s\S]*?)</p>") {
+        Ok(value) => value,
+        Err(err) => {
+            return FetchOutput {
+                ok: false,
+                error_message: err.to_string(),
+                today_menu: None,
+                restaurant_name: restaurant.name.to_string(),
+                restaurant_url: restaurant.url.unwrap_or_default().to_string(),
+                provider: Provider::PranzeriaHtml,
+                raw_json: payload_text,
+                payload_date: String::new(),
+            };
+        }
+    };
+
+    let today = local_today_key();
+    let mut lines_by_date: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+    let mut current_date_iso = String::new();
+
+    for captures in paragraph_re.captures_iter(&payload_text) {
+        let line = strip_html_text(captures.get(1).map(|m| m.as_str()).unwrap_or_default());
+        if line.is_empty() {
+            continue;
+        }
+
+        if let Some((date_iso, trailing)) = parse_pranzeria_day_header(&line) {
+            current_date_iso = date_iso.clone();
+            let day_lines = lines_by_date.entry(date_iso).or_default();
+            if !trailing.is_empty() {
+                day_lines.push(trailing);
+            }
+            continue;
+        }
+
+        if current_date_iso.is_empty() {
+            continue;
+        }
+
+        if is_pranzeria_legend_line(&line) {
+            break;
+        }
+
+        lines_by_date
+            .entry(current_date_iso.clone())
+            .or_default()
+            .push(line);
+    }
+
+    let provider_date_valid = lines_by_date.contains_key(&today);
+    let lunch_lines = normalize_pranzeria_lines(lines_by_date.remove(&today).unwrap_or_default());
+    let menu_date_iso = if provider_date_valid {
+        today.clone()
+    } else {
+        String::new()
+    };
+
+    let today_menu = if provider_date_valid {
+        Some(TodayMenu {
+            date_iso: today.clone(),
+            lunch_time: String::new(),
+            menus: if lunch_lines.is_empty() {
+                Vec::new()
+            } else {
+                vec![MenuGroup {
+                    name: "Lounas".to_string(),
+                    price: String::new(),
+                    components: lunch_lines,
+                }]
+            },
+        })
+    } else {
+        None
+    };
+
+    FetchOutput {
+        ok: true,
+        error_message: String::new(),
+        today_menu,
+        restaurant_name: restaurant.name.to_string(),
+        restaurant_url: restaurant.url.unwrap_or_default().to_string(),
+        provider: Provider::PranzeriaHtml,
+        raw_json: payload_text,
+        payload_date: menu_date_iso,
     }
 }
 
@@ -652,6 +1070,53 @@ fn parse_huomen_payload(
     })
 }
 
+fn parse_pranzeria_day_header(line_text: &str) -> Option<(String, String)> {
+    let clean = normalize_text(line_text);
+    let re = Regex::new(
+        r"^(Maanantai|Tiistai|Keskiviikko|Torstai|Perjantai|Lauantai|Sunnuntai)\s+(\d{1,2}\.\d{1,2}\.\d{2,4})(?:\s+(.+))?$",
+    )
+    .ok()?;
+    let captures = re.captures(&clean)?;
+    let date_iso = parse_dot_date_iso(captures.get(2)?.as_str())?;
+    let trailing = normalize_text(captures.get(3).map(|m| m.as_str()).unwrap_or_default());
+    Some((date_iso, trailing))
+}
+
+fn is_pranzeria_legend_line(line_text: &str) -> bool {
+    let clean = normalize_text(line_text);
+    if clean.is_empty() {
+        return false;
+    }
+
+    if Regex::new(r"^(?:L|G|M|V|VG)\s*=")
+        .ok()
+        .is_some_and(|re| re.is_match(&clean))
+    {
+        return true;
+    }
+
+    clean.contains("Laktoositon")
+        || clean.contains("Gluteeniton")
+        || clean.contains("Maidoton")
+        || clean.contains("Kasvis")
+        || clean.contains("Vegaani")
+}
+
+fn normalize_pranzeria_lines(raw_lines: Vec<String>) -> Vec<String> {
+    let mut lines = Vec::new();
+    for raw in raw_lines {
+        let clean = normalize_text(&raw);
+        if clean.is_empty() {
+            continue;
+        }
+        if lines.last().is_some_and(|existing| existing == &clean) {
+            continue;
+        }
+        lines.push(clean);
+    }
+    lines
+}
+
 fn parse_rss_tag_raw(xml_text: &str, tag_name: &str) -> String {
     let pattern = format!(
         r"(?is)<{}(?:\s+[^>]*)?>([\s\S]*?)</{}>",
@@ -674,35 +1139,28 @@ fn parse_rss_item_raw(xml_text: &str) -> String {
 }
 
 fn parse_rss_menu_date_iso(date_text: &str) -> String {
+    parse_date_iso(date_text, r"(\d{1,2})[-./](\d{1,2})[-./](\d{2,4})").unwrap_or_default()
+}
+
+fn parse_dot_date_iso(date_text: &str) -> Option<String> {
+    parse_date_iso(date_text, r"(\d{1,2})\.(\d{1,2})\.(\d{2,4})")
+}
+
+fn parse_date_iso(date_text: &str, pattern: &str) -> Option<String> {
     let clean = normalize_text(date_text);
     if clean.is_empty() {
-        return String::new();
+        return None;
     }
 
-    let regex = match Regex::new(r"(\d{1,2})[-./](\d{1,2})[-./](\d{2,4})") {
-        Ok(re) => re,
-        Err(_) => return String::new(),
-    };
-    let captures = match regex.captures(&clean) {
-        Some(c) => c,
-        None => return String::new(),
-    };
+    let regex = Regex::new(pattern).ok()?;
+    let captures = regex.captures(&clean)?;
 
-    let day = captures
-        .get(1)
-        .and_then(|m| m.as_str().parse::<u8>().ok())
-        .unwrap_or(0);
-    let month = captures
-        .get(2)
-        .and_then(|m| m.as_str().parse::<u8>().ok())
-        .unwrap_or(0);
-    let mut year = captures
-        .get(3)
-        .and_then(|m| m.as_str().parse::<i32>().ok())
-        .unwrap_or(0);
+    let day = captures.get(1)?.as_str().parse::<u8>().ok()?;
+    let month = captures.get(2)?.as_str().parse::<u8>().ok()?;
+    let mut year = captures.get(3)?.as_str().parse::<i32>().ok()?;
 
     if day == 0 || month == 0 || year <= 0 {
-        return String::new();
+        return None;
     }
 
     if year < 100 {
@@ -711,14 +1169,14 @@ fn parse_rss_menu_date_iso(date_text: &str) -> String {
 
     let month_enum = match Month::try_from(month) {
         Ok(value) => value,
-        Err(_) => return String::new(),
+        Err(_) => return None,
     };
 
     if time::Date::from_calendar_date(year, month_enum, day).is_err() {
-        return String::new();
+        return None;
     }
 
-    format!("{:04}-{:02}-{:02}", year, month, day)
+    Some(format!("{:04}-{:02}-{:02}", year, month, day))
 }
 
 fn is_rss_allergen_token(token: &str) -> bool {
@@ -1011,4 +1469,89 @@ fn local_today_key() -> String {
         date.month() as u8,
         date.day()
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{ApiMenuDay, ApiResponse};
+    use crate::restaurant::restaurant_for_code;
+
+    #[test]
+    fn closed_today_output_has_empty_menu_for_today() {
+        let restaurant = restaurant_for_code("huomen-bioteknia", true);
+        let result = closed_today_fetch_output(restaurant, "en");
+        assert!(result.ok);
+        assert_eq!(result.payload_date, local_today_key());
+        let today_menu = result.today_menu.expect("today_menu");
+        assert_eq!(today_menu.date_iso, local_today_key());
+        assert!(today_menu.menus.is_empty());
+    }
+
+    #[test]
+    fn compass_parse_keeps_closed_day_as_valid_today() {
+        let today = local_today_key();
+        let response = ApiResponse {
+            restaurant_name: Some("Caari".to_string()),
+            restaurant_url: Some("https://example.invalid/caari".to_string()),
+            menus_for_days: Some(vec![ApiMenuDay {
+                date: Some(format!("{}T00:00:00+00:00", today)),
+                lunch_time: None,
+                set_menus: Some(Vec::new()),
+            }]),
+            error_text: None,
+        };
+
+        let parsed = parse_response(response, "{}".to_string());
+        assert!(parsed.ok);
+        assert_eq!(parsed.payload_date, today);
+        let today_menu = parsed.today_menu.expect("today_menu");
+        assert!(today_menu.menus.is_empty());
+    }
+
+    #[test]
+    fn pranzeria_payload_parses_current_day_lines() {
+        let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
+        let weekday_fi = match now.weekday() {
+            time::Weekday::Monday => "Maanantai",
+            time::Weekday::Tuesday => "Tiistai",
+            time::Weekday::Wednesday => "Keskiviikko",
+            time::Weekday::Thursday => "Torstai",
+            time::Weekday::Friday => "Perjantai",
+            time::Weekday::Saturday => "Lauantai",
+            time::Weekday::Sunday => "Sunnuntai",
+        };
+        let date_text = format!(
+            "{:02}.{:02}.{:04}",
+            now.date().day(),
+            now.date().month() as u8,
+            now.date().year()
+        );
+        let html = format!(
+            "<p>{} {} Salaatti- &amp;AntipastoBuffet</p>\
+             <p>Spezzatino Di Manzo (L, G)</p>\
+             <p>Roomalainen focacciapizzabuffet</p>\
+             <p>L = Laktoositon</p>",
+            weekday_fi, date_text
+        );
+
+        let parsed = parse_pranzeria_payload(&html, restaurant_for_code("pranzeria-html", true));
+        assert!(parsed.ok);
+        assert_eq!(parsed.payload_date, local_today_key());
+        let today_menu = parsed.today_menu.expect("today_menu");
+        assert_eq!(today_menu.menus.len(), 1);
+        assert_eq!(today_menu.menus[0].name, "Lounas");
+        assert_eq!(
+            today_menu.menus[0].components[0],
+            "Salaatti- &AntipastoBuffet"
+        );
+        assert!(today_menu.menus[0]
+            .components
+            .iter()
+            .any(|line| line.contains("Spezzatino Di Manzo")));
+        assert!(!today_menu.menus[0]
+            .components
+            .iter()
+            .any(|line| line.contains("Laktoositon")));
+    }
 }

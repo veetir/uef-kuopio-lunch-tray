@@ -28,21 +28,31 @@ jobs:
         run: |
           cargo build --manifest-path windows-tray/Cargo.toml --release --target x86_64-pc-windows-gnu
 
+      - name: Derive package filename
+        run: |
+          if [[ "${GITHUB_REF:-}" == refs/tags/windows-v* ]]; then
+            VERSION="${GITHUB_REF_NAME#windows-v}"
+          else
+            SHORT_SHA="${GITHUB_SHA::7}"
+            VERSION="dev-${SHORT_SHA}"
+          fi
+          echo "WINDOWS_ZIP=compass-lunch-windows-x64-v${VERSION}.zip" >> "$GITHUB_ENV"
+
       - name: Package artifact
         run: |
           mkdir -p dist
           cp windows-tray/target/x86_64-pc-windows-gnu/release/compass-lunch.exe dist/
           cp windows-tray/README_windows.md dist/ || true
-          zip -j dist/compass-lunch-windows-x64.zip dist/compass-lunch.exe dist/README_windows.md
+          zip -j "dist/${WINDOWS_ZIP}" dist/compass-lunch.exe dist/README_windows.md
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: compass-lunch-windows-x64
-          path: dist/compass-lunch-windows-x64.zip
+          path: dist/${{ env.WINDOWS_ZIP }}
 
       - name: Release asset
         if: startsWith(github.ref, 'refs/tags/windows-v')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/compass-lunch-windows-x64.zip
+          files: dist/${{ env.WINDOWS_ZIP }}

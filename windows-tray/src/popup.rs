@@ -3,11 +3,11 @@ use crate::app::{AppState, FetchStatus};
 use crate::cache;
 use crate::favorites;
 use crate::format::{
-    date_and_time_line, menu_heading, normalize_text, split_component_suffix, student_price_eur,
-    text_for, PriceGroups,
+    date_and_time_line, menu_heading, normalize_text, renderable_menu_components,
+    student_price_eur, text_for, PriceGroups,
 };
 use crate::model::TodayMenu;
-use crate::restaurant::{available_restaurants, Provider, Restaurant};
+use crate::restaurant::{available_restaurants, is_hard_closed_today, Provider, Restaurant};
 use crate::settings::Settings;
 use crate::util::to_wstring;
 use std::cmp::{max, min};
@@ -29,36 +29,60 @@ use windows::Win32::UI::WindowsAndMessaging::{
 const PADDING_X: i32 = 12;
 const PADDING_Y: i32 = 10;
 const LINE_GAP: i32 = 2;
-const ANCHOR_GAP: i32 = 10;
+const ANCHOR_GAP: i32 = 0;
 const POPUP_MAX_WIDTH: i32 = 525;
 const POPUP_MIN_WIDTH: i32 = 320;
-const POPUP_MAX_CONTENT_WIDTH: i32 = POPUP_MAX_WIDTH - PADDING_X * 2;
-const POPUP_MIN_CONTENT_WIDTH: i32 = POPUP_MIN_WIDTH - PADDING_X * 2;
 const HEADER_HEIGHT: i32 = 46;
 const HEADER_BUTTON_SIZE: i32 = 30;
 const HEADER_BUTTON_GAP: i32 = 8;
 const LOADING_HINT_DELAY_MS: i64 = 250;
 const MAX_DYNAMIC_LINES: usize = 35;
 const POPUP_ANIM_INTERVAL_MS: u32 = 33;
+const POPUP_HEADER_PRESS_MS: i64 = 90;
 const POPUP_OPEN_ANIM_MS: i64 = 120;
 const POPUP_CLOSE_ANIM_MS: i64 = 90;
 const POPUP_SWITCH_ANIM_MS: i64 = 120;
 const POPUP_SWITCH_OFFSET_PX: i32 = 6;
 const FAVORITES_RELOAD_INTERVAL_MS: i64 = 1000;
+const POPUP_DESIRED_SIZE_CACHE_LIMIT: usize = 32;
 const BULLET_PREFIX: &str = "▸ ";
+const HEADER_TITLE_BUTTON_MARGIN: i32 = 12;
 
 static POPUP_LINE_BUDGET_CACHE: OnceLock<Mutex<Option<PopupLineBudgetCache>>> = OnceLock::new();
+static POPUP_LINE_SIGNATURE_CACHE: OnceLock<Mutex<Option<PopupLineSignatureCache>>> =
+    OnceLock::new();
+static POPUP_DESIRED_SIZE_CACHE: OnceLock<Mutex<Vec<PopupDesiredSizeCacheEntry>>> = OnceLock::new();
 static POPUP_ANIMATION: OnceLock<Mutex<Option<PopupAnimation>>> = OnceLock::new();
 static FAVORITES_CACHE: OnceLock<Mutex<FavoritesCache>> = OnceLock::new();
 static POPUP_SELECTION_STATE: OnceLock<Mutex<PopupSelectionState>> = OnceLock::new();
+static POPUP_HEADER_PRESS: OnceLock<Mutex<Option<HeaderButtonPress>>> = OnceLock::new();
 
 pub const POPUP_ANIM_TIMER_ID: usize = 100;
+pub const POPUP_HEADER_PRESS_TIMER_ID: usize = 101;
+
+#[derive(Debug, Clone, Copy)]
+struct PopupScale {
+    factor: f32,
+    padding_x: i32,
+    padding_y: i32,
+    line_gap: i32,
+    anchor_gap: i32,
+    max_width: i32,
+    min_width: i32,
+    max_content_width: i32,
+    min_content_width: i32,
+    header_height: i32,
+    header_button_size: i32,
+    header_button_gap: i32,
+    switch_offset_px: i32,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PopupLineBudgetKey {
     today_key: String,
     language: String,
     theme: String,
+    widget_scale: String,
     dpi_y: i32,
     enable_antell_restaurants: bool,
     show_prices: bool,
@@ -84,6 +108,38 @@ struct PopupLineBudgetCache {
     signatures: Vec<RestaurantCacheSignature>,
     max_wrapped_lines: Option<usize>,
     max_content_width_px: Option<i32>,
+}
+
+#[derive(Debug, Clone)]
+struct PopupLineSignatureCache {
+    key: PopupLineBudgetKey,
+    signatures: Vec<RestaurantCacheSignature>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PopupDesiredSizeKey {
+    today_key: String,
+    enable_antell_restaurants: bool,
+    language: String,
+    theme: String,
+    widget_scale: String,
+    dpi_y: i32,
+    show_prices: bool,
+    show_student_price: bool,
+    show_staff_price: bool,
+    show_guest_price: bool,
+    hide_expensive_student_meals: bool,
+    show_allergens: bool,
+    highlight_gluten_free: bool,
+    highlight_veg: bool,
+    highlight_lactose_free: bool,
+}
+
+#[derive(Debug, Clone)]
+struct PopupDesiredSizeCacheEntry {
+    key: PopupDesiredSizeKey,
+    width: i32,
+    height: i32,
 }
 
 #[derive(Debug, Clone)]
@@ -229,6 +285,51 @@ struct HeaderLayout {
     close: RECT,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct HeaderButtonPress {
+    hwnd: HWND,
+    action: HeaderButtonAction,
+    until_epoch_ms: i64,
+}
+
+fn scale_px(base: i32, factor: f32) -> i32 {
+    ((base as f32) * factor).round() as i32
+}
+
+fn widget_scale_factor(value: &str) -> f32 {
+    match value {
+        "125" => 1.25,
+        "150" => 1.50,
+        _ => 1.0,
+    }
+}
+
+fn popup_scale(settings: &Settings) -> PopupScale {
+    let factor = widget_scale_factor(&settings.widget_scale);
+    let padding_x = scale_px(PADDING_X, factor).max(8);
+    let padding_y = scale_px(PADDING_Y, factor).max(6);
+    let min_width = scale_px(POPUP_MIN_WIDTH, factor).max(220);
+    let max_width = scale_px(POPUP_MAX_WIDTH, factor).max(min_width);
+    let max_content_width = (max_width - padding_x * 2).max(40);
+    let min_content_width = (min_width - padding_x * 2).max(40);
+
+    PopupScale {
+        factor,
+        padding_x,
+        padding_y,
+        line_gap: scale_px(LINE_GAP, factor).max(1),
+        anchor_gap: scale_px(ANCHOR_GAP, factor).max(0),
+        max_width,
+        min_width,
+        max_content_width,
+        min_content_width,
+        header_height: scale_px(HEADER_HEIGHT, factor).max(30),
+        header_button_size: scale_px(HEADER_BUTTON_SIZE, factor).max(18),
+        header_button_gap: scale_px(HEADER_BUTTON_GAP, factor).max(4),
+        switch_offset_px: scale_px(POPUP_SWITCH_OFFSET_PX, factor).max(2),
+    }
+}
+
 pub fn toggle_popup(hwnd: HWND, state: &AppState) {
     if is_visible(hwnd) {
         begin_close_animation(hwnd, state);
@@ -262,7 +363,8 @@ pub fn show_popup_at(hwnd: HWND, state: &AppState, anchor: POINT) {
 pub fn show_popup_for_tray_icon(hwnd: HWND, state: &AppState, tray_rect: RECT) {
     unsafe {
         let (width, height) = desired_size(hwnd, state);
-        let (x, y) = position_near_tray_rect(width, height, tray_rect);
+        let scale = popup_scale(&state.settings);
+        let (x, y) = position_near_tray_rect(width, height, tray_rect, scale.anchor_gap);
         let _ = SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, SWP_SHOWWINDOW);
         begin_open_animation(hwnd, state);
         InvalidateRect(hwnd, None, true);
@@ -282,8 +384,33 @@ pub fn resize_popup_keep_position(hwnd: HWND, state: &AppState) {
             y: rect.bottom,
         };
         let (x, y) = position_near_point(width, height, anchor);
+        if rect.left == x
+            && rect.top == y
+            && (rect.right - rect.left) == width
+            && (rect.bottom - rect.top) == height
+        {
+            InvalidateRect(hwnd, None, true);
+            return;
+        }
         let _ = SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, SWP_SHOWWINDOW);
         InvalidateRect(hwnd, None, true);
+    }
+}
+
+pub fn invalidate_layout_budget_cache() {
+    let budget_cache = POPUP_LINE_BUDGET_CACHE.get_or_init(|| Mutex::new(None));
+    if let Ok(mut guard) = budget_cache.lock() {
+        *guard = None;
+    }
+
+    let signature_cache = POPUP_LINE_SIGNATURE_CACHE.get_or_init(|| Mutex::new(None));
+    if let Ok(mut guard) = signature_cache.lock() {
+        *guard = None;
+    }
+
+    let desired_size_cache = POPUP_DESIRED_SIZE_CACHE.get_or_init(|| Mutex::new(Vec::new()));
+    if let Ok(mut guard) = desired_size_cache.lock() {
+        guard.clear();
     }
 }
 
@@ -291,9 +418,80 @@ pub fn hide_popup(hwnd: HWND) {
     unsafe {
         clear_animation_state(hwnd);
         clear_selection_state(hwnd);
+        clear_header_button_press(hwnd);
         let _ = KillTimer(hwnd, POPUP_ANIM_TIMER_ID);
+        let _ = KillTimer(hwnd, POPUP_HEADER_PRESS_TIMER_ID);
         ShowWindow(hwnd, SW_HIDE);
     }
+}
+
+pub fn press_navigation_button(hwnd: HWND, direction: i32) {
+    let action = if direction < 0 {
+        HeaderButtonAction::Prev
+    } else if direction > 0 {
+        HeaderButtonAction::Next
+    } else {
+        return;
+    };
+
+    let store = POPUP_HEADER_PRESS.get_or_init(|| Mutex::new(None));
+    if let Ok(mut guard) = store.lock() {
+        *guard = Some(HeaderButtonPress {
+            hwnd,
+            action,
+            until_epoch_ms: now_epoch_ms() + POPUP_HEADER_PRESS_MS,
+        });
+    }
+    unsafe {
+        let _ = SetTimer(
+            hwnd,
+            POPUP_HEADER_PRESS_TIMER_ID,
+            POPUP_HEADER_PRESS_MS.max(1) as u32,
+            None,
+        );
+        InvalidateRect(hwnd, None, true);
+    }
+}
+
+pub fn tick_header_button_press(hwnd: HWND) {
+    let store = POPUP_HEADER_PRESS.get_or_init(|| Mutex::new(None));
+    let should_clear = match store.lock() {
+        Ok(guard) => match guard.as_ref() {
+            Some(press) => press.hwnd == hwnd && now_epoch_ms() >= press.until_epoch_ms,
+            None => true,
+        },
+        Err(_) => true,
+    };
+    if should_clear {
+        clear_header_button_press(hwnd);
+        unsafe {
+            let _ = KillTimer(hwnd, POPUP_HEADER_PRESS_TIMER_ID);
+            InvalidateRect(hwnd, None, true);
+        }
+    }
+}
+
+fn clear_header_button_press(hwnd: HWND) {
+    let store = POPUP_HEADER_PRESS.get_or_init(|| Mutex::new(None));
+    if let Ok(mut guard) = store.lock() {
+        if guard.as_ref().is_some_and(|press| press.hwnd == hwnd) {
+            *guard = None;
+        }
+    }
+}
+
+fn pressed_header_button(hwnd: HWND) -> Option<HeaderButtonAction> {
+    let store = POPUP_HEADER_PRESS.get_or_init(|| Mutex::new(None));
+    let mut guard = store.lock().ok()?;
+    let now = now_epoch_ms();
+    if let Some(press) = guard.as_ref() {
+        if press.hwnd != hwnd || now >= press.until_epoch_ms {
+            *guard = None;
+            return None;
+        }
+        return Some(press.action);
+    }
+    None
 }
 
 fn begin_open_animation(hwnd: HWND, state: &AppState) {
@@ -447,14 +645,20 @@ pub fn tick_animation(hwnd: HWND) {
     }
 }
 
-pub fn header_button_at(hwnd: HWND, x: i32, y: i32) -> Option<HeaderButtonAction> {
+pub fn header_button_at(
+    hwnd: HWND,
+    settings: &Settings,
+    x: i32,
+    y: i32,
+) -> Option<HeaderButtonAction> {
     unsafe {
         let mut rect = RECT::default();
         if GetClientRect(hwnd, &mut rect).is_err() {
             return None;
         }
         let width = rect.right - rect.left;
-        let layout = header_layout(width);
+        let scale = popup_scale(settings);
+        let layout = header_layout(width, &scale);
         if point_in_rect(&layout.prev, x, y) {
             return Some(HeaderButtonAction::Prev);
         }
@@ -609,13 +813,14 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
         DeleteObject(brush);
         SetBkMode(hdc, TRANSPARENT);
 
+        let scale = popup_scale(&state.settings);
         let (normal_font, bold_font, small_font, small_bold_font) =
-            create_fonts(hdc, &state.settings.theme);
+            create_fonts(hdc, &state.settings.theme, scale.factor);
         let _old_font = SelectObject(hdc, normal_font);
 
         let metrics = text_metrics(hdc, normal_font);
-        let line_height = metrics.tmHeight as i32 + LINE_GAP;
-        let content_width = (width - PADDING_X * 2).max(40);
+        let line_height = metrics.tmHeight as i32 + scale.line_gap;
+        let content_width = (width - scale.padding_x * 2).max(40);
         let animation = current_animation_frame(hwnd);
         let favorites = current_favorites_snapshot();
 
@@ -623,13 +828,14 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
             left: rect.left,
             top: rect.top,
             right: rect.right,
-            bottom: rect.top + HEADER_HEIGHT,
+            bottom: rect.top + scale.header_height,
         };
         let header_brush = CreateSolidBrush(palette.header_bg_color);
         FillRect(hdc, &header_rect, header_brush);
         DeleteObject(header_brush);
 
-        let layout = header_layout(width);
+        let layout = header_layout(width, &scale);
+        let pressed_button = pressed_header_button(hwnd);
         draw_header_button(
             hdc,
             &layout.prev,
@@ -637,6 +843,7 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
             palette.button_bg_color,
             palette.body_text_color,
             normal_font,
+            pressed_button == Some(HeaderButtonAction::Prev),
         );
         draw_header_button(
             hdc,
@@ -645,6 +852,7 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
             palette.button_bg_color,
             palette.body_text_color,
             normal_font,
+            pressed_button == Some(HeaderButtonAction::Next),
         );
         draw_header_button(
             hdc,
@@ -653,6 +861,7 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
             palette.button_bg_color,
             palette.body_text_color,
             normal_font,
+            false,
         );
 
         let divider_rect = RECT {
@@ -674,7 +883,7 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
                     progress,
                 } => {
                     let y_offset =
-                        ((1.0 - progress) * POPUP_SWITCH_OFFSET_PX as f32).round() as i32;
+                        ((1.0 - progress) * scale.switch_offset_px as f32).round() as i32;
                     let layer_body_text =
                         lerp_color(palette.bg_color, palette.body_text_color, progress);
                     let layer_heading =
@@ -691,6 +900,7 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
                         &title,
                         &lines,
                         DrawLayerParams {
+                            scale,
                             width,
                             content_width,
                             body_text_color: layer_body_text,
@@ -719,7 +929,7 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
                     title,
                     progress,
                 } => {
-                    let y_offset = -((progress * POPUP_SWITCH_OFFSET_PX as f32).round() as i32);
+                    let y_offset = 0;
                     let layer_body_text =
                         lerp_color(palette.bg_color, palette.body_text_color, 1.0 - progress);
                     let layer_heading =
@@ -743,6 +953,7 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
                         &title,
                         &lines,
                         DrawLayerParams {
+                            scale,
                             width,
                             content_width,
                             body_text_color: layer_body_text,
@@ -776,9 +987,9 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
                 } => {
                     let dir = if direction >= 0 { 1 } else { -1 };
                     let old_offset =
-                        -dir * ((progress * POPUP_SWITCH_OFFSET_PX as f32).round() as i32);
+                        -dir * ((progress * scale.switch_offset_px as f32).round() as i32);
                     let new_offset =
-                        dir * (((1.0 - progress) * POPUP_SWITCH_OFFSET_PX as f32).round() as i32);
+                        dir * (((1.0 - progress) * scale.switch_offset_px as f32).round() as i32);
                     let old_body_text =
                         lerp_color(palette.bg_color, palette.body_text_color, 1.0 - progress);
                     let old_heading =
@@ -812,6 +1023,7 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
                         &old_title,
                         &old_lines,
                         DrawLayerParams {
+                            scale,
                             width,
                             content_width,
                             body_text_color: old_body_text,
@@ -839,6 +1051,7 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
                         &new_title,
                         &new_lines,
                         DrawLayerParams {
+                            scale,
                             width,
                             content_width,
                             body_text_color: new_body_text,
@@ -878,6 +1091,7 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
                 &title,
                 &lines,
                 DrawLayerParams {
+                    scale,
                     width,
                     content_width,
                     body_text_color: palette.body_text_color,
@@ -913,6 +1127,7 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
 }
 
 struct DrawLayerParams<'a> {
+    scale: PopupScale,
     width: i32,
     content_width: i32,
     body_text_color: COLORREF,
@@ -941,20 +1156,21 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
         SetTextColor(hdc, params.header_title_color);
     }
 
-    let clipped_title = fit_text_to_width(
-        hdc,
-        title,
-        (params.layout.close.left - params.layout.next.right - 24).max(40),
-    );
-    let title_width = text_width(hdc, &clipped_title);
-    let title_x = ((params.width - title_width) / 2).max(params.layout.next.right + 12);
-    let title_y = ((HEADER_HEIGHT - params.metrics.tmHeight as i32) / 2 - 1) + params.y_offset;
-    draw_text_line(hdc, &clipped_title, title_x, title_y);
+    let full_title = normalize_text(title);
+    let title_width = text_width(hdc, &full_title);
+    let title_button_margin = scale_px(HEADER_TITLE_BUTTON_MARGIN, params.scale.factor);
+    let min_title_x = params.layout.next.right + title_button_margin;
+    let max_title_x =
+        (params.layout.close.left - title_width - title_button_margin).max(min_title_x);
+    let title_x = ((params.width - title_width) / 2).clamp(min_title_x, max_title_x);
+    let title_y =
+        ((params.scale.header_height - params.metrics.tmHeight as i32) / 2 - 1) + params.y_offset;
+    draw_text_line(hdc, &full_title, title_x, title_y);
 
     let bullet_width = text_width_with_font(hdc, params.normal_font, BULLET_PREFIX);
     let main_wrap_width = (params.content_width - bullet_width).max(24);
 
-    let mut y = HEADER_HEIGHT + PADDING_Y + params.y_offset;
+    let mut y = params.scale.header_height + params.scale.padding_y + params.y_offset;
     let mut capture = params.capture;
     for line in lines {
         match line {
@@ -968,7 +1184,7 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                     y += params.line_height;
                 } else {
                     for row in wrapped {
-                        draw_text_line(hdc, &row, PADDING_X, y);
+                        draw_text_line(hdc, &row, params.scale.padding_x, y);
                         y += params.line_height;
                     }
                 }
@@ -983,7 +1199,7 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                     y += params.line_height;
                 } else {
                     for row in wrapped {
-                        draw_text_line(hdc, &row, PADDING_X, y);
+                        draw_text_line(hdc, &row, params.scale.padding_x, y);
                         y += params.line_height;
                     }
                 }
@@ -1035,19 +1251,15 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                         SetTextColor(hdc, params.body_text_color);
                     }
                     let clipped_main = fit_text_to_width(hdc, main, max_main);
-                    let line_x = PADDING_X + bullet_width;
+                    let line_x = params.scale.padding_x + bullet_width;
                     let row = WrappedRow {
                         start: 0,
                         end: clipped_main.len(),
                         text: clipped_main.clone(),
                     };
-                    let row_segments = segments_for_row(
-                        &clipped_main,
-                        row.start,
-                        row.end,
-                        &favorite_ranges,
-                    );
-                    draw_text_line(hdc, BULLET_PREFIX, PADDING_X, y);
+                    let row_segments =
+                        segments_for_row(&clipped_main, row.start, row.end, &favorite_ranges);
+                    draw_text_line(hdc, BULLET_PREFIX, params.scale.padding_x, y);
                     if let Some(selection) = selected_item_range {
                         draw_selection_bg_for_row(
                             hdc,
@@ -1082,9 +1294,10 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                         );
                     }
                     if !suffix_segments.is_empty() {
-                        let main_width = text_width_with_font(hdc, params.normal_font, &clipped_main);
+                        let main_width =
+                            text_width_with_font(hdc, params.normal_font, &clipped_main);
                         let suffix_x = line_x + main_width + 4;
-                        if suffix_x < (PADDING_X + params.content_width) {
+                        if suffix_x < (params.scale.padding_x + params.content_width) {
                             draw_text_segments(
                                 hdc,
                                 suffix_segments,
@@ -1101,15 +1314,19 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                     continue;
                 }
 
-                let wrapped_main =
-                    wrap_text_to_width_with_font_rows(hdc, params.normal_font, main, main_wrap_width);
+                let wrapped_main = wrap_text_to_width_with_font_rows(
+                    hdc,
+                    params.normal_font,
+                    main,
+                    main_wrap_width,
+                );
                 if wrapped_main.is_empty() {
                     y += params.line_height;
                 } else {
                     for (idx, row) in wrapped_main.iter().enumerate() {
-                        let line_x = PADDING_X + bullet_width;
+                        let line_x = params.scale.padding_x + bullet_width;
                         if idx == 0 {
-                            draw_text_line(hdc, BULLET_PREFIX, PADDING_X, y);
+                            draw_text_line(hdc, BULLET_PREFIX, params.scale.padding_x, y);
                         }
                         if let Some(selection) = selected_item_range {
                             draw_selection_bg_for_row(
@@ -1163,7 +1380,7 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                             draw_text_segments(
                                 hdc,
                                 suffix_segments,
-                                PADDING_X + bullet_width,
+                                params.scale.padding_x + bullet_width,
                                 y + 1,
                                 params.small_font,
                                 params.small_bold_font,
@@ -1179,7 +1396,7 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                                 SetTextColor(hdc, params.suffix_color);
                             }
                             for row in wrapped_suffix {
-                                draw_text_line(hdc, &row, PADDING_X + bullet_width, y);
+                                draw_text_line(hdc, &row, params.scale.padding_x + bullet_width, y);
                                 y += params.line_height;
                             }
                         }
@@ -1368,10 +1585,7 @@ fn favorite_match_ranges(text: &str, favorites: &FavoritesSnapshot) -> Vec<(usiz
 
     let mut kept: Vec<(usize, usize)> = Vec::new();
     for range in candidates {
-        if kept
-            .iter()
-            .any(|existing| ranges_overlap(*existing, range))
-        {
+        if kept.iter().any(|existing| ranges_overlap(*existing, range)) {
             continue;
         }
         kept.push(range);
@@ -1550,11 +1764,7 @@ fn wrap_text_to_width_rows(hdc: HDC, text: &str, max_width: i32) -> Vec<WrappedR
             current_end = word.end;
         } else {
             rows.extend(split_long_token_to_width_rows(
-                hdc,
-                &clean,
-                word.start,
-                word.end,
-                limit,
+                hdc, &clean, word.start, word.end, limit,
             ));
         }
     }
@@ -1760,40 +1970,60 @@ fn draw_header_button(
     bg_color: COLORREF,
     text_color: COLORREF,
     font: HFONT,
+    pressed: bool,
 ) {
+    let mut button_rect = *rect;
+    let bg = if pressed {
+        lerp_color(bg_color, rgb(0, 0, 0), 0.28)
+    } else {
+        bg_color
+    };
+    if pressed
+        && button_rect.right - button_rect.left > 4
+        && button_rect.bottom - button_rect.top > 4
+    {
+        button_rect.left += 1;
+        button_rect.top += 1;
+        button_rect.right -= 1;
+        button_rect.bottom -= 1;
+    }
     unsafe {
-        let brush = CreateSolidBrush(bg_color);
-        FillRect(hdc, rect, brush);
+        let brush = CreateSolidBrush(bg);
+        FillRect(hdc, &button_rect, brush);
         DeleteObject(brush);
         SelectObject(hdc, font);
         SetTextColor(hdc, text_color);
     }
     let label_width = text_width(hdc, label);
     let metrics = text_metrics(hdc, font);
-    let x = rect.left + ((rect.right - rect.left - label_width) / 2).max(0);
-    let y = rect.top + ((rect.bottom - rect.top - metrics.tmHeight as i32) / 2).max(0);
+    let x = button_rect.left
+        + ((button_rect.right - button_rect.left - label_width) / 2).max(0)
+        + if pressed { 1 } else { 0 };
+    let y = button_rect.top
+        + ((button_rect.bottom - button_rect.top - metrics.tmHeight as i32) / 2).max(0)
+        + if pressed { 1 } else { 0 };
     draw_text_line(hdc, label, x, y);
 }
 
-fn header_layout(width: i32) -> HeaderLayout {
-    let top = (HEADER_HEIGHT - HEADER_BUTTON_SIZE) / 2;
+fn header_layout(width: i32, scale: &PopupScale) -> HeaderLayout {
+    let top = (scale.header_height - scale.header_button_size) / 2;
     let prev = RECT {
-        left: PADDING_X,
+        left: scale.padding_x,
         top,
-        right: PADDING_X + HEADER_BUTTON_SIZE,
-        bottom: top + HEADER_BUTTON_SIZE,
+        right: scale.padding_x + scale.header_button_size,
+        bottom: top + scale.header_button_size,
     };
     let next = RECT {
-        left: prev.right + HEADER_BUTTON_GAP,
+        left: prev.right + scale.header_button_gap,
         top,
-        right: prev.right + HEADER_BUTTON_GAP + HEADER_BUTTON_SIZE,
-        bottom: top + HEADER_BUTTON_SIZE,
+        right: prev.right + scale.header_button_gap + scale.header_button_size,
+        bottom: top + scale.header_button_size,
     };
     let close = RECT {
-        left: width - PADDING_X - HEADER_BUTTON_SIZE,
+        left: width - scale.padding_x - scale.header_button_size,
         top,
-        right: width - PADDING_X,
-        bottom: top + HEADER_BUTTON_SIZE,
+        right: width - scale.padding_x,
+        bottom: top + scale.header_button_size,
     };
     HeaderLayout { prev, next, close }
 }
@@ -1809,6 +2039,20 @@ fn header_title(state: &AppState) -> String {
         .position(|entry| entry.code == state.settings.restaurant_code)
         .unwrap_or(0);
     format!("{} ({}/{})", list[index].name, index + 1, list.len())
+}
+
+fn max_header_title_width(hdc: HDC, font: HFONT, settings: &Settings) -> i32 {
+    let list = available_restaurants(settings.enable_antell_restaurants);
+    if list.is_empty() {
+        return text_width_with_font(hdc, font, "Compass Lunch");
+    }
+    let total = list.len();
+    let mut max_width = 0;
+    for (idx, restaurant) in list.iter().enumerate() {
+        let title = format!("{} ({}/{})", restaurant.name, idx + 1, total);
+        max_width = max(max_width, text_width_with_font(hdc, font, &title));
+    }
+    max_width
 }
 
 fn text_metrics(hdc: HDC, font: HFONT) -> TEXTMETRICW {
@@ -1837,8 +2081,16 @@ fn desired_size(hwnd: HWND, state: &AppState) -> (i32, i32) {
     unsafe {
         let hdc = windows::Win32::Graphics::Gdi::GetDC(hwnd);
         let dpi_y = GetDeviceCaps(hdc, LOGPIXELSY);
+        if let Some(key) = desired_size_cache_key(state, dpi_y) {
+            if let Some(size) = cached_desired_size(&key) {
+                windows::Win32::Graphics::Gdi::ReleaseDC(hwnd, hdc);
+                return size;
+            }
+        }
+
+        let scale = popup_scale(&state.settings);
         let (normal_font, bold_font, small_font, small_bold_font) =
-            create_fonts(hdc, &state.settings.theme);
+            create_fonts(hdc, &state.settings.theme, scale.factor);
         let current_lines = build_lines(state);
         let current_metrics = measure_lines_layout(
             hdc,
@@ -1847,7 +2099,7 @@ fn desired_size(hwnd: HWND, state: &AppState) -> (i32, i32) {
             small_font,
             small_bold_font,
             &current_lines,
-            POPUP_MAX_CONTENT_WIDTH,
+            scale.max_content_width,
         );
         let budget = popup_cached_layout_budget(
             state,
@@ -1861,7 +2113,7 @@ fn desired_size(hwnd: HWND, state: &AppState) -> (i32, i32) {
         let target_content_width = budget
             .max_content_width_px
             .unwrap_or(current_metrics.required_content_width)
-            .clamp(POPUP_MIN_CONTENT_WIDTH, POPUP_MAX_CONTENT_WIDTH);
+            .clamp(scale.min_content_width, scale.max_content_width);
         let current_wrapped_metrics = measure_lines_layout(
             hdc,
             normal_font,
@@ -1879,24 +2131,44 @@ fn desired_size(hwnd: HWND, state: &AppState) -> (i32, i32) {
         }
         target_lines = target_lines.min(MAX_DYNAMIC_LINES);
         let metrics = text_metrics(hdc, normal_font);
-        let line_height = metrics.tmHeight as i32 + LINE_GAP;
-        let height = HEADER_HEIGHT + (target_lines as i32 * line_height) + PADDING_Y * 2;
-        let width = (target_content_width + PADDING_X * 2).clamp(POPUP_MIN_WIDTH, POPUP_MAX_WIDTH);
+        let line_height = metrics.tmHeight as i32 + scale.line_gap;
+        let height =
+            scale.header_height + (target_lines as i32 * line_height) + scale.padding_y * 2;
+        let title_width = max_header_title_width(hdc, bold_font, &state.settings);
+        let title_button_margin = scale_px(HEADER_TITLE_BUTTON_MARGIN, scale.factor);
+        let header_reserved = scale.padding_x * 2
+            + scale.header_button_size * 3
+            + scale.header_button_gap
+            + title_button_margin * 2;
+        let header_required_width = title_width + header_reserved;
+        let width_candidate = max(
+            target_content_width + scale.padding_x * 2,
+            header_required_width,
+        );
+        let max_width = max(scale.max_width, header_required_width);
+        let width = width_candidate.clamp(scale.min_width, max_width);
         DeleteObject(normal_font);
         DeleteObject(bold_font);
         DeleteObject(small_font);
         DeleteObject(small_bold_font);
         windows::Win32::Graphics::Gdi::ReleaseDC(hwnd, hdc);
 
-        (width, height.max(HEADER_HEIGHT + 120))
+        let size = (
+            width,
+            height.max(scale.header_height + scale_px(120, scale.factor)),
+        );
+        if let Some(key) = desired_size_cache_key(state, dpi_y) {
+            update_desired_size_cache(key, size);
+        }
+        size
     }
 }
 
-fn create_fonts(hdc: HDC, theme: &str) -> (HFONT, HFONT, HFONT, HFONT) {
+fn create_fonts(hdc: HDC, theme: &str, scale_factor: f32) -> (HFONT, HFONT, HFONT, HFONT) {
     unsafe {
         let dpi = GetDeviceCaps(hdc, LOGPIXELSY);
-        let height_normal = -MulDiv(12, dpi, 72);
-        let height_small = -MulDiv(10, dpi, 72);
+        let height_normal = -MulDiv(scale_px(12, scale_factor).max(8), dpi, 72);
+        let height_small = -MulDiv(scale_px(10, scale_factor).max(7), dpi, 72);
         let face = to_wstring(theme_font_family(theme));
 
         let normal = CreateFontW(
@@ -1996,7 +2268,7 @@ fn build_lines(state: &AppState) -> Vec<Line> {
                     staff: state.settings.show_staff_price,
                     guest: state.settings.show_guest_price,
                 };
-                append_menus(
+                let rendered_groups = append_menus(
                     &mut lines,
                     menu,
                     state.provider,
@@ -2008,6 +2280,9 @@ fn build_lines(state: &AppState) -> Vec<Line> {
                     state.settings.highlight_lactose_free,
                     state.settings.hide_expensive_student_meals,
                 );
+                if rendered_groups == 0 && state.status != FetchStatus::Loading {
+                    lines.push(Line::Text(text_for(&state.settings.language, "noMenu")));
+                }
             } else if state.status != FetchStatus::Loading {
                 lines.push(Line::Text(text_for(&state.settings.language, "noMenu")));
             }
@@ -2063,7 +2338,7 @@ fn popup_cached_layout_budget(
 ) -> CachedLayoutBudget {
     let today_key = local_today_key();
     let key = line_budget_key(&state.settings, &today_key, dpi_y);
-    let signatures = cache_signatures(&state.settings);
+    let signatures = cache_signatures(&state.settings, &key);
     if let Some(budget) = cached_line_budget(&key, &signatures) {
         return budget;
     }
@@ -2086,6 +2361,7 @@ fn line_budget_key(settings: &Settings, today_key: &str, dpi_y: i32) -> PopupLin
         today_key: today_key.to_string(),
         language: settings.language.clone(),
         theme: settings.theme.clone(),
+        widget_scale: settings.widget_scale.clone(),
         dpi_y,
         enable_antell_restaurants: settings.enable_antell_restaurants,
         show_prices: settings.show_prices,
@@ -2100,7 +2376,19 @@ fn line_budget_key(settings: &Settings, today_key: &str, dpi_y: i32) -> PopupLin
     }
 }
 
-fn cache_signatures(settings: &Settings) -> Vec<RestaurantCacheSignature> {
+fn cache_signatures(
+    settings: &Settings,
+    key: &PopupLineBudgetKey,
+) -> Vec<RestaurantCacheSignature> {
+    let cache = POPUP_LINE_SIGNATURE_CACHE.get_or_init(|| Mutex::new(None));
+    if let Ok(guard) = cache.lock() {
+        if let Some(entry) = guard.as_ref() {
+            if entry.key == *key {
+                return entry.signatures.clone();
+            }
+        }
+    }
+
     let mut signatures = Vec::new();
     for restaurant in available_restaurants(settings.enable_antell_restaurants) {
         let mtime_ms =
@@ -2111,6 +2399,14 @@ fn cache_signatures(settings: &Settings) -> Vec<RestaurantCacheSignature> {
             mtime_ms,
         });
     }
+
+    if let Ok(mut guard) = cache.lock() {
+        *guard = Some(PopupLineSignatureCache {
+            key: key.clone(),
+            signatures: signatures.clone(),
+        });
+    }
+
     signatures
 }
 
@@ -2147,6 +2443,57 @@ fn update_line_budget_cache(
     }
 }
 
+fn desired_size_cache_key(state: &AppState, dpi_y: i32) -> Option<PopupDesiredSizeKey> {
+    if state.status == FetchStatus::Loading {
+        return None;
+    }
+
+    Some(PopupDesiredSizeKey {
+        today_key: local_today_key(),
+        enable_antell_restaurants: state.settings.enable_antell_restaurants,
+        language: state.settings.language.clone(),
+        theme: state.settings.theme.clone(),
+        widget_scale: state.settings.widget_scale.clone(),
+        dpi_y,
+        show_prices: state.settings.show_prices,
+        show_student_price: state.settings.show_student_price,
+        show_staff_price: state.settings.show_staff_price,
+        show_guest_price: state.settings.show_guest_price,
+        hide_expensive_student_meals: state.settings.hide_expensive_student_meals,
+        show_allergens: state.settings.show_allergens,
+        highlight_gluten_free: state.settings.highlight_gluten_free,
+        highlight_veg: state.settings.highlight_veg,
+        highlight_lactose_free: state.settings.highlight_lactose_free,
+    })
+}
+
+fn cached_desired_size(key: &PopupDesiredSizeKey) -> Option<(i32, i32)> {
+    let cache = POPUP_DESIRED_SIZE_CACHE.get_or_init(|| Mutex::new(Vec::new()));
+    let mut guard = cache.lock().ok()?;
+    let index = guard.iter().position(|entry| entry.key == *key)?;
+    let entry = guard.remove(index);
+    let size = (entry.width, entry.height);
+    guard.push(entry);
+    Some(size)
+}
+
+fn update_desired_size_cache(key: PopupDesiredSizeKey, size: (i32, i32)) {
+    let cache = POPUP_DESIRED_SIZE_CACHE.get_or_init(|| Mutex::new(Vec::new()));
+    if let Ok(mut guard) = cache.lock() {
+        if let Some(index) = guard.iter().position(|entry| entry.key == key) {
+            guard.remove(index);
+        }
+        guard.push(PopupDesiredSizeCacheEntry {
+            key,
+            width: size.0,
+            height: size.1,
+        });
+        while guard.len() > POPUP_DESIRED_SIZE_CACHE_LIMIT {
+            guard.remove(0);
+        }
+    }
+}
+
 fn max_today_cached_layout_budget(
     state: &AppState,
     today_key: &str,
@@ -2157,24 +2504,29 @@ fn max_today_cached_layout_budget(
     small_bold_font: HFONT,
 ) -> CachedLayoutBudget {
     let settings = &state.settings;
+    let scale = popup_scale(settings);
     let mut max_wrapped_lines: Option<usize> = None;
     let mut max_content_width_px: Option<i32> = None;
 
     for restaurant in available_restaurants(settings.enable_antell_restaurants) {
-        let raw = match cache::read_cache(restaurant.provider, restaurant.code, &settings.language)
-        {
-            Some(payload) => payload,
-            None => continue,
-        };
+        let parsed = if is_hard_closed_today(restaurant) {
+            api::closed_today_fetch_output(restaurant, &settings.language)
+        } else {
+            let raw =
+                match cache::read_cache(restaurant.provider, restaurant.code, &settings.language) {
+                    Some(payload) => payload,
+                    None => continue,
+                };
 
-        let parsed = match api::parse_cached_payload(
-            &raw,
-            restaurant.provider,
-            restaurant,
-            &settings.language,
-        ) {
-            Ok(value) => value,
-            Err(_) => continue,
+            match api::parse_cached_payload(
+                &raw,
+                restaurant.provider,
+                restaurant,
+                &settings.language,
+            ) {
+                Ok(value) => value,
+                Err(_) => continue,
+            }
         };
 
         if !parsed.ok || !is_today_valid_cache(&parsed, restaurant, settings, today_key) {
@@ -2191,7 +2543,7 @@ fn max_today_cached_layout_budget(
             small_font,
             small_bold_font,
             &candidate_lines,
-            POPUP_MAX_CONTENT_WIDTH,
+            scale.max_content_width,
         );
         max_wrapped_lines = Some(
             max_wrapped_lines.map_or(metrics.wrapped_line_count, |prev| {
@@ -2217,6 +2569,10 @@ fn is_today_valid_cache(
     settings: &Settings,
     today_key: &str,
 ) -> bool {
+    if is_hard_closed_today(restaurant) {
+        return true;
+    }
+
     match restaurant.provider {
         Provider::Antell => {
             cache::cache_mtime_ms(restaurant.provider, restaurant.code, &settings.language)
@@ -2319,7 +2675,12 @@ fn position_near_point(width: i32, height: i32, point: POINT) -> (i32, i32) {
     }
 }
 
-fn position_near_tray_rect(width: i32, height: i32, tray_rect: RECT) -> (i32, i32) {
+fn position_near_tray_rect(
+    width: i32,
+    height: i32,
+    tray_rect: RECT,
+    anchor_gap: i32,
+) -> (i32, i32) {
     unsafe {
         let center = POINT {
             x: (tray_rect.left + tray_rect.right) / 2,
@@ -2334,13 +2695,13 @@ fn position_near_tray_rect(width: i32, height: i32, tray_rect: RECT) -> (i32, i3
         }
 
         let mut x = tray_rect.right - width;
-        let mut y = tray_rect.top - height - ANCHOR_GAP;
+        let mut y = tray_rect.top - height - anchor_gap;
 
         if y < work_area.top {
-            y = tray_rect.bottom + ANCHOR_GAP;
+            y = tray_rect.bottom + anchor_gap;
         }
         if y + height > work_area.bottom {
-            y = (tray_rect.top - height - ANCHOR_GAP).max(work_area.top);
+            y = (tray_rect.top - height - anchor_gap).max(work_area.top);
         }
 
         if x < work_area.left {
@@ -2371,7 +2732,8 @@ fn append_menus(
     highlight_veg: bool,
     highlight_lactose_free: bool,
     hide_expensive_student_meals: bool,
-) {
+) -> usize {
+    let mut rendered_groups = 0;
     for group in &menu.menus {
         if provider == Provider::Compass && hide_expensive_student_meals {
             if let Some(price) = student_price_eur(&group.price) {
@@ -2381,17 +2743,15 @@ fn append_menus(
             }
         }
 
+        let renderable_components = renderable_menu_components(group);
+        if renderable_components.is_empty() {
+            continue;
+        }
+
         let heading = menu_heading(group, provider, show_prices, price_groups);
         lines.push(Line::Heading(heading));
-        for component in &group.components {
-            let component = normalize_text(component);
-            if component.is_empty() {
-                continue;
-            }
-            let (main, suffix) = split_component_suffix(&component);
-            if main.is_empty() {
-                continue;
-            }
+        rendered_groups += 1;
+        for (main, suffix) in renderable_components {
             if !show_allergens || suffix.is_empty() {
                 lines.push(Line::MenuItem {
                     main,
@@ -2411,6 +2771,7 @@ fn append_menus(
             }
         }
     }
+    rendered_groups
 }
 
 fn build_suffix_segments(
@@ -2556,18 +2917,15 @@ fn hit_test_row_for_item(
         .copied()
         .find(|row| y >= row.top && y <= row.bottom)
         .or_else(|| {
-            item_rows
-                .iter()
-                .copied()
-                .min_by_key(|row| {
-                    if y < row.top {
-                        row.top - y
-                    } else if y > row.bottom {
-                        y - row.bottom
-                    } else {
-                        0
-                    }
-                })
+            item_rows.iter().copied().min_by_key(|row| {
+                if y < row.top {
+                    row.top - y
+                } else if y > row.bottom {
+                    y - row.bottom
+                } else {
+                    0
+                }
+            })
         })?;
     let local = row_byte_index_from_x(row, x);
     Some((row, row.start + local))
@@ -2721,6 +3079,19 @@ fn theme_palette(theme: &str) -> ThemePalette {
             button_bg_color: COLORREF(0x00142D14),
             divider_color: COLORREF(0x00142D14),
         },
+        "amber" => ThemePalette {
+            bg_color: rgb(26, 16, 6),
+            body_text_color: rgb(255, 180, 24),
+            heading_color: rgb(255, 198, 72),
+            header_title_color: rgb(255, 207, 92),
+            suffix_color: rgb(194, 120, 24),
+            suffix_highlight_color: rgb(255, 224, 120),
+            favorite_highlight_color: rgb(255, 246, 166),
+            selection_bg_color: rgb(82, 45, 8),
+            header_bg_color: rgb(56, 31, 9),
+            button_bg_color: rgb(74, 42, 12),
+            divider_color: rgb(110, 63, 18),
+        },
         "teletext1" => ThemePalette {
             bg_color: rgb(0, 0, 0),
             body_text_color: rgb(255, 255, 255),
@@ -2769,7 +3140,7 @@ fn rgb(r: u8, g: u8, b: u8) -> COLORREF {
 
 fn theme_font_family(theme: &str) -> &'static str {
     match theme {
-        "teletext1" | "teletext2" => "Consolas",
+        "amber" | "teletext1" | "teletext2" => "Consolas",
         _ => "Segoe UI",
     }
 }
