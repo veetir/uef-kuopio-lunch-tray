@@ -9,41 +9,37 @@ permissions:
   contents: write
 
 jobs:
-  build-windows-gnu:
-    runs-on: ubuntu-latest
+  build-windows-msvc:
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install system deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y mingw-w64 zip
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-pc-windows-gnu
+          targets: x86_64-pc-windows-msvc
 
       - name: Build exe
-        run: |
-          cargo build --manifest-path windows-tray/Cargo.toml --release --target x86_64-pc-windows-gnu
+        shell: pwsh
+        run: cargo build --manifest-path windows-tray/Cargo.toml --release --target x86_64-pc-windows-msvc
 
       - name: Derive package filename
+        shell: pwsh
         run: |
-          if [[ "${GITHUB_REF:-}" == refs/tags/windows-v* ]]; then
-            VERSION="${GITHUB_REF_NAME#windows-v}"
-          else
-            SHORT_SHA="${GITHUB_SHA::7}"
-            VERSION="dev-${SHORT_SHA}"
-          fi
-          echo "WINDOWS_ZIP=compass-lunch-windows-x64-v${VERSION}.zip" >> "$GITHUB_ENV"
+          if ("${env:GITHUB_REF}" -like "refs/tags/windows-v*") {
+            $version = "${env:GITHUB_REF_NAME}".Substring("windows-v".Length)
+          } else {
+            $version = "dev-$("${env:GITHUB_SHA}".Substring(0, 7))"
+          }
+          "WINDOWS_ZIP=compass-lunch-windows-x64-v$version.zip" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Package artifact
+        shell: pwsh
         run: |
-          mkdir -p dist
-          cp windows-tray/target/x86_64-pc-windows-gnu/release/compass-lunch.exe dist/
-          cp windows-tray/README_windows.md dist/ || true
-          zip -j "dist/${WINDOWS_ZIP}" dist/compass-lunch.exe dist/README_windows.md
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item windows-tray/target/x86_64-pc-windows-msvc/release/compass-lunch.exe dist/
+          Copy-Item windows-tray/README_windows.md dist/
+          Compress-Archive -Path dist/compass-lunch.exe, dist/README_windows.md -DestinationPath "dist/${env:WINDOWS_ZIP}" -Force
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
