@@ -177,7 +177,7 @@ pub unsafe extern "system" fn tray_wndproc(
                 return LRESULT(0);
             }
             let app = &*(app);
-            match wparam.0 as usize {
+            match wparam.0 {
                 TIMER_REFRESH => {
                     app.refresh_current_from_timer();
                 }
@@ -414,11 +414,11 @@ pub unsafe extern "system" fn popup_wndproc(
             LRESULT(0)
         }
         WM_TIMER => {
-            if wparam.0 as usize == popup::POPUP_ANIM_TIMER_ID {
+            if wparam.0 == popup::POPUP_ANIM_TIMER_ID {
                 popup::tick_animation(hwnd);
                 return LRESULT(0);
             }
-            if wparam.0 as usize == popup::POPUP_HEADER_PRESS_TIMER_ID {
+            if wparam.0 == popup::POPUP_HEADER_PRESS_TIMER_ID {
                 popup::tick_header_button_press(hwnd);
                 return LRESULT(0);
             }

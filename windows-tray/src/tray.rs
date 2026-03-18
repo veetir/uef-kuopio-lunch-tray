@@ -112,13 +112,15 @@ pub fn restaurant_code_for_command(cmd: u16) -> Option<&'static str> {
 pub fn add_tray_icon(hwnd: HWND, callback_message: u32) -> anyhow::Result<()> {
     unsafe {
         let icon = select_tray_icon();
-        let mut data = NOTIFYICONDATAW::default();
-        data.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
-        data.hWnd = hwnd;
-        data.uID = TRAY_ICON_ID;
-        data.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
-        data.uCallbackMessage = callback_message;
-        data.hIcon = icon;
+        let mut data = NOTIFYICONDATAW {
+            cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
+            hWnd: hwnd,
+            uID: TRAY_ICON_ID,
+            uFlags: NIF_MESSAGE | NIF_ICON | NIF_TIP,
+            uCallbackMessage: callback_message,
+            hIcon: icon,
+            ..Default::default()
+        };
         let tip = to_wstring("Compass Lunch");
         let mut sz_tip = [0u16; 128];
         for (idx, ch) in tip.iter().enumerate().take(sz_tip.len() - 1) {
@@ -126,25 +128,27 @@ pub fn add_tray_icon(hwnd: HWND, callback_message: u32) -> anyhow::Result<()> {
         }
         data.szTip = sz_tip;
 
-        let ok = Shell_NotifyIconW(NIM_ADD, &mut data).as_bool();
+        let ok = Shell_NotifyIconW(NIM_ADD, &data).as_bool();
         if !ok {
             return Err(anyhow::anyhow!("Shell_NotifyIconW NIM_ADD failed"));
         }
         data.Anonymous.uVersion = NOTIFYICON_VERSION_4;
-        let _ = Shell_NotifyIconW(NIM_SETVERSION, &mut data);
+        let _ = Shell_NotifyIconW(NIM_SETVERSION, &data);
     }
     Ok(())
 }
 
 pub fn refresh_tray_icon(hwnd: HWND) {
     unsafe {
-        let mut data = NOTIFYICONDATAW::default();
-        data.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
-        data.hWnd = hwnd;
-        data.uID = TRAY_ICON_ID;
-        data.uFlags = NIF_ICON;
-        data.hIcon = select_tray_icon();
-        if !Shell_NotifyIconW(NIM_MODIFY, &mut data).as_bool() {
+        let data = NOTIFYICONDATAW {
+            cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
+            hWnd: hwnd,
+            uID: TRAY_ICON_ID,
+            uFlags: NIF_ICON,
+            hIcon: select_tray_icon(),
+            ..Default::default()
+        };
+        if !Shell_NotifyIconW(NIM_MODIFY, &data).as_bool() {
             log_line("tray icon refresh failed");
         }
     }
@@ -152,19 +156,23 @@ pub fn refresh_tray_icon(hwnd: HWND) {
 
 pub fn remove_tray_icon(hwnd: HWND) {
     unsafe {
-        let mut data = NOTIFYICONDATAW::default();
-        data.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
-        data.hWnd = hwnd;
-        data.uID = TRAY_ICON_ID;
-        let _ = Shell_NotifyIconW(NIM_DELETE, &mut data);
+        let data = NOTIFYICONDATAW {
+            cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
+            hWnd: hwnd,
+            uID: TRAY_ICON_ID,
+            ..Default::default()
+        };
+        let _ = Shell_NotifyIconW(NIM_DELETE, &data);
     }
 }
 
 pub fn tray_icon_rect(hwnd: HWND) -> Option<RECT> {
-    let mut ident = NOTIFYICONIDENTIFIER::default();
-    ident.cbSize = std::mem::size_of::<NOTIFYICONIDENTIFIER>() as u32;
-    ident.hWnd = hwnd;
-    ident.uID = TRAY_ICON_ID;
+    let ident = NOTIFYICONIDENTIFIER {
+        cbSize: std::mem::size_of::<NOTIFYICONIDENTIFIER>() as u32,
+        hWnd: hwnd,
+        uID: TRAY_ICON_ID,
+        ..Default::default()
+    };
     unsafe { Shell_NotifyIconGetRect(&ident).ok() }
 }
 
@@ -253,12 +261,7 @@ fn find_icon_path(file_name: &str) -> Option<PathBuf> {
             .join(file_name),
     ];
 
-    for candidate in candidates {
-        if candidate.exists() {
-            return Some(candidate);
-        }
-    }
-    None
+    candidates.into_iter().find(|candidate| candidate.exists())
 }
 
 fn system_uses_light_theme() -> Option<bool> {

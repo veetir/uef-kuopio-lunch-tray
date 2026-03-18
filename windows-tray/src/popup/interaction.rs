@@ -97,7 +97,7 @@ pub(super) fn finish_text_selection(hwnd: HWND, x: i32, y: i32) -> bool {
             let item = layout.items.get(drag.item_id);
             item.and_then(|text| {
                 text.get(selected.0..selected.1)
-                    .map(|value| favorites::normalize_snippet(value))
+                    .map(favorites::normalize_snippet)
                     .filter(|value| !value.is_empty())
             })
         }

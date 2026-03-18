@@ -1007,8 +1007,10 @@ fn date_key_from_epoch_ms(ms: i64) -> Option<String> {
 fn position_near_point(width: i32, height: i32, point: POINT) -> (i32, i32) {
     unsafe {
         let monitor = MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST);
-        let mut info = MONITORINFO::default();
-        info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+        let mut info = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
         let mut work_area = RECT::default();
         if GetMonitorInfoW(monitor, &mut info).as_bool() {
             work_area = info.rcWork;
@@ -1045,8 +1047,10 @@ fn position_near_tray_rect(
             y: (tray_rect.top + tray_rect.bottom) / 2,
         };
         let monitor = MonitorFromPoint(center, MONITOR_DEFAULTTONEAREST);
-        let mut info = MONITORINFO::default();
-        info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+        let mut info = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
         let mut work_area = RECT::default();
         if GetMonitorInfoW(monitor, &mut info).as_bool() {
             work_area = info.rcWork;

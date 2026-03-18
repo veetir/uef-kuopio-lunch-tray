@@ -32,14 +32,16 @@ pub(super) fn build_lines(state: &AppState) -> Vec<Line> {
                 let rendered_groups = append_menus(
                     &mut lines,
                     menu,
-                    state.provider,
-                    state.settings.show_prices,
-                    price_groups,
-                    state.settings.show_allergens,
-                    state.settings.highlight_gluten_free,
-                    state.settings.highlight_veg,
-                    state.settings.highlight_lactose_free,
-                    state.settings.hide_expensive_student_meals,
+                    MenuRenderOptions {
+                        provider: state.provider,
+                        show_prices: state.settings.show_prices,
+                        price_groups,
+                        show_allergens: state.settings.show_allergens,
+                        highlight_gluten_free: state.settings.highlight_gluten_free,
+                        highlight_veg: state.settings.highlight_veg,
+                        highlight_lactose_free: state.settings.highlight_lactose_free,
+                        hide_expensive_student_meals: state.settings.hide_expensive_student_meals,
+                    },
                 );
                 if rendered_groups == 0 && state.status != FetchStatus::Loading {
                     lines.push(Line::Text(text_for(&state.settings.language, "noMenu")));
@@ -76,9 +78,8 @@ pub(super) fn build_lines(state: &AppState) -> Vec<Line> {
     lines
 }
 
-fn append_menus(
-    lines: &mut Vec<Line>,
-    menu: &TodayMenu,
+#[derive(Debug, Clone, Copy)]
+struct MenuRenderOptions {
     provider: Provider,
     show_prices: bool,
     price_groups: PriceGroups,
@@ -87,10 +88,12 @@ fn append_menus(
     highlight_veg: bool,
     highlight_lactose_free: bool,
     hide_expensive_student_meals: bool,
-) -> usize {
+}
+
+fn append_menus(lines: &mut Vec<Line>, menu: &TodayMenu, options: MenuRenderOptions) -> usize {
     let mut rendered_groups = 0;
     for group in &menu.menus {
-        if provider == Provider::Compass && hide_expensive_student_meals {
+        if options.provider == Provider::Compass && options.hide_expensive_student_meals {
             if let Some(price) = student_price_eur(&group.price) {
                 if price > 4.0 {
                     continue;
@@ -103,11 +106,16 @@ fn append_menus(
             continue;
         }
 
-        let heading = menu_heading(group, provider, show_prices, price_groups);
+        let heading = menu_heading(
+            group,
+            options.provider,
+            options.show_prices,
+            options.price_groups,
+        );
         lines.push(Line::Heading(heading));
         rendered_groups += 1;
         for (main, suffix) in renderable_components {
-            if !show_allergens || suffix.is_empty() {
+            if !options.show_allergens || suffix.is_empty() {
                 lines.push(Line::MenuItem {
                     main,
                     suffix_segments: Vec::new(),
@@ -115,9 +123,9 @@ fn append_menus(
             } else {
                 let segments = build_suffix_segments(
                     &suffix,
-                    highlight_gluten_free,
-                    highlight_veg,
-                    highlight_lactose_free,
+                    options.highlight_gluten_free,
+                    options.highlight_veg,
+                    options.highlight_lactose_free,
                 );
                 lines.push(Line::MenuItem {
                     main,

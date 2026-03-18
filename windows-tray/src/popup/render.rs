@@ -381,6 +381,51 @@ struct DrawLayerParams<'a> {
     y_offset: i32,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct SegmentColors {
+    normal: COLORREF,
+    highlight: COLORREF,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SegmentFonts {
+    normal: HFONT,
+    bold: HFONT,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SegmentStyle {
+    fonts: SegmentFonts,
+    colors: SegmentColors,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LinePlacement {
+    x: i32,
+    y: i32,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RowBounds {
+    left: i32,
+    top: i32,
+    line_height: i32,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SelectionOverlay {
+    start: usize,
+    end: usize,
+    bg_color: COLORREF,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RowCaptureContext {
+    bounds: RowBounds,
+    hdc: HDC,
+    font: HFONT,
+}
+
 fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerParams<'_>) {
     unsafe {
         SelectObject(hdc, params.bold_font);
@@ -395,7 +440,7 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
         (params.layout.close.left - title_width - title_button_margin).max(min_title_x);
     let title_x = ((params.width - title_width) / 2).clamp(min_title_x, max_title_x);
     let title_y =
-        ((params.scale.header_height - params.metrics.tmHeight as i32) / 2 - 1) + params.y_offset;
+        ((params.scale.header_height - params.metrics.tmHeight) / 2 - 1) + params.y_offset;
     draw_text_line(hdc, &full_title, title_x, title_y);
 
     let bullet_width = text_width_with_font(hdc, params.normal_font, BULLET_PREFIX);
@@ -494,35 +539,48 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                     if let Some(selection) = selected_item_range {
                         draw_selection_bg_for_row(
                             hdc,
-                            line_x,
-                            y,
-                            params.line_height,
                             &row,
-                            selection.start,
-                            selection.end,
-                            params.selection_bg_color,
+                            RowBounds {
+                                left: line_x,
+                                top: y,
+                                line_height: params.line_height,
+                            },
+                            SelectionOverlay {
+                                start: selection.start,
+                                end: selection.end,
+                                bg_color: params.selection_bg_color,
+                            },
                         );
                     }
                     draw_main_segments(
                         hdc,
                         &row_segments,
-                        line_x,
-                        y,
-                        params.normal_font,
-                        params.bold_font,
-                        params.body_text_color,
-                        params.favorite_highlight_color,
+                        LinePlacement { x: line_x, y },
+                        SegmentStyle {
+                            fonts: SegmentFonts {
+                                normal: params.normal_font,
+                                bold: params.bold_font,
+                            },
+                            colors: SegmentColors {
+                                normal: params.body_text_color,
+                                highlight: params.favorite_highlight_color,
+                            },
+                        },
                     );
                     if let Some(ref mut draw_capture) = capture {
                         add_selectable_row(
                             &mut draw_capture.layout,
                             item_id.unwrap_or(0),
                             &row,
-                            line_x,
-                            y,
-                            params.line_height,
-                            hdc,
-                            params.normal_font,
+                            RowCaptureContext {
+                                bounds: RowBounds {
+                                    left: line_x,
+                                    top: y,
+                                    line_height: params.line_height,
+                                },
+                                hdc,
+                                font: params.normal_font,
+                            },
                         );
                     }
                     if !suffix_segments.is_empty() {
@@ -537,12 +595,20 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                             draw_text_segments(
                                 hdc,
                                 suffix_segments,
-                                suffix_x,
-                                y + 1,
-                                params.small_font,
-                                params.small_bold_font,
-                                params.suffix_color,
-                                params.suffix_highlight_color,
+                                LinePlacement {
+                                    x: suffix_x,
+                                    y: y + 1,
+                                },
+                                SegmentStyle {
+                                    fonts: SegmentFonts {
+                                        normal: params.small_font,
+                                        bold: params.small_bold_font,
+                                    },
+                                    colors: SegmentColors {
+                                        normal: params.suffix_color,
+                                        highlight: params.suffix_highlight_color,
+                                    },
+                                },
                             );
                         }
                     }
@@ -567,13 +633,17 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                         if let Some(selection) = selected_item_range {
                             draw_selection_bg_for_row(
                                 hdc,
-                                line_x,
-                                y,
-                                params.line_height,
                                 row,
-                                selection.start,
-                                selection.end,
-                                params.selection_bg_color,
+                                RowBounds {
+                                    left: line_x,
+                                    top: y,
+                                    line_height: params.line_height,
+                                },
+                                SelectionOverlay {
+                                    start: selection.start,
+                                    end: selection.end,
+                                    bg_color: params.selection_bg_color,
+                                },
                             );
                         }
                         let row_segments =
@@ -581,23 +651,32 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                         draw_main_segments(
                             hdc,
                             &row_segments,
-                            line_x,
-                            y,
-                            params.normal_font,
-                            params.bold_font,
-                            params.body_text_color,
-                            params.favorite_highlight_color,
+                            LinePlacement { x: line_x, y },
+                            SegmentStyle {
+                                fonts: SegmentFonts {
+                                    normal: params.normal_font,
+                                    bold: params.bold_font,
+                                },
+                                colors: SegmentColors {
+                                    normal: params.body_text_color,
+                                    highlight: params.favorite_highlight_color,
+                                },
+                            },
                         );
                         if let Some(ref mut draw_capture) = capture {
                             add_selectable_row(
                                 &mut draw_capture.layout,
                                 item_id.unwrap_or(0),
                                 row,
-                                line_x,
-                                y,
-                                params.line_height,
-                                hdc,
-                                params.normal_font,
+                                RowCaptureContext {
+                                    bounds: RowBounds {
+                                        left: line_x,
+                                        top: y,
+                                        line_height: params.line_height,
+                                    },
+                                    hdc,
+                                    font: params.normal_font,
+                                },
                             );
                         }
                         y += params.line_height;
@@ -617,12 +696,20 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                             draw_text_segments(
                                 hdc,
                                 suffix_segments,
-                                params.scale.padding_x + bullet_width,
-                                y + 1,
-                                params.small_font,
-                                params.small_bold_font,
-                                params.suffix_color,
-                                params.suffix_highlight_color,
+                                LinePlacement {
+                                    x: params.scale.padding_x + bullet_width,
+                                    y: y + 1,
+                                },
+                                SegmentStyle {
+                                    fonts: SegmentFonts {
+                                        normal: params.small_font,
+                                        bold: params.small_bold_font,
+                                    },
+                                    colors: SegmentColors {
+                                        normal: params.suffix_color,
+                                        highlight: params.suffix_highlight_color,
+                                    },
+                                },
                             );
                             y += params.line_height;
                         } else if wrapped_suffix.is_empty() {
@@ -650,28 +737,28 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
 fn draw_main_segments(
     hdc: HDC,
     segments: &[(String, bool)],
-    x: i32,
-    y: i32,
-    normal_font: HFONT,
-    bold_font: HFONT,
-    normal_color: COLORREF,
-    highlight_color: COLORREF,
+    placement: LinePlacement,
+    style: SegmentStyle,
 ) {
-    let mut cursor = x;
+    let mut cursor = placement.x;
     for (text, highlighted) in segments {
-        let font = if *highlighted { bold_font } else { normal_font };
+        let font = if *highlighted {
+            style.fonts.bold
+        } else {
+            style.fonts.normal
+        };
         unsafe {
             SelectObject(hdc, font);
             SetTextColor(
                 hdc,
                 if *highlighted {
-                    highlight_color
+                    style.colors.highlight
                 } else {
-                    normal_color
+                    style.colors.normal
                 },
             );
         }
-        draw_text_line(hdc, text, cursor, y);
+        draw_text_line(hdc, text, cursor, placement.y);
         cursor += text_width_with_font(hdc, font, text);
     }
 }
@@ -693,16 +780,12 @@ fn text_segments_width(
 
 fn draw_selection_bg_for_row(
     hdc: HDC,
-    row_x: i32,
-    row_y: i32,
-    line_height: i32,
     row: &WrappedRow,
-    sel_start: usize,
-    sel_end: usize,
-    selection_bg_color: COLORREF,
+    bounds: RowBounds,
+    selection: SelectionOverlay,
 ) {
-    let start = max(row.start, sel_start);
-    let end = min(row.end, sel_end);
+    let start = max(row.start, selection.start);
+    let end = min(row.end, selection.end);
     if start >= end {
         return;
     }
@@ -717,13 +800,13 @@ fn draw_selection_bg_for_row(
     let left_width = text_width(hdc, left_slice);
     let right_width = text_width(hdc, right_slice);
     let rect = RECT {
-        left: row_x + left_width,
-        top: row_y,
-        right: row_x + right_width,
-        bottom: row_y + line_height - 1,
+        left: bounds.left + left_width,
+        top: bounds.top,
+        right: bounds.left + right_width,
+        bottom: bounds.top + bounds.line_height - 1,
     };
     unsafe {
-        let brush = CreateSolidBrush(selection_bg_color);
+        let brush = CreateSolidBrush(selection.bg_color);
         FillRect(hdc, &rect, brush);
         DeleteObject(brush);
     }
@@ -733,20 +816,16 @@ fn add_selectable_row(
     layout: &mut SelectableLayout,
     item_id: usize,
     row: &WrappedRow,
-    row_x: i32,
-    row_y: i32,
-    line_height: i32,
-    hdc: HDC,
-    font: HFONT,
+    context: RowCaptureContext,
 ) {
     layout.rows.push(SelectableRow {
         item_id,
         start: row.start,
         end: row.end,
-        left: row_x,
-        top: row_y,
-        bottom: row_y + line_height,
-        boundaries: row_boundaries(hdc, font, &row.text),
+        left: context.bounds.left,
+        top: context.bounds.top,
+        bottom: context.bounds.top + context.bounds.line_height,
+        boundaries: row_boundaries(context.hdc, context.font, &row.text),
     });
 }
 
@@ -855,22 +934,26 @@ fn ranges_overlap(a: (usize, usize), b: (usize, usize)) -> bool {
 fn draw_text_segments(
     hdc: HDC,
     segments: &[(String, bool)],
-    x: i32,
-    y: i32,
-    normal_font: HFONT,
-    bold_font: HFONT,
-    normal_color: COLORREF,
-    highlight_color: COLORREF,
+    placement: LinePlacement,
+    style: SegmentStyle,
 ) {
-    let mut cursor = x;
+    let mut cursor = placement.x;
     for (text, bold) in segments {
-        let font = if *bold { bold_font } else { normal_font };
-        let color = if *bold { highlight_color } else { normal_color };
+        let font = if *bold {
+            style.fonts.bold
+        } else {
+            style.fonts.normal
+        };
+        let color = if *bold {
+            style.colors.highlight
+        } else {
+            style.colors.normal
+        };
         unsafe {
             SelectObject(hdc, font);
             SetTextColor(hdc, color);
         }
-        draw_text_line(hdc, text, cursor, y);
+        draw_text_line(hdc, text, cursor, placement.y);
         cursor += text_width(hdc, text);
     }
 }
