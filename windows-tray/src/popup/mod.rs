@@ -300,14 +300,6 @@ mod layout;
 mod render;
 mod theme;
 
-pub fn toggle_popup(hwnd: HWND, state: &AppState) {
-    if is_visible(hwnd) {
-        animation::begin_close_animation(hwnd, state);
-    } else {
-        layout::show_popup(hwnd, state);
-    }
-}
-
 pub fn show_popup(hwnd: HWND, state: &AppState) {
     layout::show_popup(hwnd, state);
 }

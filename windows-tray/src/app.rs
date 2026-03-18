@@ -99,11 +99,8 @@ struct StartOptions {
 const STALE_NO_MENU_COOLDOWN_MS: u32 = 10 * 60_000;
 
 pub struct App {
-    pub no_tray: bool,
     state: Arc<Mutex<AppState>>,
     hwnds: Mutex<WindowHandles>,
-    hover_point: Mutex<Option<(i32, i32)>>,
-    context_menu_open: Mutex<bool>,
     request_states: Mutex<HashMap<String, RequestState>>,
     last_prefetch_ms: Mutex<i64>,
     memory_menu_cache: Mutex<HashMap<String, MemoryMenuEntry>>,
@@ -127,7 +124,7 @@ pub enum FetchApplyOutcome {
 }
 
 impl App {
-    pub fn new(no_tray: bool) -> Self {
+    pub fn new() -> Self {
         let settings = load_settings();
         set_log_enabled(settings.enable_logging);
         let state = AppState {
@@ -149,11 +146,8 @@ impl App {
             stale_date: false,
         };
         Self {
-            no_tray,
             state: Arc::new(Mutex::new(state)),
             hwnds: Mutex::new(WindowHandles::default()),
-            hover_point: Mutex::new(None),
-            context_menu_open: Mutex::new(false),
             request_states: Mutex::new(HashMap::new()),
             last_prefetch_ms: Mutex::new(0),
             memory_menu_cache: Mutex::new(HashMap::new()),
@@ -981,11 +975,6 @@ impl App {
         );
     }
 
-    pub fn restaurant_name(&self) -> String {
-        let state = self.state.lock().unwrap();
-        state.restaurant_name.clone()
-    }
-
     pub fn set_theme(&self, theme: &str) {
         let mut state = self.state.lock().unwrap();
         state.settings.theme = normalize_theme(theme);
@@ -1181,31 +1170,6 @@ impl App {
             FetchContext::new(FetchMode::Current, reason),
             options,
         )
-    }
-
-    pub fn set_hover_point(&self, x: i32, y: i32) {
-        let mut point = self.hover_point.lock().unwrap();
-        *point = Some((x, y));
-    }
-
-    pub fn clear_hover_point(&self) {
-        let mut point = self.hover_point.lock().unwrap();
-        *point = None;
-    }
-
-    pub fn hover_point(&self) -> Option<(i32, i32)> {
-        let point = self.hover_point.lock().unwrap();
-        *point
-    }
-
-    pub fn set_context_menu_open(&self, open: bool) {
-        let mut flag = self.context_menu_open.lock().unwrap();
-        *flag = open;
-    }
-
-    pub fn is_context_menu_open(&self) -> bool {
-        let flag = self.context_menu_open.lock().unwrap();
-        *flag
     }
 }
 

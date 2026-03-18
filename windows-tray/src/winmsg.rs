@@ -7,10 +7,10 @@ use crate::util::to_wstring;
 use std::sync::{Mutex, OnceLock};
 use time::{OffsetDateTime, Time};
 use windows::core::PCWSTR;
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
-    DefWindowProcW, DestroyWindow, GetCursorPos, GetWindowLongPtrW, GetWindowRect, KillTimer,
-    LoadCursorW, MessageBoxW, PostQuitMessage, RegisterClassExW, SetForegroundWindow, SetTimer,
+    DefWindowProcW, DestroyWindow, GetCursorPos, GetWindowLongPtrW, KillTimer, LoadCursorW,
+    MessageBoxW, PostQuitMessage, RegisterClassExW, SetForegroundWindow, SetTimer,
     SetWindowLongPtrW, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, IDC_ARROW, IDYES,
     MB_DEFBUTTON2, MB_ICONWARNING, MB_YESNO, WM_ACTIVATE, WM_APP, WM_COMMAND, WM_CONTEXTMENU,
     WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP,
@@ -27,9 +27,8 @@ pub const WM_APP_SHOW_EXISTING: u32 = WM_APP + 3;
 
 pub const TIMER_REFRESH: usize = 1;
 pub const TIMER_MIDNIGHT: usize = 2;
-pub const TIMER_HOVER_CHECK: usize = 3;
-pub const TIMER_STALE_CHECK: usize = 4;
-pub const TIMER_RETRY_FETCH: usize = 5;
+pub const TIMER_STALE_CHECK: usize = 3;
+pub const TIMER_RETRY_FETCH: usize = 4;
 const TRAY_CLOSE_SUPPRESS_OPEN_MS: i64 = 250;
 
 static LAST_POPUP_CLOSE_REQUEST_MS: OnceLock<Mutex<i64>> = OnceLock::new();
@@ -124,9 +123,7 @@ pub unsafe extern "system" fn tray_wndproc(
                     app.persist_settings();
                     let state = app.snapshot();
                     popup::begin_close_animation(app.hwnd_popup(), &state);
-                    app.set_context_menu_open(true);
                     tray::show_context_menu(hwnd, &state);
-                    app.set_context_menu_open(false);
                 }
                 WM_MBUTTONUP => {
                     log_line("tray middle click");
@@ -187,9 +184,6 @@ pub unsafe extern "system" fn tray_wndproc(
                 TIMER_MIDNIGHT => {
                     app.refresh_current_at_midnight();
                     schedule_midnight_timer(hwnd);
-                }
-                TIMER_HOVER_CHECK => {
-                    handle_hover_check(hwnd, app);
                 }
                 TIMER_STALE_CHECK => {
                     handle_stale_check(hwnd, app);
@@ -759,54 +753,6 @@ fn app_from_hwnd(hwnd: HWND) -> *mut App {
     unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut App }
 }
 
-fn start_hover_timer(hwnd: HWND) {
-    unsafe {
-        let _ = SetTimer(hwnd, TIMER_HOVER_CHECK, 200, None);
-    }
-}
-
-fn stop_hover_timer(hwnd: HWND) {
-    unsafe {
-        let _ = KillTimer(hwnd, TIMER_HOVER_CHECK);
-    }
-}
-
-fn handle_hover_check(hwnd: HWND, app: &App) {
-    let popup_hwnd = app.hwnd_popup();
-    if !popup_is_visible(popup_hwnd) {
-        stop_hover_timer(hwnd);
-        return;
-    }
-
-    let cursor = match cursor_point() {
-        Some(pt) => pt,
-        None => {
-            popup::hide_popup(popup_hwnd);
-            stop_hover_timer(hwnd);
-            return;
-        }
-    };
-
-    let mut rect = RECT::default();
-    let in_popup = unsafe { GetWindowRect(popup_hwnd, &mut rect).is_ok() }
-        && point_in_rect(&rect, cursor.x, cursor.y);
-
-    let in_tray_rect = tray::tray_icon_rect(app.hwnd_tray())
-        .map(|rect| point_near_rect(&rect, cursor.x, cursor.y, 12))
-        .unwrap_or(false);
-    let in_tray_hover = app
-        .hover_point()
-        .map(|(x, y)| (cursor.x - x).abs() <= 32 && (cursor.y - y).abs() <= 32)
-        .unwrap_or(false);
-    let in_tray = in_tray_rect || in_tray_hover;
-
-    if !(in_popup || in_tray) {
-        popup::hide_popup(popup_hwnd);
-        stop_hover_timer(hwnd);
-        app.clear_hover_point();
-    }
-}
-
 fn handle_stale_check(hwnd: HWND, app: &App) {
     app.check_stale_date_and_refresh();
     if popup_is_visible(app.hwnd_popup()) {
@@ -823,15 +769,4 @@ fn cursor_point() -> Option<POINT> {
     } else {
         None
     }
-}
-
-fn point_in_rect(rect: &RECT, x: i32, y: i32) -> bool {
-    x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
-}
-
-fn point_near_rect(rect: &RECT, x: i32, y: i32, padding: i32) -> bool {
-    x >= rect.left - padding
-        && x <= rect.right + padding
-        && y >= rect.top - padding
-        && y <= rect.bottom + padding
 }

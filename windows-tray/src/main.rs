@@ -58,7 +58,7 @@ fn main() -> anyhow::Result<()> {
         let hinstance = GetModuleHandleW(None)?;
         winmsg::register_window_classes(hinstance.into())?;
 
-        let app = Box::new(App::new(no_tray));
+        let app = Box::new(App::new());
         let app_ptr = Box::into_raw(app);
 
         let tray_class = to_wstring(winmsg::TRAY_WND_CLASS);

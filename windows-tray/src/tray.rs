@@ -616,14 +616,3 @@ fn append_menu_toggle_enabled(menu: HMENU, id: u16, label: &str, checked: bool, 
         let _ = AppendMenuW(menu, flags, id as usize, PCWSTR(to_wstring(label).as_ptr()));
     }
 }
-
-pub fn disabled_menu_item(menu: HMENU, label: &str) {
-    unsafe {
-        let _ = AppendMenuW(
-            menu,
-            MF_STRING | MF_DISABLED | MF_GRAYED,
-            0,
-            PCWSTR(to_wstring(label).as_ptr()),
-        );
-    }
-}
