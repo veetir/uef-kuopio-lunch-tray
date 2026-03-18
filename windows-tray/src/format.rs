@@ -447,8 +447,6 @@ fn classify_compass_price_group(segment: &str) -> PriceGroup {
         PriceGroup::Student
     } else if has_any_word_label(&lower, &["staff", "hk", "henkilokunta", "henkilökunta"]) {
         PriceGroup::Staff
-    } else if has_any_word_label(&lower, &["guest", "vieras"]) {
-        PriceGroup::Guest
     } else {
         PriceGroup::Guest
     }

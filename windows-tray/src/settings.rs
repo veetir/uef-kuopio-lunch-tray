@@ -18,6 +18,7 @@ pub struct Settings {
     pub highlight_gluten_free: bool,
     pub highlight_veg: bool,
     pub highlight_lactose_free: bool,
+    pub animations_enabled: bool,
     pub enable_antell_restaurants: bool,
     pub enable_logging: bool,
     pub last_updated_epoch_ms: i64,
@@ -40,6 +41,7 @@ impl Default for Settings {
             highlight_gluten_free: false,
             highlight_veg: false,
             highlight_lactose_free: false,
+            animations_enabled: true,
             enable_antell_restaurants: true,
             enable_logging: false,
             last_updated_epoch_ms: 0,
@@ -90,6 +92,7 @@ struct RawSettings {
     highlight_gluten_free: Option<bool>,
     highlight_veg: Option<bool>,
     highlight_lactose_free: Option<bool>,
+    animations_enabled: Option<bool>,
     enable_logging: Option<bool>,
     last_updated_epoch_ms: Option<i64>,
 }
@@ -146,6 +149,9 @@ fn decode_settings(data: &str) -> anyhow::Result<Settings> {
         highlight_lactose_free: raw
             .highlight_lactose_free
             .unwrap_or(defaults.highlight_lactose_free),
+        animations_enabled: raw
+            .animations_enabled
+            .unwrap_or(defaults.animations_enabled),
         // Antell is always enabled; keep the field for backward-compatible settings serialization.
         enable_antell_restaurants: true,
         enable_logging: raw.enable_logging.unwrap_or(defaults.enable_logging),
@@ -162,6 +168,7 @@ pub fn normalize_theme(value: &str) -> String {
         "blue" => "blue".to_string(),
         "green" => "green".to_string(),
         "amber" => "amber".to_string(),
+        "barbie" => "barbie".to_string(),
         "teletext1" => "teletext1".to_string(),
         "teletext2" => "teletext2".to_string(),
         _ => "dark".to_string(),
