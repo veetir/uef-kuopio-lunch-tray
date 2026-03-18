@@ -823,6 +823,12 @@ impl App {
         let _ = save_settings(&state.settings);
     }
 
+    pub fn toggle_animations(&self) {
+        let mut state = self.state.lock().unwrap();
+        state.settings.animations_enabled = !state.settings.animations_enabled;
+        let _ = save_settings(&state.settings);
+    }
+
     pub fn toggle_show_student_price(&self) {
         let mut state = self.state.lock().unwrap();
         state.settings.show_student_price = !state.settings.show_student_price;

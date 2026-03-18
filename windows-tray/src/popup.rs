@@ -16,10 +16,11 @@ use time::{OffsetDateTime, UtcOffset};
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{COLORREF, HWND, POINT, RECT};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, CreateFontW, CreateSolidBrush, DeleteObject, EndPaint, FillRect, GetDeviceCaps,
-    GetMonitorInfoW, GetTextExtentPoint32W, GetTextMetricsW, InvalidateRect, MonitorFromPoint,
-    SelectObject, SetBkMode, SetTextColor, TextOutW, HDC, HFONT, LOGPIXELSY, MONITORINFO,
-    MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, TEXTMETRICW, TRANSPARENT,
+    BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW, CreateSolidBrush,
+    DeleteDC, DeleteObject, EndPaint, FillRect, GetDeviceCaps, GetMonitorInfoW,
+    GetTextExtentPoint32W, GetTextMetricsW, InvalidateRect, MonitorFromPoint, SelectObject,
+    SetBkMode, SetTextColor, TextOutW, HDC, HFONT, LOGPIXELSY, MONITORINFO,
+    MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, SRCCOPY, TEXTMETRICW, TRANSPARENT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GetClientRect, GetCursorPos, GetWindowRect, KillTimer, SetTimer, SetWindowPos, ShowWindow,
@@ -338,6 +339,16 @@ pub fn toggle_popup(hwnd: HWND, state: &AppState) {
     }
 }
 
+fn request_repaint(hwnd: HWND) {
+    unsafe {
+        InvalidateRect(hwnd, None, false);
+    }
+}
+
+fn popup_animations_enabled(settings: &Settings) -> bool {
+    settings.animations_enabled
+}
+
 pub fn show_popup(hwnd: HWND, state: &AppState) {
     unsafe {
         let (width, height) = desired_size(hwnd, state);
@@ -346,7 +357,7 @@ pub fn show_popup(hwnd: HWND, state: &AppState) {
         let (x, y) = position_near_point(width, height, cursor);
         let _ = SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, SWP_SHOWWINDOW);
         begin_open_animation(hwnd, state);
-        InvalidateRect(hwnd, None, true);
+        request_repaint(hwnd);
     }
 }
 
@@ -356,7 +367,7 @@ pub fn show_popup_at(hwnd: HWND, state: &AppState, anchor: POINT) {
         let (x, y) = position_near_point(width, height, anchor);
         let _ = SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, SWP_SHOWWINDOW);
         begin_open_animation(hwnd, state);
-        InvalidateRect(hwnd, None, true);
+        request_repaint(hwnd);
     }
 }
 
@@ -367,7 +378,7 @@ pub fn show_popup_for_tray_icon(hwnd: HWND, state: &AppState, tray_rect: RECT) {
         let (x, y) = position_near_tray_rect(width, height, tray_rect, scale.anchor_gap);
         let _ = SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, SWP_SHOWWINDOW);
         begin_open_animation(hwnd, state);
-        InvalidateRect(hwnd, None, true);
+        request_repaint(hwnd);
     }
 }
 
@@ -389,11 +400,11 @@ pub fn resize_popup_keep_position(hwnd: HWND, state: &AppState) {
             && (rect.right - rect.left) == width
             && (rect.bottom - rect.top) == height
         {
-            InvalidateRect(hwnd, None, true);
+            request_repaint(hwnd);
             return;
         }
         let _ = SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, SWP_SHOWWINDOW);
-        InvalidateRect(hwnd, None, true);
+        request_repaint(hwnd);
     }
 }
 
@@ -449,7 +460,7 @@ pub fn press_navigation_button(hwnd: HWND, direction: i32) {
             POPUP_HEADER_PRESS_MS.max(1) as u32,
             None,
         );
-        InvalidateRect(hwnd, None, true);
+        request_repaint(hwnd);
     }
 }
 
@@ -466,7 +477,7 @@ pub fn tick_header_button_press(hwnd: HWND) {
         clear_header_button_press(hwnd);
         unsafe {
             let _ = KillTimer(hwnd, POPUP_HEADER_PRESS_TIMER_ID);
-            InvalidateRect(hwnd, None, true);
+            request_repaint(hwnd);
         }
     }
 }
@@ -495,6 +506,11 @@ fn pressed_header_button(hwnd: HWND) -> Option<HeaderButtonAction> {
 }
 
 fn begin_open_animation(hwnd: HWND, state: &AppState) {
+    if !popup_animations_enabled(&state.settings) {
+        clear_animation_state(hwnd);
+        request_repaint(hwnd);
+        return;
+    }
     start_animation(
         hwnd,
         POPUP_OPEN_ANIM_MS,
@@ -517,7 +533,7 @@ fn start_animation(hwnd: HWND, duration_ms: i64, kind: PopupAnimationKind) {
     }
     unsafe {
         let _ = SetTimer(hwnd, POPUP_ANIM_TIMER_ID, POPUP_ANIM_INTERVAL_MS, None);
-        InvalidateRect(hwnd, None, true);
+        request_repaint(hwnd);
     }
 }
 
@@ -527,6 +543,16 @@ fn clear_animation_state(hwnd: HWND) {
         if guard.as_ref().is_some_and(|anim| anim.hwnd == hwnd) {
             *guard = None;
         }
+    }
+}
+
+fn close_animation_active(hwnd: HWND) -> bool {
+    let store = POPUP_ANIMATION.get_or_init(|| Mutex::new(None));
+    match store.lock() {
+        Ok(guard) => guard.as_ref().is_some_and(|anim| {
+            anim.hwnd == hwnd && matches!(anim.kind, PopupAnimationKind::Close { .. })
+        }),
+        Err(_) => false,
     }
 }
 
@@ -571,7 +597,14 @@ pub fn begin_close_animation(hwnd: HWND, state: &AppState) {
     if !is_visible(hwnd) {
         return;
     }
+    if close_animation_active(hwnd) {
+        return;
+    }
     clear_selection_state(hwnd);
+    if !popup_animations_enabled(&state.settings) {
+        hide_popup(hwnd);
+        return;
+    }
     start_animation(
         hwnd,
         POPUP_CLOSE_ANIM_MS,
@@ -589,6 +622,11 @@ pub fn begin_switch_animation(
     direction: i32,
 ) {
     clear_selection_state(hwnd);
+    if !popup_animations_enabled(&new_state.settings) {
+        clear_animation_state(hwnd);
+        request_repaint(hwnd);
+        return;
+    }
     start_animation(
         hwnd,
         POPUP_SWITCH_ANIM_MS,
@@ -641,7 +679,7 @@ pub fn tick_animation(hwnd: HWND) {
                 return;
             }
         }
-        InvalidateRect(hwnd, None, true);
+        request_repaint(hwnd);
     }
 }
 
@@ -689,9 +727,7 @@ pub fn begin_text_selection(hwnd: HWND, x: i32, y: i32) -> bool {
         anchor: anchor_index,
         current: anchor_index,
     });
-    unsafe {
-        InvalidateRect(hwnd, None, true);
-    }
+    request_repaint(hwnd);
     true
 }
 
@@ -715,9 +751,7 @@ pub fn update_text_selection(hwnd: HWND, x: i32, y: i32) {
     }
     if drag.current != next_index {
         drag.current = next_index;
-        unsafe {
-            InvalidateRect(hwnd, None, true);
-        }
+        request_repaint(hwnd);
     }
 }
 
@@ -751,23 +785,17 @@ pub fn finish_text_selection(hwnd: HWND, x: i32, y: i32) -> bool {
     };
 
     let Some(value) = snippet else {
-        unsafe {
-            InvalidateRect(hwnd, None, true);
-        }
+        request_repaint(hwnd);
         return false;
     };
 
     if favorites::toggle_snippet(&value).is_err() {
-        unsafe {
-            InvalidateRect(hwnd, None, true);
-        }
+        request_repaint(hwnd);
         return false;
     }
 
     invalidate_favorites_cache();
-    unsafe {
-        InvalidateRect(hwnd, None, true);
-    }
+    request_repaint(hwnd);
     true
 }
 
@@ -778,9 +806,7 @@ pub fn cancel_text_selection(hwnd: HWND) {
     };
     if state.drag.is_some() {
         state.drag = None;
-        unsafe {
-            InvalidateRect(hwnd, None, true);
-        }
+        request_repaint(hwnd);
     }
 }
 
@@ -799,14 +825,28 @@ pub fn text_selection_active(hwnd: HWND) -> bool {
 pub fn paint_popup(hwnd: HWND, state: &AppState) {
     unsafe {
         let mut ps = PAINTSTRUCT::default();
-        let hdc = BeginPaint(hwnd, &mut ps);
-        if hdc.0 == 0 {
+        let paint_hdc = BeginPaint(hwnd, &mut ps);
+        if paint_hdc.0 == 0 {
             return;
         }
 
         let mut rect = RECT::default();
         let _ = GetClientRect(hwnd, &mut rect);
-        let width = rect.right - rect.left;
+        let width = (rect.right - rect.left).max(1);
+        let height = (rect.bottom - rect.top).max(1);
+        let buffer_dc = CreateCompatibleDC(paint_hdc);
+        if buffer_dc.0 == 0 {
+            EndPaint(hwnd, &ps);
+            return;
+        }
+        let buffer_bitmap = CreateCompatibleBitmap(paint_hdc, width, height);
+        if buffer_bitmap.0 == 0 {
+            DeleteDC(buffer_dc);
+            EndPaint(hwnd, &ps);
+            return;
+        }
+        let old_bitmap = SelectObject(buffer_dc, buffer_bitmap);
+        let hdc = buffer_dc;
         let palette = theme_palette(&state.settings.theme);
         let brush = CreateSolidBrush(palette.bg_color);
         FillRect(hdc, &rect, brush);
@@ -1122,6 +1162,10 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
         DeleteObject(bold_font);
         DeleteObject(small_font);
         DeleteObject(small_bold_font);
+        let _ = BitBlt(paint_hdc, 0, 0, width, height, hdc, 0, 0, SRCCOPY);
+        SelectObject(hdc, old_bitmap);
+        DeleteObject(buffer_bitmap);
+        DeleteDC(hdc);
         EndPaint(hwnd, &ps);
     }
 }

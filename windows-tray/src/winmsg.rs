@@ -13,9 +13,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     LoadCursorW, MessageBoxW, PostQuitMessage, RegisterClassExW, SetForegroundWindow, SetTimer,
     SetWindowLongPtrW, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, IDC_ARROW, IDYES,
     MB_DEFBUTTON2, MB_ICONWARNING, MB_YESNO, WM_ACTIVATE, WM_APP, WM_COMMAND, WM_CONTEXTMENU,
-    WM_DESTROY, WM_DPICHANGED, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONUP,
-    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_PAINT, WM_RBUTTONUP, WM_SETTINGCHANGE,
-    WM_THEMECHANGED, WM_TIMER, WNDCLASSEXW,
+    WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_PAINT, WM_RBUTTONUP,
+    WM_SETTINGCHANGE, WM_THEMECHANGED, WM_TIMER, WNDCLASSEXW,
 };
 
 pub const TRAY_WND_CLASS: &str = "CompassLunchTrayWindow";
@@ -278,6 +278,7 @@ pub unsafe extern "system" fn popup_wndproc(
             }
             LRESULT(0)
         }
+        WM_ERASEBKGND => LRESULT(1),
         WM_DPICHANGED => {
             let app = app_from_hwnd(hwnd);
             if !app.is_null() {
@@ -595,6 +596,13 @@ fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
         }
         tray::CMD_WIDGET_SCALE_150 => {
             app.set_widget_scale("150");
+        }
+        tray::CMD_TOGGLE_ANIMATIONS => {
+            app.toggle_animations();
+            if popup_is_visible(app.hwnd_popup()) {
+                let state = app.snapshot();
+                popup::resize_popup_keep_position(app.hwnd_popup(), &state);
+            }
         }
         tray::CMD_TOGGLE_STARTUP => {
             let enable = !crate::startup::is_enabled();
