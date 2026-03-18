@@ -46,6 +46,7 @@ pub const CMD_THEME_DARK: u16 = 2212;
 pub const CMD_THEME_BLUE: u16 = 2213;
 pub const CMD_THEME_GREEN: u16 = 2214;
 pub const CMD_THEME_AMBER: u16 = 2220;
+pub const CMD_THEME_BARBIE: u16 = 2221;
 pub const CMD_TOGGLE_STARTUP: u16 = 2215;
 pub const CMD_TOGGLE_LOGGING: u16 = 2216;
 pub const CMD_OPEN_APPDATA_DIR: u16 = 2217;
@@ -378,6 +379,12 @@ fn build_context_menu(state: &AppState) -> HMENU {
             CMD_THEME_AMBER,
             "Amber",
             state.settings.theme == "amber",
+        );
+        append_menu_item(
+            theme_menu,
+            CMD_THEME_BARBIE,
+            "Barbie",
+            state.settings.theme == "barbie",
         );
         append_menu_item(
             theme_menu,

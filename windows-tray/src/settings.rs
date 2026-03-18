@@ -168,6 +168,7 @@ pub fn normalize_theme(value: &str) -> String {
         "blue" => "blue".to_string(),
         "green" => "green".to_string(),
         "amber" => "amber".to_string(),
+        "barbie" => "barbie".to_string(),
         "teletext1" => "teletext1".to_string(),
         "teletext2" => "teletext2".to_string(),
         _ => "dark".to_string(),

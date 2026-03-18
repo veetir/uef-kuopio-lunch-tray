@@ -1322,6 +1322,7 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                         line_x,
                         y,
                         params.normal_font,
+                        params.bold_font,
                         params.body_text_color,
                         params.favorite_highlight_color,
                     );
@@ -1338,8 +1339,12 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                         );
                     }
                     if !suffix_segments.is_empty() {
-                        let main_width =
-                            text_width_with_font(hdc, params.normal_font, &clipped_main);
+                        let main_width = text_segments_width(
+                            hdc,
+                            &row_segments,
+                            params.normal_font,
+                            params.bold_font,
+                        );
                         let suffix_x = line_x + main_width + 4;
                         if suffix_x < (params.scale.padding_x + params.content_width) {
                             draw_text_segments(
@@ -1392,6 +1397,7 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                             line_x,
                             y,
                             params.normal_font,
+                            params.bold_font,
                             params.body_text_color,
                             params.favorite_highlight_color,
                         );
@@ -1459,12 +1465,14 @@ fn draw_main_segments(
     segments: &[(String, bool)],
     x: i32,
     y: i32,
-    font: HFONT,
+    normal_font: HFONT,
+    bold_font: HFONT,
     normal_color: COLORREF,
     highlight_color: COLORREF,
 ) {
     let mut cursor = x;
     for (text, highlighted) in segments {
+        let font = if *highlighted { bold_font } else { normal_font };
         unsafe {
             SelectObject(hdc, font);
             SetTextColor(
@@ -1479,6 +1487,21 @@ fn draw_main_segments(
         draw_text_line(hdc, text, cursor, y);
         cursor += text_width_with_font(hdc, font, text);
     }
+}
+
+fn text_segments_width(
+    hdc: HDC,
+    segments: &[(String, bool)],
+    normal_font: HFONT,
+    bold_font: HFONT,
+) -> i32 {
+    segments
+        .iter()
+        .map(|(text, highlighted)| {
+            let font = if *highlighted { bold_font } else { normal_font };
+            text_width_with_font(hdc, font, text)
+        })
+        .sum()
 }
 
 fn draw_selection_bg_for_row(
@@ -3135,6 +3158,19 @@ fn theme_palette(theme: &str) -> ThemePalette {
             header_bg_color: rgb(56, 31, 9),
             button_bg_color: rgb(74, 42, 12),
             divider_color: rgb(110, 63, 18),
+        },
+        "barbie" => ThemePalette {
+            bg_color: rgb(245, 225, 236),
+            body_text_color: rgb(88, 28, 76),
+            heading_color: rgb(216, 38, 131),
+            header_title_color: rgb(255, 255, 255),
+            suffix_color: rgb(182, 106, 153),
+            suffix_highlight_color: rgb(210, 40, 135),
+            favorite_highlight_color: rgb(54, 104, 211),
+            selection_bg_color: rgb(232, 195, 221),
+            header_bg_color: rgb(230, 64, 148),
+            button_bg_color: rgb(236, 138, 208),
+            divider_color: rgb(198, 43, 117),
         },
         "teletext1" => ThemePalette {
             bg_color: rgb(0, 0, 0),
