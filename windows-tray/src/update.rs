@@ -5,6 +5,7 @@ use reqwest::blocking::Client;
 use reqwest::header::{ACCEPT, USER_AGENT};
 use serde::Deserialize;
 use std::cmp::Ordering;
+use std::fmt;
 
 const GITHUB_LATEST_RELEASE_URL: &str =
     "https://api.github.com/repos/veetir/uef-kuopio-lunch-tray/releases/latest";
@@ -117,9 +118,9 @@ fn parse_version(raw: &str) -> Option<AppVersion> {
     })
 }
 
-impl AppVersion {
-    fn to_string(self) -> String {
-        format!("{}.{}.{}", self.major, self.minor, self.patch)
+impl fmt::Display for AppVersion {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}.{}.{}", self.major, self.minor, self.patch)
     }
 }
 

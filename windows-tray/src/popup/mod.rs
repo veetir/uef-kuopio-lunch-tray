@@ -6,7 +6,6 @@
 
 use crate::api;
 use crate::app::{AppState, FetchStatus};
-use crate::cache;
 use crate::favorites;
 use crate::format::{
     date_and_time_line, menu_heading, normalize_text, renderable_menu_components,
