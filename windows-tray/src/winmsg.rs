@@ -1,4 +1,4 @@
-use crate::app::{App, FetchApplyOutcome, FetchMessage};
+use crate::app::{App, FetchApplyOutcome, FetchMessage, UpdateCheckMessage, UpdateCheckOutcome};
 use crate::log::log_line;
 use crate::popup;
 use crate::restaurant::available_restaurants;
@@ -8,6 +8,11 @@ use std::sync::{Mutex, OnceLock};
 use time::{OffsetDateTime, Time};
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
+use windows::Win32::UI::Controls::{
+    TaskDialog, TaskDialogIndirect, TASKDIALOGCONFIG, TASKDIALOGCONFIG_0, TASKDIALOG_BUTTON,
+    TASKDIALOG_COMMON_BUTTON_FLAGS, TDCBF_CLOSE_BUTTON, TDF_ALLOW_DIALOG_CANCELLATION,
+    TD_INFORMATION_ICON, TD_WARNING_ICON,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     DefWindowProcW, DestroyWindow, GetCursorPos, GetWindowLongPtrW, KillTimer, LoadCursorW,
     MessageBoxW, PostQuitMessage, RegisterClassExW, SetForegroundWindow, SetTimer,
@@ -24,12 +29,15 @@ pub const POPUP_WND_CLASS: &str = "CompassLunchPopupWindow";
 pub const WM_TRAY_CALLBACK: u32 = WM_APP + 1;
 pub const WM_APP_FETCH_COMPLETE: u32 = WM_APP + 2;
 pub const WM_APP_SHOW_EXISTING: u32 = WM_APP + 3;
+pub const WM_APP_UPDATE_CHECK_COMPLETE: u32 = WM_APP + 4;
 
 pub const TIMER_REFRESH: usize = 1;
 pub const TIMER_MIDNIGHT: usize = 2;
 pub const TIMER_STALE_CHECK: usize = 3;
 pub const TIMER_RETRY_FETCH: usize = 4;
 const TRAY_CLOSE_SUPPRESS_OPEN_MS: i64 = 250;
+const UPDATE_DIALOG_ACTION_BUTTON_ID: i32 = 1001;
+const UPDATE_DIALOG_CLOSE_BUTTON_ID: i32 = 1002;
 
 static LAST_POPUP_CLOSE_REQUEST_MS: OnceLock<Mutex<i64>> = OnceLock::new();
 
@@ -231,6 +239,20 @@ pub unsafe extern "system" fn tray_wndproc(
                     }
                     FetchApplyOutcome::BackgroundFailure => {}
                 }
+            }
+            LRESULT(0)
+        }
+        WM_APP_UPDATE_CHECK_COMPLETE => {
+            let app = app_from_hwnd(hwnd);
+            if app.is_null() {
+                return LRESULT(0);
+            }
+            let app = &*(app);
+            let ptr = lparam.0 as *mut UpdateCheckMessage;
+            if !ptr.is_null() {
+                let message = *Box::from_raw(ptr);
+                app.finish_update_check();
+                handle_update_check_message(hwnd, app, message);
             }
             LRESULT(0)
         }
@@ -643,6 +665,9 @@ fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
         tray::CMD_SUBMIT_FEEDBACK => {
             app.open_feedback_url();
         }
+        tray::CMD_CHECK_FOR_UPDATES => {
+            let _ = app.start_update_check();
+        }
         tray::CMD_QUIT => unsafe {
             let _ = DestroyWindow(hwnd);
         },
@@ -652,6 +677,183 @@ fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
         let state = app.snapshot();
         popup::resize_popup_keep_position(app.hwnd_popup(), &state);
     }
+}
+
+fn handle_update_check_message(hwnd: HWND, app: &App, message: UpdateCheckMessage) {
+    match message.outcome {
+        UpdateCheckOutcome::LatestPublished {
+            current_version,
+            release_url,
+        } => match show_update_action_dialog(
+            hwnd,
+            "Check for updates",
+            "You are on the latest published version",
+            &format!("Installed version: {}", current_version),
+            "View this release",
+            "Open this release page?",
+            TD_INFORMATION_ICON,
+        ) {
+            Ok(true) => app.open_release_url(&release_url),
+            Ok(false) => {}
+            Err(err) => log_line(&format!("update dialog failed: {}", err)),
+        },
+        UpdateCheckOutcome::UpdateAvailable {
+            current_version,
+            latest_version,
+            release_url,
+        } => match show_update_action_dialog(
+            hwnd,
+            "Check for updates",
+            "New update available",
+            &format!(
+                "Current version: {}\nLatest version: {}",
+                current_version, latest_version
+            ),
+            "Download from GitHub Releases",
+            "Open GitHub Releases?",
+            TD_INFORMATION_ICON,
+        ) {
+            Ok(true) => app.open_release_url(&release_url),
+            Ok(false) => {}
+            Err(err) => log_line(&format!("update dialog failed: {}", err)),
+        },
+        UpdateCheckOutcome::NewerThanLatestPublished {
+            current_version,
+            latest_version,
+            releases_url,
+        } => match show_update_action_dialog(
+            hwnd,
+            "Check for updates",
+            "You are running a version newer than the latest published release",
+            &format!(
+                "Installed version: {}\nLatest published version: {}",
+                current_version, latest_version
+            ),
+            "Open GitHub Releases",
+            "Open GitHub Releases?",
+            TD_INFORMATION_ICON,
+        ) {
+            Ok(true) => app.open_release_url(&releases_url),
+            Ok(false) => {}
+            Err(err) => log_line(&format!("update dialog failed: {}", err)),
+        },
+        UpdateCheckOutcome::Failed { message } => {
+            if let Err(err) = show_update_error_dialog(hwnd, &message) {
+                log_line(&format!("update error dialog failed: {}", err));
+            }
+        }
+    }
+}
+
+fn show_update_error_dialog(hwnd: HWND, message: &str) -> anyhow::Result<()> {
+    match show_update_task_dialog(
+        hwnd,
+        "Check for updates",
+        "Could not check for updates",
+        message,
+        TD_WARNING_ICON,
+    ) {
+        Ok(()) => Ok(()),
+        Err(_) => {
+            let title = to_wstring("Check for updates");
+            let content = to_wstring(&format!("Could not check for updates\n\n{}", message));
+            unsafe {
+                MessageBoxW(
+                    hwnd,
+                    PCWSTR(content.as_ptr()),
+                    PCWSTR(title.as_ptr()),
+                    MB_ICONWARNING,
+                );
+            }
+            Ok(())
+        }
+    }
+}
+
+fn show_update_action_dialog(
+    hwnd: HWND,
+    title: &str,
+    instruction: &str,
+    content: &str,
+    action_label: &str,
+    fallback_prompt: &str,
+    icon: PCWSTR,
+) -> anyhow::Result<bool> {
+    let title_wide = to_wstring(title);
+    let instruction_wide = to_wstring(instruction);
+    let content_wide = to_wstring(content);
+    let action_label = to_wstring(action_label);
+    let close_label = to_wstring("Close");
+    let buttons = [
+        TASKDIALOG_BUTTON {
+            nButtonID: UPDATE_DIALOG_ACTION_BUTTON_ID,
+            pszButtonText: PCWSTR(action_label.as_ptr()),
+        },
+        TASKDIALOG_BUTTON {
+            nButtonID: UPDATE_DIALOG_CLOSE_BUTTON_ID,
+            pszButtonText: PCWSTR(close_label.as_ptr()),
+        },
+    ];
+    let config = TASKDIALOGCONFIG {
+        cbSize: std::mem::size_of::<TASKDIALOGCONFIG>() as u32,
+        hwndParent: hwnd,
+        dwFlags: TDF_ALLOW_DIALOG_CANCELLATION,
+        dwCommonButtons: TASKDIALOG_COMMON_BUTTON_FLAGS(0),
+        pszWindowTitle: PCWSTR(title_wide.as_ptr()),
+        Anonymous1: TASKDIALOGCONFIG_0 { pszMainIcon: icon },
+        pszMainInstruction: PCWSTR(instruction_wide.as_ptr()),
+        pszContent: PCWSTR(content_wide.as_ptr()),
+        cButtons: buttons.len() as u32,
+        pButtons: buttons.as_ptr(),
+        nDefaultButton: UPDATE_DIALOG_ACTION_BUTTON_ID,
+        ..Default::default()
+    };
+    let mut selected = UPDATE_DIALOG_CLOSE_BUTTON_ID;
+    unsafe {
+        match TaskDialogIndirect(&config, Some(&mut selected), None, None) {
+            Ok(()) => Ok(selected == UPDATE_DIALOG_ACTION_BUTTON_ID),
+            Err(_) => {
+                let fallback_title = to_wstring("Check for updates");
+                let fallback_message = to_wstring(&format!(
+                    "{}\n\n{}\n\n{}",
+                    instruction, content, fallback_prompt
+                ));
+                let action = MessageBoxW(
+                    hwnd,
+                    PCWSTR(fallback_message.as_ptr()),
+                    PCWSTR(fallback_title.as_ptr()),
+                    MB_YESNO,
+                ) == IDYES;
+                Ok(action)
+            }
+        }
+    }
+}
+
+fn show_update_task_dialog(
+    hwnd: HWND,
+    title: &str,
+    instruction: &str,
+    content: &str,
+    icon: PCWSTR,
+) -> anyhow::Result<()> {
+    let title = to_wstring(title);
+    let instruction = to_wstring(instruction);
+    let content = to_wstring(content);
+    let mut button = 0;
+    unsafe {
+        TaskDialog(
+            hwnd,
+            None,
+            PCWSTR(title.as_ptr()),
+            PCWSTR(instruction.as_ptr()),
+            PCWSTR(content.as_ptr()),
+            TDCBF_CLOSE_BUTTON,
+            icon,
+            Some(&mut button),
+        )?;
+    }
+    Ok(())
 }
 
 fn confirm_enable_logging(hwnd: HWND) -> bool {

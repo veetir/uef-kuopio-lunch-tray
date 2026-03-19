@@ -61,6 +61,7 @@ pub const CMD_REFRESH_OFF: u16 = 2400;
 pub const CMD_REFRESH_60: u16 = 2401;
 pub const CMD_REFRESH_240: u16 = 2402;
 pub const CMD_REFRESH_1440: u16 = 2403;
+pub const CMD_CHECK_FOR_UPDATES: u16 = 2997;
 pub const CMD_SUBMIT_FEEDBACK: u16 = 2998;
 pub const CMD_QUIT: u16 = 2999;
 const TRAY_ICON_ID: u32 = 1;
@@ -578,6 +579,7 @@ fn build_context_menu(state: &AppState) -> HMENU {
         );
 
         append_menu_item(menu, CMD_SUBMIT_FEEDBACK, "Submit feedback", false);
+        append_menu_item(menu, CMD_CHECK_FOR_UPDATES, "Check for updates", false);
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
         append_menu_item(menu, CMD_QUIT, "Quit", false);
 

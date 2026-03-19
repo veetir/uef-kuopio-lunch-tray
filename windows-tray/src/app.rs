@@ -9,10 +9,13 @@ use crate::restaurant::{
 use crate::settings::{
     load_settings, normalize_theme, normalize_widget_scale, save_settings, settings_dir, Settings,
 };
+use crate::update;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use time::OffsetDateTime;
-use windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+use windows::Win32::UI::Shell::ShellExecuteW;
+use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FetchStatus {
@@ -104,6 +107,7 @@ pub struct App {
     request_states: Mutex<HashMap<String, RequestState>>,
     last_prefetch_ms: Mutex<i64>,
     memory_menu_cache: Mutex<HashMap<String, MemoryMenuEntry>>,
+    update_check_in_flight: Arc<Mutex<bool>>,
 }
 
 pub struct FetchMessage {
@@ -113,6 +117,31 @@ pub struct FetchMessage {
     pub request_key: String,
     pub context: FetchContext,
     pub result: FetchOutput,
+}
+
+pub struct UpdateCheckMessage {
+    pub outcome: UpdateCheckOutcome,
+}
+
+#[derive(Debug, Clone)]
+pub enum UpdateCheckOutcome {
+    LatestPublished {
+        current_version: String,
+        release_url: String,
+    },
+    UpdateAvailable {
+        current_version: String,
+        latest_version: String,
+        release_url: String,
+    },
+    NewerThanLatestPublished {
+        current_version: String,
+        latest_version: String,
+        releases_url: String,
+    },
+    Failed {
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -151,6 +180,7 @@ impl App {
             request_states: Mutex::new(HashMap::new()),
             last_prefetch_ms: Mutex::new(0),
             memory_menu_cache: Mutex::new(HashMap::new()),
+            update_check_in_flight: Arc::new(Mutex::new(false)),
         }
     }
 
@@ -892,17 +922,7 @@ impl App {
         if url.is_empty() {
             return;
         }
-        let wide = crate::util::to_wstring(&url);
-        unsafe {
-            windows::Win32::UI::Shell::ShellExecuteW(
-                None,
-                windows::core::PCWSTR(crate::util::to_wstring("open").as_ptr()),
-                windows::core::PCWSTR(wide.as_ptr()),
-                windows::core::PCWSTR::null(),
-                windows::core::PCWSTR::null(),
-                windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL,
-            );
-        }
+        self.open_target(&url);
     }
 
     pub fn open_appdata_dir(&self) {
@@ -912,32 +932,114 @@ impl App {
             return;
         }
         let path = dir.to_string_lossy().to_string();
-        let wide = crate::util::to_wstring(&path);
-        unsafe {
-            windows::Win32::UI::Shell::ShellExecuteW(
-                None,
-                windows::core::PCWSTR(crate::util::to_wstring("open").as_ptr()),
-                windows::core::PCWSTR(wide.as_ptr()),
-                windows::core::PCWSTR::null(),
-                windows::core::PCWSTR::null(),
-                windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL,
-            );
-        }
+        self.open_target(&path);
     }
 
     pub fn open_feedback_url(&self) {
-        let url = "https://github.com/veetir/uef-kuopio-lunch-tray/issues";
-        let wide = crate::util::to_wstring(url);
-        unsafe {
-            windows::Win32::UI::Shell::ShellExecuteW(
-                None,
-                windows::core::PCWSTR(crate::util::to_wstring("open").as_ptr()),
-                windows::core::PCWSTR(wide.as_ptr()),
-                windows::core::PCWSTR::null(),
-                windows::core::PCWSTR::null(),
-                windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL,
-            );
+        self.open_target("https://github.com/veetir/uef-kuopio-lunch-tray/issues");
+    }
+
+    pub fn open_release_url(&self, url: &str) {
+        if url.trim().is_empty() {
+            return;
         }
+        self.open_target(url);
+    }
+
+    pub fn start_update_check(&self) -> bool {
+        {
+            let mut in_flight = self.update_check_in_flight.lock().unwrap();
+            if *in_flight {
+                log_line("update check skipped: already in flight");
+                return false;
+            }
+            *in_flight = true;
+        }
+
+        let hwnd = self.hwnd_tray();
+        let in_flight = Arc::clone(&self.update_check_in_flight);
+        log_line(&format!(
+            "update check start current_version={}",
+            update::current_app_version()
+        ));
+        std::thread::spawn(move || {
+            let outcome = match update::check_for_updates() {
+                Ok(update::UpdateCheckResult::LatestPublished {
+                    current_version,
+                    release_url,
+                }) => {
+                    log_line(&format!(
+                        "update check result outcome=latest_published version={} release_url={}",
+                        current_version, release_url
+                    ));
+                    UpdateCheckOutcome::LatestPublished {
+                        current_version,
+                        release_url,
+                    }
+                }
+                Ok(update::UpdateCheckResult::UpdateAvailable {
+                    current_version,
+                    latest_version,
+                    html_url,
+                }) => {
+                    log_line(&format!(
+                        "update check result outcome=update_available current_version={} latest_version={} release_url={}",
+                        current_version, latest_version, html_url
+                    ));
+                    UpdateCheckOutcome::UpdateAvailable {
+                        current_version,
+                        latest_version,
+                        release_url: html_url,
+                    }
+                }
+                Ok(update::UpdateCheckResult::NewerThanLatestPublished {
+                    current_version,
+                    latest_version,
+                    releases_url,
+                }) => {
+                    log_line(&format!(
+                        "update check result outcome=newer_than_latest current_version={} latest_version={} releases_url={}",
+                        current_version, latest_version, releases_url
+                    ));
+                    UpdateCheckOutcome::NewerThanLatestPublished {
+                        current_version,
+                        latest_version,
+                        releases_url,
+                    }
+                }
+                Err(err) => {
+                    let message = err.to_string();
+                    log_line(&format!(
+                        "update check result outcome=failure err={}",
+                        message
+                    ));
+                    UpdateCheckOutcome::Failed { message }
+                }
+            };
+
+            let boxed = Box::new(UpdateCheckMessage { outcome });
+            let ptr = Box::into_raw(boxed) as isize;
+            unsafe {
+                let posted = windows::Win32::UI::WindowsAndMessaging::PostMessageW(
+                    hwnd,
+                    crate::winmsg::WM_APP_UPDATE_CHECK_COMPLETE,
+                    WPARAM(0),
+                    LPARAM(ptr),
+                )
+                .is_ok();
+                if !posted {
+                    log_line("update check post failed");
+                    let mut state = in_flight.lock().unwrap();
+                    *state = false;
+                }
+            }
+        });
+        true
+    }
+
+    pub fn finish_update_check(&self) {
+        let mut in_flight = self.update_check_in_flight.lock().unwrap();
+        *in_flight = false;
     }
 
     pub fn refresh_minutes(&self) -> u32 {
@@ -1356,6 +1458,22 @@ fn log_probe_skip(trigger: &str, target: &FetchTarget, detail: &str) {
         target.effective_language,
         detail,
     ));
+}
+
+impl App {
+    fn open_target(&self, target: &str) {
+        let wide = crate::util::to_wstring(target);
+        unsafe {
+            ShellExecuteW(
+                None,
+                windows::core::PCWSTR(crate::util::to_wstring("open").as_ptr()),
+                windows::core::PCWSTR(wide.as_ptr()),
+                windows::core::PCWSTR::null(),
+                windows::core::PCWSTR::null(),
+                SW_SHOWNORMAL,
+            );
+        }
+    }
 }
 
 #[cfg(test)]

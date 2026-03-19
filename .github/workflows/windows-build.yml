@@ -23,14 +23,21 @@ jobs:
         shell: pwsh
         run: cargo build --manifest-path windows-tray/Cargo.toml --release --target x86_64-pc-windows-msvc
 
-      - name: Derive package filename
+      - name: Derive package metadata
         shell: pwsh
         run: |
-          if ("${env:GITHUB_REF}" -like "refs/tags/windows-v*") {
-            $version = "${env:GITHUB_REF_NAME}".Substring("windows-v".Length)
-          } else {
-            $version = "dev-$("${env:GITHUB_SHA}".Substring(0, 7))"
+          $manifest = Get-Content windows-tray/Cargo.toml -Raw
+          if ($manifest -notmatch '(?m)^version\s*=\s*"([^"]+)"') {
+            throw "Could not parse version from windows-tray/Cargo.toml"
           }
+          $version = $Matches[1]
+          if ("${env:GITHUB_REF}" -like "refs/tags/windows-v*") {
+            $tagVersion = "${env:GITHUB_REF_NAME}".Substring("windows-v".Length)
+            if ($tagVersion -ne $version) {
+              throw "Tag version $tagVersion does not match Cargo.toml version $version"
+            }
+          }
+          "WINDOWS_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
           "WINDOWS_ZIP=compass-lunch-windows-x64-v$version.zip" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Package artifact

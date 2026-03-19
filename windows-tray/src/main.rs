@@ -13,6 +13,7 @@ mod restaurant;
 mod settings;
 mod startup;
 mod tray;
+mod update;
 mod util;
 mod winmsg;
 
@@ -26,13 +27,18 @@ use crate::restaurant::{restaurant_for_code, Provider};
 use crate::settings::load_settings;
 use crate::util::to_wstring;
 use windows::core::PCWSTR;
-use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+use windows::Win32::Foundation::HWND;
+#[cfg(target_os = "windows")]
+use windows::Win32::Foundation::{LPARAM, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+#[cfg(target_os = "windows")]
 use windows::Win32::System::Threading::{CreateMutexW, OpenMutexW, MUTEX_ALL_ACCESS};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DispatchMessageW, FindWindowW, GetMessageW, PostMessageW, TranslateMessage,
-    MSG, SW_HIDE, WS_EX_TOOLWINDOW, WS_OVERLAPPEDWINDOW, WS_POPUP,
+    CreateWindowExW, DispatchMessageW, GetMessageW, TranslateMessage, MSG, SW_HIDE,
+    WS_EX_TOOLWINDOW, WS_OVERLAPPEDWINDOW, WS_POPUP,
 };
+#[cfg(target_os = "windows")]
+use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, PostMessageW};
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -204,6 +210,14 @@ fn enable_dpi_awareness() {
 
 #[cfg(not(target_os = "windows"))]
 fn enable_dpi_awareness() {}
+
+#[cfg(not(target_os = "windows"))]
+struct SingleInstanceGuard;
+
+#[cfg(not(target_os = "windows"))]
+fn acquire_single_instance_guard() -> anyhow::Result<Option<SingleInstanceGuard>> {
+    Ok(Some(SingleInstanceGuard))
+}
 
 #[cfg(target_os = "windows")]
 fn ensure_console() {
