@@ -8,19 +8,14 @@ use std::sync::{Mutex, OnceLock};
 use time::{OffsetDateTime, Time};
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
-use windows::Win32::UI::Controls::{
-    TaskDialog, TaskDialogIndirect, TASKDIALOGCONFIG, TASKDIALOGCONFIG_0, TASKDIALOG_BUTTON,
-    TASKDIALOG_COMMON_BUTTON_FLAGS, TDCBF_CLOSE_BUTTON, TDF_ALLOW_DIALOG_CANCELLATION,
-    TD_INFORMATION_ICON, TD_WARNING_ICON,
-};
 use windows::Win32::UI::WindowsAndMessaging::{
     DefWindowProcW, DestroyWindow, GetCursorPos, GetWindowLongPtrW, KillTimer, LoadCursorW,
     MessageBoxW, PostQuitMessage, RegisterClassExW, SetForegroundWindow, SetTimer,
     SetWindowLongPtrW, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, IDC_ARROW, IDYES,
-    MB_DEFBUTTON2, MB_ICONWARNING, MB_YESNO, WM_ACTIVATE, WM_APP, WM_COMMAND, WM_CONTEXTMENU,
-    WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_PAINT, WM_RBUTTONUP,
-    WM_SETTINGCHANGE, WM_THEMECHANGED, WM_TIMER, WNDCLASSEXW,
+    MB_DEFBUTTON2, MB_ICONINFORMATION, MB_ICONWARNING, MB_YESNO, WM_ACTIVATE, WM_APP,
+    WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_KEYDOWN,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE,
+    WM_PAINT, WM_RBUTTONUP, WM_SETTINGCHANGE, WM_THEMECHANGED, WM_TIMER, WNDCLASSEXW,
 };
 
 pub const TRAY_WND_CLASS: &str = "CompassLunchTrayWindow";
@@ -36,9 +31,6 @@ pub const TIMER_MIDNIGHT: usize = 2;
 pub const TIMER_STALE_CHECK: usize = 3;
 pub const TIMER_RETRY_FETCH: usize = 4;
 const TRAY_CLOSE_SUPPRESS_OPEN_MS: i64 = 250;
-const UPDATE_DIALOG_ACTION_BUTTON_ID: i32 = 1001;
-const UPDATE_DIALOG_CLOSE_BUTTON_ID: i32 = 1002;
-
 static LAST_POPUP_CLOSE_REQUEST_MS: OnceLock<Mutex<i64>> = OnceLock::new();
 
 pub fn register_window_classes(
@@ -689,9 +681,7 @@ fn handle_update_check_message(hwnd: HWND, app: &App, message: UpdateCheckMessag
             "Check for updates",
             "You are on the latest published version",
             &format!("Installed version: {}", current_version),
-            "View this release",
             "Open this release page?",
-            TD_INFORMATION_ICON,
         ) {
             Ok(true) => app.open_release_url(&release_url),
             Ok(false) => {}
@@ -709,9 +699,7 @@ fn handle_update_check_message(hwnd: HWND, app: &App, message: UpdateCheckMessag
                 "Current version: {}\nLatest version: {}",
                 current_version, latest_version
             ),
-            "Download from GitHub Releases",
             "Open GitHub Releases?",
-            TD_INFORMATION_ICON,
         ) {
             Ok(true) => app.open_release_url(&release_url),
             Ok(false) => {}
@@ -729,9 +717,7 @@ fn handle_update_check_message(hwnd: HWND, app: &App, message: UpdateCheckMessag
                 "Installed version: {}\nLatest published version: {}",
                 current_version, latest_version
             ),
-            "Open GitHub Releases",
             "Open GitHub Releases?",
-            TD_INFORMATION_ICON,
         ) {
             Ok(true) => app.open_release_url(&releases_url),
             Ok(false) => {}
@@ -746,28 +732,17 @@ fn handle_update_check_message(hwnd: HWND, app: &App, message: UpdateCheckMessag
 }
 
 fn show_update_error_dialog(hwnd: HWND, message: &str) -> anyhow::Result<()> {
-    match show_update_task_dialog(
-        hwnd,
-        "Check for updates",
-        "Could not check for updates",
-        message,
-        TD_WARNING_ICON,
-    ) {
-        Ok(()) => Ok(()),
-        Err(_) => {
-            let title = to_wstring("Check for updates");
-            let content = to_wstring(&format!("Could not check for updates\n\n{}", message));
-            unsafe {
-                MessageBoxW(
-                    hwnd,
-                    PCWSTR(content.as_ptr()),
-                    PCWSTR(title.as_ptr()),
-                    MB_ICONWARNING,
-                );
-            }
-            Ok(())
-        }
+    let title = to_wstring("Check for updates");
+    let content = to_wstring(&format!("Could not check for updates\n\n{}", message));
+    unsafe {
+        MessageBoxW(
+            hwnd,
+            PCWSTR(content.as_ptr()),
+            PCWSTR(title.as_ptr()),
+            MB_ICONWARNING,
+        );
     }
+    Ok(())
 }
 
 fn show_update_action_dialog(
@@ -775,85 +750,20 @@ fn show_update_action_dialog(
     title: &str,
     instruction: &str,
     content: &str,
-    action_label: &str,
     fallback_prompt: &str,
-    icon: PCWSTR,
 ) -> anyhow::Result<bool> {
-    let title_wide = to_wstring(title);
-    let instruction_wide = to_wstring(instruction);
-    let content_wide = to_wstring(content);
-    let action_label = to_wstring(action_label);
-    let close_label = to_wstring("Close");
-    let buttons = [
-        TASKDIALOG_BUTTON {
-            nButtonID: UPDATE_DIALOG_ACTION_BUTTON_ID,
-            pszButtonText: PCWSTR(action_label.as_ptr()),
-        },
-        TASKDIALOG_BUTTON {
-            nButtonID: UPDATE_DIALOG_CLOSE_BUTTON_ID,
-            pszButtonText: PCWSTR(close_label.as_ptr()),
-        },
-    ];
-    let config = TASKDIALOGCONFIG {
-        cbSize: std::mem::size_of::<TASKDIALOGCONFIG>() as u32,
-        hwndParent: hwnd,
-        dwFlags: TDF_ALLOW_DIALOG_CANCELLATION,
-        dwCommonButtons: TASKDIALOG_COMMON_BUTTON_FLAGS(0),
-        pszWindowTitle: PCWSTR(title_wide.as_ptr()),
-        Anonymous1: TASKDIALOGCONFIG_0 { pszMainIcon: icon },
-        pszMainInstruction: PCWSTR(instruction_wide.as_ptr()),
-        pszContent: PCWSTR(content_wide.as_ptr()),
-        cButtons: buttons.len() as u32,
-        pButtons: buttons.as_ptr(),
-        nDefaultButton: UPDATE_DIALOG_ACTION_BUTTON_ID,
-        ..Default::default()
-    };
-    let mut selected = UPDATE_DIALOG_CLOSE_BUTTON_ID;
-    unsafe {
-        match TaskDialogIndirect(&config, Some(&mut selected), None, None) {
-            Ok(()) => Ok(selected == UPDATE_DIALOG_ACTION_BUTTON_ID),
-            Err(_) => {
-                let fallback_title = to_wstring("Check for updates");
-                let fallback_message = to_wstring(&format!(
-                    "{}\n\n{}\n\n{}",
-                    instruction, content, fallback_prompt
-                ));
-                let action = MessageBoxW(
-                    hwnd,
-                    PCWSTR(fallback_message.as_ptr()),
-                    PCWSTR(fallback_title.as_ptr()),
-                    MB_YESNO,
-                ) == IDYES;
-                Ok(action)
-            }
-        }
-    }
-}
-
-fn show_update_task_dialog(
-    hwnd: HWND,
-    title: &str,
-    instruction: &str,
-    content: &str,
-    icon: PCWSTR,
-) -> anyhow::Result<()> {
     let title = to_wstring(title);
-    let instruction = to_wstring(instruction);
-    let content = to_wstring(content);
-    let mut button = 0;
+    let message = to_wstring(&format!("{}\n\n{}\n\n{}", instruction, content, fallback_prompt));
     unsafe {
-        TaskDialog(
-            hwnd,
-            None,
-            PCWSTR(title.as_ptr()),
-            PCWSTR(instruction.as_ptr()),
-            PCWSTR(content.as_ptr()),
-            TDCBF_CLOSE_BUTTON,
-            icon,
-            Some(&mut button),
-        )?;
+        Ok(
+            MessageBoxW(
+                hwnd,
+                PCWSTR(message.as_ptr()),
+                PCWSTR(title.as_ptr()),
+                MB_YESNO | MB_ICONINFORMATION,
+            ) == IDYES,
+        )
     }
-    Ok(())
 }
 
 fn confirm_enable_logging(hwnd: HWND) -> bool {
