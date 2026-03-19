@@ -1,3 +1,8 @@
+//! Tray icon and context menu construction.
+//!
+//! This module owns tray icon lifecycle, theme-aware icon selection, and the
+//! hierarchical context menu command IDs used by the window procedure.
+
 use crate::app::AppState;
 use crate::log::log_line;
 use crate::restaurant::available_restaurants;
@@ -78,6 +83,7 @@ struct TrayIconSet {
 
 static TRAY_ICONS: OnceLock<TrayIconSet> = OnceLock::new();
 
+/// Maps a restaurant code to its context-menu command identifier.
 pub fn restaurant_command_id(code: &str) -> Option<u16> {
     match code {
         "0437" => Some(CMD_RESTAURANT_0437),
@@ -94,6 +100,7 @@ pub fn restaurant_command_id(code: &str) -> Option<u16> {
     }
 }
 
+/// Maps a restaurant command identifier back to its stable restaurant code.
 pub fn restaurant_code_for_command(cmd: u16) -> Option<&'static str> {
     match cmd {
         CMD_RESTAURANT_0437 => Some("0437"),
@@ -110,6 +117,7 @@ pub fn restaurant_code_for_command(cmd: u16) -> Option<&'static str> {
     }
 }
 
+/// Adds the notification area icon for the running app instance.
 pub fn add_tray_icon(hwnd: HWND, callback_message: u32) -> anyhow::Result<()> {
     unsafe {
         let icon = select_tray_icon();
@@ -139,6 +147,7 @@ pub fn add_tray_icon(hwnd: HWND, callback_message: u32) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Refreshes the tray icon when the active system theme changes.
 pub fn refresh_tray_icon(hwnd: HWND) {
     unsafe {
         let data = NOTIFYICONDATAW {
@@ -155,6 +164,7 @@ pub fn refresh_tray_icon(hwnd: HWND) {
     }
 }
 
+/// Removes the notification area icon during shutdown.
 pub fn remove_tray_icon(hwnd: HWND) {
     unsafe {
         let data = NOTIFYICONDATAW {
@@ -167,6 +177,7 @@ pub fn remove_tray_icon(hwnd: HWND) {
     }
 }
 
+/// Returns the screen-space tray icon bounds when the shell exposes them.
 pub fn tray_icon_rect(hwnd: HWND) -> Option<RECT> {
     let ident = NOTIFYICONIDENTIFIER {
         cbSize: std::mem::size_of::<NOTIFYICONIDENTIFIER>() as u32,
@@ -289,6 +300,7 @@ fn system_uses_light_theme() -> Option<bool> {
     }
 }
 
+/// Shows the tray context menu for the current application state.
 pub fn show_context_menu(hwnd: HWND, state: &AppState) {
     unsafe {
         let menu = build_context_menu(state);

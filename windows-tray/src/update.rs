@@ -1,3 +1,5 @@
+//! Runtime versioning and GitHub release update checks.
+
 use anyhow::{anyhow, Context};
 use reqwest::blocking::Client;
 use reqwest::header::{ACCEPT, USER_AGENT};
@@ -9,6 +11,7 @@ const GITHUB_LATEST_RELEASE_URL: &str =
 const GITHUB_RELEASES_URL: &str = "https://github.com/veetir/uef-kuopio-lunch-tray/releases";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Result of comparing the running app version against the latest GitHub release.
 pub enum UpdateCheckResult {
     LatestPublished {
         current_version: String,
@@ -39,10 +42,12 @@ struct AppVersion {
     patch: u32,
 }
 
+/// Returns the compile-time application version embedded by Cargo.
 pub fn current_app_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
+/// Queries GitHub for the latest Windows release and compares it to the running version.
 pub fn check_for_updates() -> anyhow::Result<UpdateCheckResult> {
     let current_version = current_app_version().to_string();
     let current = parse_version(current_app_version())

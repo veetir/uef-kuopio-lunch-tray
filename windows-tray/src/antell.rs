@@ -1,3 +1,5 @@
+//! Antell HTML parsing helpers.
+
 use crate::format::normalize_text;
 use crate::model::{MenuGroup, TodayMenu};
 use html_escape::decode_html_entities;
@@ -9,6 +11,7 @@ fn element_text(element: &scraper::element_ref::ElementRef) -> String {
     normalize_text(decoded.as_ref())
 }
 
+/// Parses an Antell lunch page into the normalized menu format used by the popup.
 pub fn parse_antell_html(html: &str, today_key: &str) -> TodayMenu {
     let document = Html::parse_document(html);
     let section_sel = Selector::parse("section.menu-section").unwrap();

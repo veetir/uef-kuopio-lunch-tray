@@ -1,7 +1,10 @@
+//! Text normalization and presentation helpers for menu content.
+
 use crate::model::{MenuGroup, TodayMenu};
 use crate::restaurant::Provider;
 
 #[derive(Debug, Clone, Copy)]
+/// Price-group visibility filters applied when rendering Compass headings.
 pub struct PriceGroups {
     pub student: bool,
     pub staff: bool,
@@ -22,6 +25,7 @@ struct PriceEntry {
     value: Option<f32>,
 }
 
+/// Normalizes arbitrary text for display and matching by collapsing whitespace.
 pub fn normalize_text(value: &str) -> String {
     let mut out = String::new();
     let mut last_was_space = false;
@@ -40,6 +44,7 @@ pub fn normalize_text(value: &str) -> String {
     out.trim().to_string()
 }
 
+/// Normalizes an optional string and returns an empty string when missing.
 pub fn normalize_optional(value: Option<&str>) -> String {
     match value {
         Some(v) => normalize_text(v),
@@ -47,6 +52,7 @@ pub fn normalize_optional(value: Option<&str>) -> String {
     }
 }
 
+/// Formats an ISO date for the selected UI language.
 pub fn format_display_date(date_iso: &str, language: &str) -> String {
     let iso = normalize_text(date_iso);
     let parts: Vec<&str> = iso.split('-').collect();
@@ -68,6 +74,7 @@ pub fn format_display_date(date_iso: &str, language: &str) -> String {
     format!("{}/{}/{}", month, day, year)
 }
 
+/// Returns the popup line that combines the menu date and lunch time.
 pub fn date_and_time_line(today_menu: Option<&TodayMenu>, language: &str) -> String {
     let menu = match today_menu {
         Some(m) => m,
@@ -84,6 +91,7 @@ pub fn date_and_time_line(today_menu: Option<&TodayMenu>, language: &str) -> Str
     }
 }
 
+/// Returns a localized UI string for a small fixed set of popup labels.
 pub fn text_for(language: &str, key: &str) -> String {
     if language == "fi" {
         match key {
@@ -108,6 +116,7 @@ pub fn text_for(language: &str, key: &str) -> String {
     }
 }
 
+/// Builds a rendered menu heading, optionally including filtered price information.
 pub fn menu_heading(
     menu: &MenuGroup,
     provider: Provider,
@@ -135,6 +144,7 @@ pub fn menu_heading(
     }
 }
 
+/// Splits a rendered menu component into main text and allergen suffix.
 pub fn split_component_suffix(component: &str) -> (String, String) {
     let text = normalize_text(component);
     if text.is_empty() {
@@ -158,6 +168,7 @@ pub fn split_component_suffix(component: &str) -> (String, String) {
     (normalized_main, suffix)
 }
 
+/// Converts a menu group's raw component strings into renderable main/suffix pairs.
 pub fn renderable_menu_components(group: &MenuGroup) -> Vec<(String, String)> {
     let mut out = Vec::new();
     for component in &group.components {
@@ -367,6 +378,7 @@ fn clean_main_text(main: &str) -> String {
         .to_string()
 }
 
+/// Extracts the student price from a provider price string when possible.
 pub fn student_price_eur(price: &str) -> Option<f32> {
     let entries = parse_compass_price_entries(price);
     entries

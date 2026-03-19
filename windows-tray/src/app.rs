@@ -1,3 +1,8 @@
+//! Central application state and orchestration for the Windows tray app.
+//!
+//! This module owns persisted settings, in-memory menu state, fetch coordination,
+//! update checks, and side effects such as opening external URLs.
+
 use crate::api::{self, FetchContext, FetchMode, FetchOutput, FetchReason};
 use crate::cache;
 use crate::log::{log_line, set_enabled as set_log_enabled};
@@ -18,6 +23,7 @@ use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// High-level fetch status for the currently selected restaurant.
 pub enum FetchStatus {
     Idle,
     Loading,
@@ -27,6 +33,7 @@ pub enum FetchStatus {
 }
 
 #[derive(Debug, Clone)]
+/// Snapshot of UI-visible application state consumed by popup and tray rendering.
 pub struct AppState {
     pub settings: Settings,
     pub status: FetchStatus,
@@ -101,6 +108,7 @@ struct StartOptions {
 
 const STALE_NO_MENU_COOLDOWN_MS: u32 = 10 * 60_000;
 
+/// Top-level application object shared by the tray and popup windows.
 pub struct App {
     state: Arc<Mutex<AppState>>,
     hwnds: Mutex<WindowHandles>,
@@ -110,6 +118,7 @@ pub struct App {
     update_check_in_flight: Arc<Mutex<bool>>,
 }
 
+/// Message posted back to the UI thread when a menu fetch finishes.
 pub struct FetchMessage {
     pub requested_code: String,
     pub requested_language: String,
@@ -119,11 +128,13 @@ pub struct FetchMessage {
     pub result: FetchOutput,
 }
 
+/// Message posted back to the UI thread when an update check finishes.
 pub struct UpdateCheckMessage {
     pub outcome: UpdateCheckOutcome,
 }
 
 #[derive(Debug, Clone)]
+/// Result of comparing the running app version against the latest published release.
 pub enum UpdateCheckOutcome {
     LatestPublished {
         current_version: String,
@@ -145,6 +156,7 @@ pub enum UpdateCheckOutcome {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Outcome of applying a completed fetch to the current application state.
 pub enum FetchApplyOutcome {
     CurrentSuccess,
     CurrentFailure,
@@ -153,6 +165,7 @@ pub enum FetchApplyOutcome {
 }
 
 impl App {
+    /// Creates a new application state container with persisted settings loaded.
     pub fn new() -> Self {
         let settings = load_settings();
         set_log_enabled(settings.enable_logging);
@@ -184,24 +197,29 @@ impl App {
         }
     }
 
+    /// Stores the tray and popup window handles after window creation.
     pub fn set_hwnds(&self, tray: HWND, popup: HWND) {
         let mut hwnds = self.hwnds.lock().unwrap();
         hwnds.tray = tray;
         hwnds.popup = popup;
     }
 
+    /// Returns the hidden tray message window handle.
     pub fn hwnd_tray(&self) -> HWND {
         self.hwnds.lock().unwrap().tray
     }
 
+    /// Returns the popup window handle.
     pub fn hwnd_popup(&self) -> HWND {
         self.hwnds.lock().unwrap().popup
     }
 
+    /// Returns a cloned snapshot of the current UI-visible state.
     pub fn snapshot(&self) -> AppState {
         self.state.lock().unwrap().clone()
     }
 
+    /// Loads cached menu data for the currently selected restaurant, if available.
     pub fn load_cache_for_current(&self) -> bool {
         let (restaurant, language) = {
             let state = self.state.lock().unwrap();
@@ -370,6 +388,7 @@ impl App {
         true
     }
 
+    /// Starts any startup refresh work that should happen after cached state is restored.
     pub fn maybe_refresh_on_startup(&self) {
         self.maybe_refresh_current_with_reasons(
             "startup",
@@ -385,6 +404,7 @@ impl App {
         );
     }
 
+    /// Triggers a timer-driven refresh for the currently selected restaurant.
     pub fn refresh_current_from_timer(&self) {
         self.start_refresh_for_code(
             &self.current_code(),
@@ -396,6 +416,7 @@ impl App {
         );
     }
 
+    /// Triggers the daily midnight refresh path.
     pub fn refresh_current_at_midnight(&self) {
         self.start_refresh_for_code(
             &self.current_code(),
@@ -407,6 +428,7 @@ impl App {
         );
     }
 
+    /// Triggers a user-requested refresh for the currently selected restaurant.
     pub fn refresh_current_manually(&self) {
         self.start_refresh_for_code(
             &self.current_code(),
@@ -418,6 +440,7 @@ impl App {
         );
     }
 
+    /// Starts a retry fetch after a previous refresh failure.
     pub fn start_refresh_retry(&self) {
         let target = self.current_target();
         if is_hard_closed_today(target.restaurant) {
@@ -569,6 +592,7 @@ impl App {
         true
     }
 
+    /// Applies a completed fetch message on the UI thread and updates cached state.
     pub fn apply_fetch_message(&self, message: FetchMessage) -> FetchApplyOutcome {
         let FetchMessage {
             requested_code,
@@ -773,6 +797,7 @@ impl App {
         }
     }
 
+    /// Changes the selected restaurant by its stable restaurant code.
     pub fn set_restaurant(&self, code: &str) {
         let mut state = self.state.lock().unwrap();
         state.settings.restaurant_code = code.to_string();
@@ -792,6 +817,7 @@ impl App {
         state.stale_network_error = false;
     }
 
+    /// Changes the selected restaurant by its menu order index.
     pub fn set_restaurant_index(&self, index: usize) -> bool {
         let enable_antell = {
             let state = self.state.lock().unwrap();
@@ -804,6 +830,7 @@ impl App {
         true
     }
 
+    /// Changes the UI language and refreshes any derived state that depends on it.
     pub fn set_language(&self, language: &str) {
         let mut state = self.state.lock().unwrap();
         state.settings.language = language.to_string();
@@ -817,72 +844,84 @@ impl App {
         state.stale_network_error = false;
     }
 
+    /// Toggles whether menu headings show prices.
     pub fn toggle_show_prices(&self) {
         let mut state = self.state.lock().unwrap();
         state.settings.show_prices = !state.settings.show_prices;
         let _ = save_settings(&state.settings);
     }
 
+    /// Toggles whether allergen suffixes are rendered.
     pub fn toggle_show_allergens(&self) {
         let mut state = self.state.lock().unwrap();
         state.settings.show_allergens = !state.settings.show_allergens;
         let _ = save_settings(&state.settings);
     }
 
+    /// Toggles gluten-free highlighting.
     pub fn toggle_highlight_gluten_free(&self) {
         let mut state = self.state.lock().unwrap();
         state.settings.highlight_gluten_free = !state.settings.highlight_gluten_free;
         let _ = save_settings(&state.settings);
     }
 
+    /// Toggles vegetarian highlighting.
     pub fn toggle_highlight_veg(&self) {
         let mut state = self.state.lock().unwrap();
         state.settings.highlight_veg = !state.settings.highlight_veg;
         let _ = save_settings(&state.settings);
     }
 
+    /// Toggles lactose-free highlighting.
     pub fn toggle_highlight_lactose_free(&self) {
         let mut state = self.state.lock().unwrap();
         state.settings.highlight_lactose_free = !state.settings.highlight_lactose_free;
         let _ = save_settings(&state.settings);
     }
 
+    /// Toggles popup open/close/switch animations.
     pub fn toggle_animations(&self) {
         let mut state = self.state.lock().unwrap();
         state.settings.animations_enabled = !state.settings.animations_enabled;
         let _ = save_settings(&state.settings);
     }
 
+    /// Toggles student price visibility in Compass price strings.
     pub fn toggle_show_student_price(&self) {
         let mut state = self.state.lock().unwrap();
         state.settings.show_student_price = !state.settings.show_student_price;
         let _ = save_settings(&state.settings);
     }
 
+    /// Toggles staff price visibility in Compass price strings.
     pub fn toggle_show_staff_price(&self) {
         let mut state = self.state.lock().unwrap();
         state.settings.show_staff_price = !state.settings.show_staff_price;
         let _ = save_settings(&state.settings);
     }
 
+    /// Toggles guest price visibility in Compass price strings.
     pub fn toggle_show_guest_price(&self) {
         let mut state = self.state.lock().unwrap();
         state.settings.show_guest_price = !state.settings.show_guest_price;
         let _ = save_settings(&state.settings);
     }
 
+    /// Toggles hiding expensive student meals from rendered menus.
     pub fn toggle_hide_expensive_student_meals(&self) {
         let mut state = self.state.lock().unwrap();
         state.settings.hide_expensive_student_meals = !state.settings.hide_expensive_student_meals;
         let _ = save_settings(&state.settings);
     }
 
+    /// Updates the configured automatic refresh interval in minutes.
     pub fn set_refresh_minutes(&self, minutes: u32) {
         let mut state = self.state.lock().unwrap();
         state.settings.refresh_minutes = minutes;
         let _ = save_settings(&state.settings);
     }
 
+    /// Moves the restaurant selection backward or forward in the enabled list.
     pub fn cycle_restaurant(&self, direction: i32) {
         let mut state = self.state.lock().unwrap();
         let current = state.settings.restaurant_code.as_str();
@@ -906,6 +945,7 @@ impl App {
         state.stale_network_error = false;
     }
 
+    /// Writes the current settings snapshot to disk.
     pub fn persist_settings(&self) {
         let settings = {
             let state = self.state.lock().unwrap();
@@ -914,6 +954,7 @@ impl App {
         let _ = save_settings(&settings);
     }
 
+    /// Opens the current restaurant URL in the system browser, if available.
     pub fn open_current_url(&self) {
         let url = {
             let state = self.state.lock().unwrap();
@@ -925,6 +966,7 @@ impl App {
         self.open_target(&url);
     }
 
+    /// Opens the app data directory used for settings, cache, and logs.
     pub fn open_appdata_dir(&self) {
         let dir = settings_dir();
         if let Err(err) = std::fs::create_dir_all(&dir) {
@@ -935,10 +977,12 @@ impl App {
         self.open_target(&path);
     }
 
+    /// Opens the configured feedback URL in the system browser.
     pub fn open_feedback_url(&self) {
         self.open_target("https://github.com/veetir/uef-kuopio-lunch-tray/issues");
     }
 
+    /// Opens a release or releases page in the system browser.
     pub fn open_release_url(&self, url: &str) {
         if url.trim().is_empty() {
             return;
@@ -946,6 +990,7 @@ impl App {
         self.open_target(url);
     }
 
+    /// Starts an asynchronous update check if one is not already in flight.
     pub fn start_update_check(&self) -> bool {
         {
             let mut in_flight = self.update_check_in_flight.lock().unwrap();
@@ -1037,16 +1082,19 @@ impl App {
         true
     }
 
+    /// Marks the current update check as completed.
     pub fn finish_update_check(&self) {
         let mut in_flight = self.update_check_in_flight.lock().unwrap();
         *in_flight = false;
     }
 
+    /// Returns the configured automatic refresh interval in minutes.
     pub fn refresh_minutes(&self) -> u32 {
         let state = self.state.lock().unwrap();
         state.settings.refresh_minutes
     }
 
+    /// Refreshes when selection changed and the cached data is missing or stale enough.
     pub fn maybe_refresh_on_selection(&self) {
         self.maybe_refresh_current_with_reasons(
             "selection",
@@ -1062,6 +1110,7 @@ impl App {
         );
     }
 
+    /// Refreshes when the UI language changed and the matching cache is missing or stale.
     pub fn maybe_refresh_on_language_switch(&self) {
         self.maybe_refresh_current_with_reasons(
             "language_switch",
@@ -1077,18 +1126,21 @@ impl App {
         );
     }
 
+    /// Changes the active popup theme.
     pub fn set_theme(&self, theme: &str) {
         let mut state = self.state.lock().unwrap();
         state.settings.theme = normalize_theme(theme);
         let _ = save_settings(&state.settings);
     }
 
+    /// Changes the popup scale preset.
     pub fn set_widget_scale(&self, value: &str) {
         let mut state = self.state.lock().unwrap();
         state.settings.widget_scale = normalize_widget_scale(value);
         let _ = save_settings(&state.settings);
     }
 
+    /// Toggles diagnostic logging and persists the updated setting.
     pub fn toggle_logging(&self) {
         let mut state = self.state.lock().unwrap();
         state.settings.enable_logging = !state.settings.enable_logging;
@@ -1099,6 +1151,7 @@ impl App {
         let _ = save_settings(&state.settings);
     }
 
+    /// Refreshes if the cached payload date no longer matches the local day.
     pub fn check_stale_date_and_refresh(&self) {
         let target = self.current_target();
         if is_hard_closed_today(target.restaurant) {
@@ -1134,6 +1187,7 @@ impl App {
         }
     }
 
+    /// Returns the next retry delay derived from recent fetch failures.
     pub fn current_retry_delay_ms(&self) -> u32 {
         let now = now_epoch_ms();
         let target = self.current_target();
@@ -1148,6 +1202,7 @@ impl App {
         }
     }
 
+    /// Prefetches menus for non-selected restaurants to improve switching latency.
     pub fn prefetch_enabled_restaurants(&self) {
         let now = now_epoch_ms();
         {
@@ -1275,6 +1330,7 @@ impl App {
     }
 }
 
+/// Returns the current local epoch timestamp in milliseconds.
 pub fn now_epoch_ms() -> i64 {
     let now = OffsetDateTime::now_utc();
     (now.unix_timestamp_nanos() / 1_000_000) as i64

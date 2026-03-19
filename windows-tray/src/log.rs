@@ -1,3 +1,5 @@
+//! Minimal file-based diagnostic logging.
+
 use std::fs::{create_dir_all, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
@@ -13,10 +15,12 @@ fn log_path() -> PathBuf {
         .join("compass-lunch.log")
 }
 
+/// Enables or disables diagnostic logging globally for the current process.
 pub fn set_enabled(enabled: bool) {
     LOG_ENABLED.store(enabled, Ordering::Relaxed);
 }
 
+/// Appends a single timestamped log line when logging is enabled.
 pub fn log_line(message: &str) {
     if !LOG_ENABLED.load(Ordering::Relaxed) {
         return;

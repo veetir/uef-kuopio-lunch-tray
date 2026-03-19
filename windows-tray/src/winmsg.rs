@@ -1,3 +1,8 @@
+//! Win32 window procedures and message dispatch for the tray and popup windows.
+//!
+//! This module is the boundary between raw Windows messages and higher-level app,
+//! tray, and popup behavior.
+
 use crate::app::{App, FetchApplyOutcome, FetchMessage, UpdateCheckMessage, UpdateCheckOutcome};
 use crate::log::log_line;
 use crate::popup;
@@ -12,10 +17,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DefWindowProcW, DestroyWindow, GetCursorPos, GetWindowLongPtrW, KillTimer, LoadCursorW,
     MessageBoxW, PostQuitMessage, RegisterClassExW, SetForegroundWindow, SetTimer,
     SetWindowLongPtrW, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, IDC_ARROW, IDYES,
-    MB_DEFBUTTON2, MB_ICONINFORMATION, MB_ICONWARNING, MB_YESNO, WM_ACTIVATE, WM_APP,
-    WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_KEYDOWN,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE,
-    WM_PAINT, WM_RBUTTONUP, WM_SETTINGCHANGE, WM_THEMECHANGED, WM_TIMER, WNDCLASSEXW,
+    MB_DEFBUTTON2, MB_ICONINFORMATION, MB_ICONWARNING, MB_YESNO, WM_ACTIVATE, WM_APP, WM_COMMAND,
+    WM_CONTEXTMENU, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_PAINT, WM_RBUTTONUP,
+    WM_SETTINGCHANGE, WM_THEMECHANGED, WM_TIMER, WNDCLASSEXW,
 };
 
 pub const TRAY_WND_CLASS: &str = "CompassLunchTrayWindow";
@@ -33,6 +38,7 @@ pub const TIMER_RETRY_FETCH: usize = 4;
 const TRAY_CLOSE_SUPPRESS_OPEN_MS: i64 = 250;
 static LAST_POPUP_CLOSE_REQUEST_MS: OnceLock<Mutex<i64>> = OnceLock::new();
 
+/// Registers the hidden tray window class and the popup window class.
 pub fn register_window_classes(
     hinstance: windows::Win32::Foundation::HINSTANCE,
 ) -> anyhow::Result<()> {
@@ -66,6 +72,7 @@ pub fn register_window_classes(
     Ok(())
 }
 
+/// Window procedure for the hidden tray message window.
 pub unsafe extern "system" fn tray_wndproc(
     hwnd: HWND,
     msg: u32,
@@ -265,6 +272,7 @@ pub unsafe extern "system" fn tray_wndproc(
     }
 }
 
+/// Window procedure for the visible popup window.
 pub unsafe extern "system" fn popup_wndproc(
     hwnd: HWND,
     msg: u32,
@@ -753,16 +761,17 @@ fn show_update_action_dialog(
     fallback_prompt: &str,
 ) -> anyhow::Result<bool> {
     let title = to_wstring(title);
-    let message = to_wstring(&format!("{}\n\n{}\n\n{}", instruction, content, fallback_prompt));
+    let message = to_wstring(&format!(
+        "{}\n\n{}\n\n{}",
+        instruction, content, fallback_prompt
+    ));
     unsafe {
-        Ok(
-            MessageBoxW(
-                hwnd,
-                PCWSTR(message.as_ptr()),
-                PCWSTR(title.as_ptr()),
-                MB_YESNO | MB_ICONINFORMATION,
-            ) == IDYES,
-        )
+        Ok(MessageBoxW(
+            hwnd,
+            PCWSTR(message.as_ptr()),
+            PCWSTR(title.as_ptr()),
+            MB_YESNO | MB_ICONINFORMATION,
+        ) == IDYES)
     }
 }
 
@@ -793,6 +802,7 @@ fn schedule_refresh_timer(hwnd: HWND, minutes: u32) {
     }
 }
 
+/// Schedules the recurring refresh, midnight rollover, and stale-date timers.
 pub fn schedule_timers(hwnd: HWND, minutes: u32) {
     schedule_refresh_timer(hwnd, minutes);
     schedule_midnight_timer(hwnd);

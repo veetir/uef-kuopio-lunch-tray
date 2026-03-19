@@ -1,3 +1,9 @@
+//! Popup subsystem facade.
+//!
+//! The public functions in this module are the stable entry points used by the
+//! window procedure. Rendering, layout, animation, and interaction details live
+//! in smaller submodules behind this facade.
+
 use crate::api;
 use crate::app::{AppState, FetchStatus};
 use crate::cache;
@@ -273,6 +279,7 @@ enum PopupAnimationFrame {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Action associated with a header button hit-test.
 pub enum HeaderButtonAction {
     Prev,
     Next,
@@ -300,42 +307,52 @@ mod layout;
 mod render;
 mod theme;
 
+/// Shows the popup near the current cursor location.
 pub fn show_popup(hwnd: HWND, state: &AppState) {
     layout::show_popup(hwnd, state);
 }
 
+/// Shows the popup using an explicit screen-space anchor point.
 pub fn show_popup_at(hwnd: HWND, state: &AppState, anchor: POINT) {
     layout::show_popup_at(hwnd, state, anchor);
 }
 
+/// Shows the popup anchored to the tray icon rectangle when available.
 pub fn show_popup_for_tray_icon(hwnd: HWND, state: &AppState, tray_rect: RECT) {
     layout::show_popup_for_tray_icon(hwnd, state, tray_rect);
 }
 
+/// Recomputes popup size while keeping the current anchored position.
 pub fn resize_popup_keep_position(hwnd: HWND, state: &AppState) {
     layout::resize_popup_keep_position(hwnd, state);
 }
 
+/// Clears cached layout budgets after a settings change that affects wrapping.
 pub fn invalidate_layout_budget_cache() {
     layout::invalidate_layout_budget_cache();
 }
 
+/// Hides the popup immediately without animation.
 pub fn hide_popup(hwnd: HWND) {
     layout::hide_popup(hwnd);
 }
 
+/// Starts the navigation button press feedback animation.
 pub fn press_navigation_button(hwnd: HWND, direction: i32) {
     animation::press_navigation_button(hwnd, direction);
 }
 
+/// Advances the header button press feedback timer.
 pub fn tick_header_button_press(hwnd: HWND) {
     animation::tick_header_button_press(hwnd);
 }
 
+/// Starts the popup close animation when animations are enabled.
 pub fn begin_close_animation(hwnd: HWND, state: &AppState) {
     animation::begin_close_animation(hwnd, state);
 }
 
+/// Starts the restaurant-switch animation between two popup states.
 pub fn begin_switch_animation(
     hwnd: HWND,
     old_state: &AppState,
@@ -345,10 +362,12 @@ pub fn begin_switch_animation(
     animation::begin_switch_animation(hwnd, old_state, new_state, direction);
 }
 
+/// Advances the popup animation timer and repaints as needed.
 pub fn tick_animation(hwnd: HWND) {
     animation::tick_animation(hwnd);
 }
 
+/// Returns the header button under the given client-space point, if any.
 pub fn header_button_at(
     hwnd: HWND,
     settings: &Settings,
@@ -358,26 +377,32 @@ pub fn header_button_at(
     interaction::header_button_at(hwnd, settings, x, y)
 }
 
+/// Starts a text selection drag in the popup content area.
 pub fn begin_text_selection(hwnd: HWND, x: i32, y: i32) -> bool {
     interaction::begin_text_selection(hwnd, x, y)
 }
 
+/// Updates the active text selection drag.
 pub fn update_text_selection(hwnd: HWND, x: i32, y: i32) {
     interaction::update_text_selection(hwnd, x, y);
 }
 
+/// Finishes the current text selection and copies it to the clipboard.
 pub fn finish_text_selection(hwnd: HWND, x: i32, y: i32) -> bool {
     interaction::finish_text_selection(hwnd, x, y)
 }
 
+/// Cancels any active text selection state for the popup.
 pub fn cancel_text_selection(hwnd: HWND) {
     interaction::cancel_text_selection(hwnd);
 }
 
+/// Reports whether a text selection drag is currently active.
 pub fn text_selection_active(hwnd: HWND) -> bool {
     interaction::text_selection_active(hwnd)
 }
 
+/// Paint entry point used by the popup window procedure.
 pub fn paint_popup(hwnd: HWND, state: &AppState) {
     render::paint_popup(hwnd, state);
 }

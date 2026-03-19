@@ -1,13 +1,17 @@
+//! Disk cache helpers for provider payloads.
+
 use crate::restaurant::{provider_key, Provider};
 use anyhow::Context;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// Returns the cache directory used for fetched provider payloads.
 pub fn cache_dir() -> PathBuf {
     let base = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| ".".to_string());
     Path::new(&base).join("compass-lunch").join("cache")
 }
 
+/// Returns the cache file path for a provider, restaurant, and language combination.
 pub fn cache_path(provider: Provider, code: &str, language: &str) -> PathBuf {
     cache_dir().join(cache_filename(provider, code, language))
 }
@@ -54,6 +58,7 @@ fn sanitize_key_segment(value: &str) -> String {
         .collect()
 }
 
+/// Reads a cached payload from the current or legacy cache filename format.
 pub fn read_cache(provider: Provider, code: &str, language: &str) -> Option<String> {
     let path = cache_path(provider, code, language);
     match fs::read_to_string(&path) {
@@ -65,6 +70,7 @@ pub fn read_cache(provider: Provider, code: &str, language: &str) -> Option<Stri
     }
 }
 
+/// Returns the cache modification time in epoch milliseconds, if available.
 pub fn cache_mtime_ms(provider: Provider, code: &str, language: &str) -> Option<i64> {
     let path = cache_path(provider, code, language);
     let metadata = fs::metadata(&path)
@@ -75,6 +81,7 @@ pub fn cache_mtime_ms(provider: Provider, code: &str, language: &str) -> Option<
     Some(duration.as_millis() as i64)
 }
 
+/// Writes a provider payload to the normalized cache location.
 pub fn write_cache(
     provider: Provider,
     code: &str,

@@ -1,8 +1,11 @@
+//! Persistent user settings stored under the app data directory.
+
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Persisted settings that drive fetch behavior and popup rendering.
 pub struct Settings {
     pub restaurant_code: String,
     pub language: String,
@@ -49,15 +52,18 @@ impl Default for Settings {
     }
 }
 
+/// Returns the directory used for settings, logs, favorites, and related app data.
 pub fn settings_dir() -> PathBuf {
     let base = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| ".".to_string());
     Path::new(&base).join("compass-lunch")
 }
 
+/// Returns the full path of the persisted settings JSON file.
 pub fn settings_path() -> PathBuf {
     settings_dir().join("settings.json")
 }
 
+/// Loads settings from disk and falls back to defaults on missing or invalid data.
 pub fn load_settings() -> Settings {
     let path = settings_path();
     match fs::read_to_string(&path) {
@@ -66,6 +72,7 @@ pub fn load_settings() -> Settings {
     }
 }
 
+/// Saves the provided settings snapshot to disk.
 pub fn save_settings(settings: &Settings) -> anyhow::Result<()> {
     let dir = settings_dir();
     fs::create_dir_all(&dir)?;
@@ -161,6 +168,7 @@ fn decode_settings(data: &str) -> anyhow::Result<Settings> {
     })
 }
 
+/// Normalizes user-facing theme values to the supported internal theme keys.
 pub fn normalize_theme(value: &str) -> String {
     match value.to_ascii_lowercase().as_str() {
         "light" => "light".to_string(),
@@ -175,6 +183,7 @@ pub fn normalize_theme(value: &str) -> String {
     }
 }
 
+/// Normalizes user-facing scale values to the supported scale presets.
 pub fn normalize_widget_scale(value: &str) -> String {
     match value.to_ascii_lowercase().as_str() {
         "normal" | "100" | "100%" => "normal".to_string(),
