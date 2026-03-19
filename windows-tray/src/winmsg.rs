@@ -1,4 +1,9 @@
-use crate::app::{App, FetchApplyOutcome, FetchMessage};
+//! Win32 window procedures and message dispatch for the tray and popup windows.
+//!
+//! This module is the boundary between raw Windows messages and higher-level app,
+//! tray, and popup behavior.
+
+use crate::app::{App, FetchApplyOutcome, FetchMessage, UpdateCheckMessage, UpdateCheckOutcome};
 use crate::log::log_line;
 use crate::popup;
 use crate::restaurant::available_restaurants;
@@ -12,9 +17,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DefWindowProcW, DestroyWindow, GetCursorPos, GetWindowLongPtrW, KillTimer, LoadCursorW,
     MessageBoxW, PostQuitMessage, RegisterClassExW, SetForegroundWindow, SetTimer,
     SetWindowLongPtrW, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, IDC_ARROW, IDYES,
-    MB_DEFBUTTON2, MB_ICONWARNING, MB_YESNO, WM_ACTIVATE, WM_APP, WM_COMMAND, WM_CONTEXTMENU,
-    WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_PAINT, WM_RBUTTONUP,
+    MB_DEFBUTTON2, MB_ICONINFORMATION, MB_ICONWARNING, MB_YESNO, WM_ACTIVATE, WM_APP, WM_COMMAND,
+    WM_CONTEXTMENU, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_PAINT, WM_RBUTTONUP,
     WM_SETTINGCHANGE, WM_THEMECHANGED, WM_TIMER, WNDCLASSEXW,
 };
 
@@ -24,15 +29,16 @@ pub const POPUP_WND_CLASS: &str = "CompassLunchPopupWindow";
 pub const WM_TRAY_CALLBACK: u32 = WM_APP + 1;
 pub const WM_APP_FETCH_COMPLETE: u32 = WM_APP + 2;
 pub const WM_APP_SHOW_EXISTING: u32 = WM_APP + 3;
+pub const WM_APP_UPDATE_CHECK_COMPLETE: u32 = WM_APP + 4;
 
 pub const TIMER_REFRESH: usize = 1;
 pub const TIMER_MIDNIGHT: usize = 2;
 pub const TIMER_STALE_CHECK: usize = 3;
 pub const TIMER_RETRY_FETCH: usize = 4;
 const TRAY_CLOSE_SUPPRESS_OPEN_MS: i64 = 250;
-
 static LAST_POPUP_CLOSE_REQUEST_MS: OnceLock<Mutex<i64>> = OnceLock::new();
 
+/// Registers the hidden tray window class and the popup window class.
 pub fn register_window_classes(
     hinstance: windows::Win32::Foundation::HINSTANCE,
 ) -> anyhow::Result<()> {
@@ -66,6 +72,7 @@ pub fn register_window_classes(
     Ok(())
 }
 
+/// Window procedure for the hidden tray message window.
 pub unsafe extern "system" fn tray_wndproc(
     hwnd: HWND,
     msg: u32,
@@ -234,6 +241,20 @@ pub unsafe extern "system" fn tray_wndproc(
             }
             LRESULT(0)
         }
+        WM_APP_UPDATE_CHECK_COMPLETE => {
+            let app = app_from_hwnd(hwnd);
+            if app.is_null() {
+                return LRESULT(0);
+            }
+            let app = &*(app);
+            let ptr = lparam.0 as *mut UpdateCheckMessage;
+            if !ptr.is_null() {
+                let message = *Box::from_raw(ptr);
+                app.finish_update_check();
+                handle_update_check_message(hwnd, app, message);
+            }
+            LRESULT(0)
+        }
         WM_DESTROY => {
             let app = app_from_hwnd(hwnd);
             if !app.is_null() {
@@ -251,6 +272,7 @@ pub unsafe extern "system" fn tray_wndproc(
     }
 }
 
+/// Window procedure for the visible popup window.
 pub unsafe extern "system" fn popup_wndproc(
     hwnd: HWND,
     msg: u32,
@@ -643,6 +665,9 @@ fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
         tray::CMD_SUBMIT_FEEDBACK => {
             app.open_feedback_url();
         }
+        tray::CMD_CHECK_FOR_UPDATES => {
+            let _ = app.start_update_check();
+        }
         tray::CMD_QUIT => unsafe {
             let _ = DestroyWindow(hwnd);
         },
@@ -651,6 +676,102 @@ fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
     if popup_is_visible(app.hwnd_popup()) {
         let state = app.snapshot();
         popup::resize_popup_keep_position(app.hwnd_popup(), &state);
+    }
+}
+
+fn handle_update_check_message(hwnd: HWND, app: &App, message: UpdateCheckMessage) {
+    match message.outcome {
+        UpdateCheckOutcome::LatestPublished {
+            current_version,
+            release_url,
+        } => match show_update_action_dialog(
+            hwnd,
+            "Check for updates",
+            "You are on the latest published version",
+            &format!("Installed version: {}", current_version),
+            "Open this release page?",
+        ) {
+            Ok(true) => app.open_release_url(&release_url),
+            Ok(false) => {}
+            Err(err) => log_line(&format!("update dialog failed: {}", err)),
+        },
+        UpdateCheckOutcome::UpdateAvailable {
+            current_version,
+            latest_version,
+            release_url,
+        } => match show_update_action_dialog(
+            hwnd,
+            "Check for updates",
+            "New update available",
+            &format!(
+                "Current version: {}\nLatest version: {}",
+                current_version, latest_version
+            ),
+            "Open GitHub Releases?",
+        ) {
+            Ok(true) => app.open_release_url(&release_url),
+            Ok(false) => {}
+            Err(err) => log_line(&format!("update dialog failed: {}", err)),
+        },
+        UpdateCheckOutcome::NewerThanLatestPublished {
+            current_version,
+            latest_version,
+            releases_url,
+        } => match show_update_action_dialog(
+            hwnd,
+            "Check for updates",
+            "You are running a version newer than the latest published release",
+            &format!(
+                "Installed version: {}\nLatest published version: {}",
+                current_version, latest_version
+            ),
+            "Open GitHub Releases?",
+        ) {
+            Ok(true) => app.open_release_url(&releases_url),
+            Ok(false) => {}
+            Err(err) => log_line(&format!("update dialog failed: {}", err)),
+        },
+        UpdateCheckOutcome::Failed { message } => {
+            if let Err(err) = show_update_error_dialog(hwnd, &message) {
+                log_line(&format!("update error dialog failed: {}", err));
+            }
+        }
+    }
+}
+
+fn show_update_error_dialog(hwnd: HWND, message: &str) -> anyhow::Result<()> {
+    let title = to_wstring("Check for updates");
+    let content = to_wstring(&format!("Could not check for updates\n\n{}", message));
+    unsafe {
+        MessageBoxW(
+            hwnd,
+            PCWSTR(content.as_ptr()),
+            PCWSTR(title.as_ptr()),
+            MB_ICONWARNING,
+        );
+    }
+    Ok(())
+}
+
+fn show_update_action_dialog(
+    hwnd: HWND,
+    title: &str,
+    instruction: &str,
+    content: &str,
+    fallback_prompt: &str,
+) -> anyhow::Result<bool> {
+    let title = to_wstring(title);
+    let message = to_wstring(&format!(
+        "{}\n\n{}\n\n{}",
+        instruction, content, fallback_prompt
+    ));
+    unsafe {
+        Ok(MessageBoxW(
+            hwnd,
+            PCWSTR(message.as_ptr()),
+            PCWSTR(title.as_ptr()),
+            MB_YESNO | MB_ICONINFORMATION,
+        ) == IDYES)
     }
 }
 
@@ -681,6 +802,7 @@ fn schedule_refresh_timer(hwnd: HWND, minutes: u32) {
     }
 }
 
+/// Schedules the recurring refresh, midnight rollover, and stale-date timers.
 pub fn schedule_timers(hwnd: HWND, minutes: u32) {
     schedule_refresh_timer(hwnd, minutes);
     schedule_midnight_timer(hwnd);

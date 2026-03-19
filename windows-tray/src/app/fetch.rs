@@ -1,177 +1,7 @@
-use crate::api::{self, FetchContext, FetchMode, FetchOutput, FetchReason};
-use crate::cache;
-use crate::log::{log_line, set_enabled as set_log_enabled};
-use crate::model::TodayMenu;
-use crate::restaurant::{
-    available_restaurants, effective_fetch_language, is_hard_closed_today, provider_key,
-    restaurant_for_code, restaurant_for_shortcut_index, Provider, Restaurant,
-};
-use crate::settings::{
-    load_settings, normalize_theme, normalize_widget_scale, save_settings, settings_dir, Settings,
-};
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use time::OffsetDateTime;
-use windows::Win32::Foundation::HWND;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FetchStatus {
-    Idle,
-    Loading,
-    Ok,
-    Stale,
-    Error,
-}
-
-#[derive(Debug, Clone)]
-pub struct AppState {
-    pub settings: Settings,
-    pub status: FetchStatus,
-    pub loading_started_epoch_ms: i64,
-    pub error_message: String,
-    pub stale_network_error: bool,
-    pub today_menu: Option<TodayMenu>,
-    pub restaurant_name: String,
-    pub restaurant_url: String,
-    pub raw_payload: String,
-    pub provider: Provider,
-    pub payload_date: String,
-    pub stale_date: bool,
-}
-
-#[derive(Default, Clone, Copy)]
-struct WindowHandles {
-    tray: HWND,
-    popup: HWND,
-}
-
-#[derive(Debug, Clone)]
-struct MemoryMenuEntry {
-    ok: bool,
-    error_message: String,
-    today_menu: Option<TodayMenu>,
-    restaurant_name: String,
-    restaurant_url: String,
-    provider: Provider,
-    raw_payload: String,
-    payload_date: String,
-}
-
-#[derive(Debug, Clone, Default)]
-struct RequestState {
-    in_flight: bool,
-    last_attempt_epoch_ms: i64,
-    last_success_epoch_ms: i64,
-    last_failure_epoch_ms: i64,
-    cooldown_until_epoch_ms: i64,
-    consecutive_failures: usize,
-    last_reason: Option<FetchReason>,
-}
-
-#[derive(Debug, Clone)]
-struct FetchTarget {
-    restaurant: Restaurant,
-    ui_language: String,
-    effective_language: String,
-    key: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RefreshNeed {
-    MissingCache,
-    StaleDate,
-    RefreshIntervalElapsed,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct RefreshNeedReasons {
-    missing: FetchReason,
-    stale: FetchReason,
-    interval: FetchReason,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct StartOptions {
-    mark_loading_when_empty: bool,
-    bypass_cooldown: bool,
-}
-
-const STALE_NO_MENU_COOLDOWN_MS: u32 = 10 * 60_000;
-
-pub struct App {
-    state: Arc<Mutex<AppState>>,
-    hwnds: Mutex<WindowHandles>,
-    request_states: Mutex<HashMap<String, RequestState>>,
-    last_prefetch_ms: Mutex<i64>,
-    memory_menu_cache: Mutex<HashMap<String, MemoryMenuEntry>>,
-}
-
-pub struct FetchMessage {
-    pub requested_code: String,
-    pub requested_language: String,
-    pub requested_effective_language: String,
-    pub request_key: String,
-    pub context: FetchContext,
-    pub result: FetchOutput,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FetchApplyOutcome {
-    CurrentSuccess,
-    CurrentFailure,
-    BackgroundSuccess,
-    BackgroundFailure,
-}
+use super::*;
 
 impl App {
-    pub fn new() -> Self {
-        let settings = load_settings();
-        set_log_enabled(settings.enable_logging);
-        let state = AppState {
-            provider: restaurant_for_code(
-                &settings.restaurant_code,
-                settings.enable_antell_restaurants,
-            )
-            .provider,
-            settings,
-            status: FetchStatus::Idle,
-            loading_started_epoch_ms: 0,
-            error_message: String::new(),
-            stale_network_error: false,
-            today_menu: None,
-            restaurant_name: String::new(),
-            restaurant_url: String::new(),
-            raw_payload: String::new(),
-            payload_date: String::new(),
-            stale_date: false,
-        };
-        Self {
-            state: Arc::new(Mutex::new(state)),
-            hwnds: Mutex::new(WindowHandles::default()),
-            request_states: Mutex::new(HashMap::new()),
-            last_prefetch_ms: Mutex::new(0),
-            memory_menu_cache: Mutex::new(HashMap::new()),
-        }
-    }
-
-    pub fn set_hwnds(&self, tray: HWND, popup: HWND) {
-        let mut hwnds = self.hwnds.lock().unwrap();
-        hwnds.tray = tray;
-        hwnds.popup = popup;
-    }
-
-    pub fn hwnd_tray(&self) -> HWND {
-        self.hwnds.lock().unwrap().tray
-    }
-
-    pub fn hwnd_popup(&self) -> HWND {
-        self.hwnds.lock().unwrap().popup
-    }
-
-    pub fn snapshot(&self) -> AppState {
-        self.state.lock().unwrap().clone()
-    }
-
+    /// Loads cached menu data for the currently selected restaurant, if available.
     pub fn load_cache_for_current(&self) -> bool {
         let (restaurant, language) = {
             let state = self.state.lock().unwrap();
@@ -340,6 +170,7 @@ impl App {
         true
     }
 
+    /// Starts any startup refresh work that should happen after cached state is restored.
     pub fn maybe_refresh_on_startup(&self) {
         self.maybe_refresh_current_with_reasons(
             "startup",
@@ -355,6 +186,7 @@ impl App {
         );
     }
 
+    /// Triggers a timer-driven refresh for the currently selected restaurant.
     pub fn refresh_current_from_timer(&self) {
         self.start_refresh_for_code(
             &self.current_code(),
@@ -366,6 +198,7 @@ impl App {
         );
     }
 
+    /// Triggers the daily midnight refresh path.
     pub fn refresh_current_at_midnight(&self) {
         self.start_refresh_for_code(
             &self.current_code(),
@@ -377,6 +210,7 @@ impl App {
         );
     }
 
+    /// Triggers a user-requested refresh for the currently selected restaurant.
     pub fn refresh_current_manually(&self) {
         self.start_refresh_for_code(
             &self.current_code(),
@@ -388,6 +222,7 @@ impl App {
         );
     }
 
+    /// Starts a retry fetch after a previous refresh failure.
     pub fn start_refresh_retry(&self) {
         let target = self.current_target();
         if is_hard_closed_today(target.restaurant) {
@@ -539,6 +374,7 @@ impl App {
         true
     }
 
+    /// Applies a completed fetch message on the UI thread and updates cached state.
     pub fn apply_fetch_message(&self, message: FetchMessage) -> FetchApplyOutcome {
         let FetchMessage {
             requested_code,
@@ -743,208 +579,7 @@ impl App {
         }
     }
 
-    pub fn set_restaurant(&self, code: &str) {
-        let mut state = self.state.lock().unwrap();
-        state.settings.restaurant_code = code.to_string();
-        let restaurant = restaurant_for_code(
-            &state.settings.restaurant_code,
-            state.settings.enable_antell_restaurants,
-        );
-        state.provider = restaurant.provider;
-        state.restaurant_url = restaurant.url.unwrap_or_default().to_string();
-        let _ = save_settings(&state.settings);
-        state.raw_payload.clear();
-        state.today_menu = None;
-        state.payload_date.clear();
-        state.stale_date = false;
-        state.status = FetchStatus::Idle;
-        state.loading_started_epoch_ms = 0;
-        state.stale_network_error = false;
-    }
-
-    pub fn set_restaurant_index(&self, index: usize) -> bool {
-        let enable_antell = {
-            let state = self.state.lock().unwrap();
-            state.settings.enable_antell_restaurants
-        };
-        let Some(restaurant) = restaurant_for_shortcut_index(index, enable_antell) else {
-            return false;
-        };
-        self.set_restaurant(restaurant.code);
-        true
-    }
-
-    pub fn set_language(&self, language: &str) {
-        let mut state = self.state.lock().unwrap();
-        state.settings.language = language.to_string();
-        let _ = save_settings(&state.settings);
-        state.raw_payload.clear();
-        state.today_menu = None;
-        state.payload_date.clear();
-        state.stale_date = false;
-        state.status = FetchStatus::Idle;
-        state.loading_started_epoch_ms = 0;
-        state.stale_network_error = false;
-    }
-
-    pub fn toggle_show_prices(&self) {
-        let mut state = self.state.lock().unwrap();
-        state.settings.show_prices = !state.settings.show_prices;
-        let _ = save_settings(&state.settings);
-    }
-
-    pub fn toggle_show_allergens(&self) {
-        let mut state = self.state.lock().unwrap();
-        state.settings.show_allergens = !state.settings.show_allergens;
-        let _ = save_settings(&state.settings);
-    }
-
-    pub fn toggle_highlight_gluten_free(&self) {
-        let mut state = self.state.lock().unwrap();
-        state.settings.highlight_gluten_free = !state.settings.highlight_gluten_free;
-        let _ = save_settings(&state.settings);
-    }
-
-    pub fn toggle_highlight_veg(&self) {
-        let mut state = self.state.lock().unwrap();
-        state.settings.highlight_veg = !state.settings.highlight_veg;
-        let _ = save_settings(&state.settings);
-    }
-
-    pub fn toggle_highlight_lactose_free(&self) {
-        let mut state = self.state.lock().unwrap();
-        state.settings.highlight_lactose_free = !state.settings.highlight_lactose_free;
-        let _ = save_settings(&state.settings);
-    }
-
-    pub fn toggle_animations(&self) {
-        let mut state = self.state.lock().unwrap();
-        state.settings.animations_enabled = !state.settings.animations_enabled;
-        let _ = save_settings(&state.settings);
-    }
-
-    pub fn toggle_show_student_price(&self) {
-        let mut state = self.state.lock().unwrap();
-        state.settings.show_student_price = !state.settings.show_student_price;
-        let _ = save_settings(&state.settings);
-    }
-
-    pub fn toggle_show_staff_price(&self) {
-        let mut state = self.state.lock().unwrap();
-        state.settings.show_staff_price = !state.settings.show_staff_price;
-        let _ = save_settings(&state.settings);
-    }
-
-    pub fn toggle_show_guest_price(&self) {
-        let mut state = self.state.lock().unwrap();
-        state.settings.show_guest_price = !state.settings.show_guest_price;
-        let _ = save_settings(&state.settings);
-    }
-
-    pub fn toggle_hide_expensive_student_meals(&self) {
-        let mut state = self.state.lock().unwrap();
-        state.settings.hide_expensive_student_meals = !state.settings.hide_expensive_student_meals;
-        let _ = save_settings(&state.settings);
-    }
-
-    pub fn set_refresh_minutes(&self, minutes: u32) {
-        let mut state = self.state.lock().unwrap();
-        state.settings.refresh_minutes = minutes;
-        let _ = save_settings(&state.settings);
-    }
-
-    pub fn cycle_restaurant(&self, direction: i32) {
-        let mut state = self.state.lock().unwrap();
-        let current = state.settings.restaurant_code.as_str();
-        let list = available_restaurants(state.settings.enable_antell_restaurants);
-        let mut idx = list.iter().position(|c| c.code == current).unwrap_or(0) as i32;
-        idx += direction;
-        if idx < 0 {
-            idx = list.len() as i32 - 1;
-        } else if idx >= list.len() as i32 {
-            idx = 0;
-        }
-        state.settings.restaurant_code = list[idx as usize].code.to_string();
-        state.provider = list[idx as usize].provider;
-        state.restaurant_url = list[idx as usize].url.unwrap_or_default().to_string();
-        state.raw_payload.clear();
-        state.today_menu = None;
-        state.payload_date.clear();
-        state.stale_date = false;
-        state.status = FetchStatus::Idle;
-        state.loading_started_epoch_ms = 0;
-        state.stale_network_error = false;
-    }
-
-    pub fn persist_settings(&self) {
-        let settings = {
-            let state = self.state.lock().unwrap();
-            state.settings.clone()
-        };
-        let _ = save_settings(&settings);
-    }
-
-    pub fn open_current_url(&self) {
-        let url = {
-            let state = self.state.lock().unwrap();
-            state.restaurant_url.clone()
-        };
-        if url.is_empty() {
-            return;
-        }
-        let wide = crate::util::to_wstring(&url);
-        unsafe {
-            windows::Win32::UI::Shell::ShellExecuteW(
-                None,
-                windows::core::PCWSTR(crate::util::to_wstring("open").as_ptr()),
-                windows::core::PCWSTR(wide.as_ptr()),
-                windows::core::PCWSTR::null(),
-                windows::core::PCWSTR::null(),
-                windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL,
-            );
-        }
-    }
-
-    pub fn open_appdata_dir(&self) {
-        let dir = settings_dir();
-        if let Err(err) = std::fs::create_dir_all(&dir) {
-            log_line(&format!("failed to create appdata dir: {}", err));
-            return;
-        }
-        let path = dir.to_string_lossy().to_string();
-        let wide = crate::util::to_wstring(&path);
-        unsafe {
-            windows::Win32::UI::Shell::ShellExecuteW(
-                None,
-                windows::core::PCWSTR(crate::util::to_wstring("open").as_ptr()),
-                windows::core::PCWSTR(wide.as_ptr()),
-                windows::core::PCWSTR::null(),
-                windows::core::PCWSTR::null(),
-                windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL,
-            );
-        }
-    }
-
-    pub fn open_feedback_url(&self) {
-        let url = "https://github.com/veetir/uef-kuopio-lunch-tray/issues";
-        let wide = crate::util::to_wstring(url);
-        unsafe {
-            windows::Win32::UI::Shell::ShellExecuteW(
-                None,
-                windows::core::PCWSTR(crate::util::to_wstring("open").as_ptr()),
-                windows::core::PCWSTR(wide.as_ptr()),
-                windows::core::PCWSTR::null(),
-                windows::core::PCWSTR::null(),
-                windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL,
-            );
-        }
-    }
-
-    pub fn refresh_minutes(&self) -> u32 {
-        let state = self.state.lock().unwrap();
-        state.settings.refresh_minutes
-    }
-
+    /// Refreshes when selection changed and the cached data is missing or stale enough.
     pub fn maybe_refresh_on_selection(&self) {
         self.maybe_refresh_current_with_reasons(
             "selection",
@@ -960,6 +595,7 @@ impl App {
         );
     }
 
+    /// Refreshes when the UI language changed and the matching cache is missing or stale.
     pub fn maybe_refresh_on_language_switch(&self) {
         self.maybe_refresh_current_with_reasons(
             "language_switch",
@@ -974,29 +610,7 @@ impl App {
             },
         );
     }
-
-    pub fn set_theme(&self, theme: &str) {
-        let mut state = self.state.lock().unwrap();
-        state.settings.theme = normalize_theme(theme);
-        let _ = save_settings(&state.settings);
-    }
-
-    pub fn set_widget_scale(&self, value: &str) {
-        let mut state = self.state.lock().unwrap();
-        state.settings.widget_scale = normalize_widget_scale(value);
-        let _ = save_settings(&state.settings);
-    }
-
-    pub fn toggle_logging(&self) {
-        let mut state = self.state.lock().unwrap();
-        state.settings.enable_logging = !state.settings.enable_logging;
-        set_log_enabled(state.settings.enable_logging);
-        if state.settings.enable_logging {
-            log_line("logging enabled");
-        }
-        let _ = save_settings(&state.settings);
-    }
-
+    /// Refreshes if the cached payload date no longer matches the local day.
     pub fn check_stale_date_and_refresh(&self) {
         let target = self.current_target();
         if is_hard_closed_today(target.restaurant) {
@@ -1032,6 +646,7 @@ impl App {
         }
     }
 
+    /// Returns the next retry delay derived from recent fetch failures.
     pub fn current_retry_delay_ms(&self) -> u32 {
         let now = now_epoch_ms();
         let target = self.current_target();
@@ -1046,6 +661,7 @@ impl App {
         }
     }
 
+    /// Prefetches menus for non-selected restaurants to improve switching latency.
     pub fn prefetch_enabled_restaurants(&self) {
         let now = now_epoch_ms();
         {
@@ -1170,229 +786,5 @@ impl App {
             FetchContext::new(FetchMode::Current, reason),
             options,
         )
-    }
-}
-
-pub fn now_epoch_ms() -> i64 {
-    let now = OffsetDateTime::now_utc();
-    (now.unix_timestamp_nanos() / 1_000_000) as i64
-}
-
-fn menu_cache_key(code: &str, language: &str) -> String {
-    format!("{}|{}", language, code)
-}
-
-fn request_state_key(code: &str, effective_language: &str) -> String {
-    format!("{}|{}", code, effective_language)
-}
-
-fn fetch_target_for_code(settings: &Settings, code: &str, enable_antell: bool) -> FetchTarget {
-    let restaurant = restaurant_for_code(code, enable_antell);
-    let effective_language = effective_fetch_language(restaurant, &settings.language);
-    FetchTarget {
-        restaurant,
-        ui_language: settings.language.clone(),
-        key: request_state_key(code, &effective_language),
-        effective_language,
-    }
-}
-
-fn fetch_target_for_values(code: &str, language: &str, enable_antell: bool) -> FetchTarget {
-    let restaurant = restaurant_for_code(code, enable_antell);
-    let effective_language = effective_fetch_language(restaurant, language);
-    FetchTarget {
-        restaurant,
-        ui_language: language.to_string(),
-        key: request_state_key(code, &effective_language),
-        effective_language,
-    }
-}
-
-fn today_key() -> String {
-    let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
-    let date = now.date();
-    format!(
-        "{:04}-{:02}-{:02}",
-        date.year(),
-        date.month() as u8,
-        date.day()
-    )
-}
-
-fn update_stale_date(state: &mut AppState) {
-    let restaurant = restaurant_for_code(
-        &state.settings.restaurant_code,
-        state.settings.enable_antell_restaurants,
-    );
-    if is_hard_closed_today(restaurant) {
-        state.stale_date = false;
-    } else if !state.payload_date.is_empty() {
-        state.stale_date = state.payload_date != today_key();
-    } else {
-        state.stale_date = false;
-    }
-}
-
-fn date_key_from_epoch_ms(ms: i64) -> Option<String> {
-    if ms <= 0 {
-        return None;
-    }
-    let secs = ms / 1000;
-    let nanos = ((ms % 1000) * 1_000_000) as u32;
-    let mut dt = OffsetDateTime::from_unix_timestamp(secs).ok()?;
-    dt = dt.replace_nanosecond(nanos).ok()?;
-    let offset = time::UtcOffset::current_local_offset().unwrap_or(time::UtcOffset::UTC);
-    let local = dt.to_offset(offset);
-    let date = local.date();
-    Some(format!(
-        "{:04}-{:02}-{:02}",
-        date.year(),
-        date.month() as u8,
-        date.day()
-    ))
-}
-
-fn is_probable_network_error(message: &str) -> bool {
-    let lower = message.to_ascii_lowercase();
-    [
-        "timed out",
-        "timeout",
-        "dns",
-        "network",
-        "connection",
-        "connect",
-        "host",
-        "resolve",
-        "name or service not known",
-        "temporary failure",
-        "connection reset",
-        "connection refused",
-        "tls",
-        "certificate",
-        "os error",
-    ]
-    .iter()
-    .any(|token| lower.contains(token))
-}
-
-fn refresh_need_for_target(
-    target: &FetchTarget,
-    refresh_minutes: u32,
-    payload_date: &str,
-    has_payload: bool,
-    now_ms: i64,
-) -> Option<RefreshNeed> {
-    if !has_payload {
-        return Some(RefreshNeed::MissingCache);
-    }
-
-    let today = today_key();
-    if !payload_date.is_empty() && payload_date != today {
-        return Some(RefreshNeed::StaleDate);
-    }
-
-    if refresh_minutes == 0 {
-        return None;
-    }
-
-    let cache_age_ms = cache::cache_mtime_ms(
-        target.restaurant.provider,
-        target.restaurant.code,
-        &target.ui_language,
-    )
-    .map(|mtime| now_ms.saturating_sub(mtime));
-
-    match cache_age_ms {
-        None => Some(RefreshNeed::MissingCache),
-        Some(age_ms) if age_ms >= (refresh_minutes as i64) * 60_000 => {
-            Some(RefreshNeed::RefreshIntervalElapsed)
-        }
-        _ => None,
-    }
-}
-
-fn retry_delay_ms_for_failures(consecutive_failures: usize) -> u32 {
-    match consecutive_failures {
-        0 | 1 => 10_000,
-        2 => 30_000,
-        3 => 60_000,
-        _ => 5 * 60_000,
-    }
-}
-
-fn log_fetch_probe(
-    phase: &str,
-    context: &FetchContext,
-    target: &FetchTarget,
-    decision: &str,
-    detail: &str,
-) {
-    let detail = if detail.is_empty() {
-        String::new()
-    } else {
-        format!(" detail={}", detail)
-    };
-    log_line(&format!(
-        "fetch gate phase={} mode={} reason={} decision={} code={} provider={} ui_language={} fetch_language={}{}",
-        phase,
-        context.mode.as_str(),
-        context.reason.as_str(),
-        decision,
-        target.restaurant.code,
-        provider_key(target.restaurant.provider),
-        target.ui_language,
-        target.effective_language,
-        detail,
-    ));
-}
-
-fn log_probe_skip(trigger: &str, target: &FetchTarget, detail: &str) {
-    log_line(&format!(
-        "fetch probe trigger={} decision=skip code={} provider={} ui_language={} fetch_language={} detail={}",
-        trigger,
-        target.restaurant.code,
-        provider_key(target.restaurant.provider),
-        target.ui_language,
-        target.effective_language,
-        detail,
-    ));
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn request_state_key_uses_effective_fetch_language() {
-        let target = fetch_target_for_values("3488", "en", true);
-        assert_eq!(target.effective_language, "fi");
-        assert_eq!(target.key, "3488|fi");
-    }
-
-    #[test]
-    fn refresh_need_marks_missing_payload_as_missing_cache() {
-        let target = fetch_target_for_values("0437", "fi", true);
-        assert_eq!(
-            refresh_need_for_target(&target, 1440, "", false, now_epoch_ms()),
-            Some(RefreshNeed::MissingCache)
-        );
-    }
-
-    #[test]
-    fn refresh_need_marks_old_payload_date_as_stale() {
-        let target = fetch_target_for_values("0437", "fi", true);
-        assert_eq!(
-            refresh_need_for_target(&target, 1440, "2001-01-01", true, now_epoch_ms()),
-            Some(RefreshNeed::StaleDate)
-        );
-    }
-
-    #[test]
-    fn retry_delay_caps_after_repeated_failures() {
-        assert_eq!(retry_delay_ms_for_failures(1), 10_000);
-        assert_eq!(retry_delay_ms_for_failures(2), 30_000);
-        assert_eq!(retry_delay_ms_for_failures(3), 60_000);
-        assert_eq!(retry_delay_ms_for_failures(4), 300_000);
-        assert_eq!(retry_delay_ms_for_failures(10), 300_000);
     }
 }

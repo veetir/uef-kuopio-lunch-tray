@@ -1,3 +1,5 @@
+//! Windows startup registration helpers backed by the current-user Run registry key.
+
 use crate::util::to_wstring;
 use windows::core::PCWSTR;
 use windows::Win32::System::LibraryLoader::GetModuleFileNameW;
@@ -10,6 +12,7 @@ use windows::Win32::System::Registry::{
 const RUN_KEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 const VALUE_NAME: &str = "CompassLunch";
 
+/// Reports whether the app is configured to start with the current user session.
 pub fn is_enabled() -> bool {
     let subkey = to_wstring(RUN_KEY);
     let value = to_wstring(VALUE_NAME);
@@ -29,6 +32,7 @@ pub fn is_enabled() -> bool {
     }
 }
 
+/// Enables or disables startup registration for the current executable.
 pub fn set_enabled(enable: bool) -> anyhow::Result<()> {
     if enable {
         let path = exe_path().ok_or_else(|| anyhow::anyhow!("exe path not found"))?;

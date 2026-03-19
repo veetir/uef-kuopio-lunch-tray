@@ -1,6 +1,9 @@
+//! Shared data models used across provider parsing and popup rendering.
+
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
+/// Raw Compass JSON payload root.
 pub struct ApiResponse {
     #[serde(rename = "RestaurantName")]
     pub restaurant_name: Option<String>,
@@ -13,6 +16,7 @@ pub struct ApiResponse {
 }
 
 #[derive(Debug, Deserialize)]
+/// Raw Compass JSON payload for a single menu day.
 pub struct ApiMenuDay {
     #[serde(rename = "Date")]
     pub date: Option<String>,
@@ -23,6 +27,7 @@ pub struct ApiMenuDay {
 }
 
 #[derive(Debug, Deserialize)]
+/// Raw Compass JSON payload for a single named menu section.
 pub struct ApiSetMenu {
     #[serde(rename = "SortOrder")]
     pub sort_order: Option<i32>,
@@ -35,6 +40,7 @@ pub struct ApiSetMenu {
 }
 
 #[derive(Debug, Clone)]
+/// Normalized menu content for the current day.
 pub struct TodayMenu {
     pub date_iso: String,
     pub lunch_time: String,
@@ -42,6 +48,7 @@ pub struct TodayMenu {
 }
 
 #[derive(Debug, Clone)]
+/// A rendered menu section containing a heading, optional price, and component lines.
 pub struct MenuGroup {
     pub name: String,
     pub price: String,

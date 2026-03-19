@@ -1,6 +1,9 @@
+//! Static restaurant catalogue and provider-specific lookup helpers.
+
 use time::{OffsetDateTime, Weekday};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Upstream provider implementation used to fetch and parse a restaurant's menu.
 pub enum Provider {
     Compass,
     CompassRss,
@@ -10,6 +13,7 @@ pub enum Provider {
 }
 
 #[derive(Debug, Clone, Copy)]
+/// Static metadata for a supported restaurant.
 pub struct Restaurant {
     pub code: &'static str,
     pub name: &'static str,
@@ -138,6 +142,7 @@ const EXTRA_RESTAURANTS: [Restaurant; 3] = [
     },
 ];
 
+/// Returns the enabled restaurants in the same order used by UI navigation.
 pub fn available_restaurants(enable_antell: bool) -> Vec<Restaurant> {
     let mut list = Vec::new();
     list.extend_from_slice(&CORE_RESTAURANTS);
@@ -148,6 +153,7 @@ pub fn available_restaurants(enable_antell: bool) -> Vec<Restaurant> {
     list
 }
 
+/// Resolves a restaurant code to metadata, falling back to the default restaurant.
 pub fn restaurant_for_code(code: &str, enable_antell: bool) -> Restaurant {
     let list = available_restaurants(enable_antell);
     list.into_iter()
@@ -155,10 +161,12 @@ pub fn restaurant_for_code(code: &str, enable_antell: bool) -> Restaurant {
         .unwrap_or(CORE_RESTAURANTS[0])
 }
 
+/// Resolves the restaurant used for a numeric shortcut index, if present.
 pub fn restaurant_for_shortcut_index(index: usize, enable_antell: bool) -> Option<Restaurant> {
     available_restaurants(enable_antell).get(index).copied()
 }
 
+/// Returns the Compass fetch language after applying provider-specific fallback rules.
 pub fn compass_fetch_language(restaurant: Restaurant, requested_language: &str) -> &str {
     if requested_language == "en" {
         restaurant
@@ -169,6 +177,7 @@ pub fn compass_fetch_language(restaurant: Restaurant, requested_language: &str) 
     }
 }
 
+/// Returns the effective language used when fetching data for the given provider.
 pub fn effective_fetch_language(restaurant: Restaurant, requested_language: &str) -> String {
     match restaurant.provider {
         Provider::Compass => compass_fetch_language(restaurant, requested_language).to_string(),
@@ -176,11 +185,13 @@ pub fn effective_fetch_language(restaurant: Restaurant, requested_language: &str
     }
 }
 
+/// Reports whether the restaurant is considered closed on the current local weekday.
 pub fn is_hard_closed_today(restaurant: Restaurant) -> bool {
     let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
     is_hard_closed_on_weekday(restaurant, now.weekday())
 }
 
+/// Reports whether the restaurant is considered closed on a specific weekday.
 pub fn is_hard_closed_on_weekday(restaurant: Restaurant, weekday: Weekday) -> bool {
     match weekday {
         Weekday::Sunday => true,
@@ -189,6 +200,7 @@ pub fn is_hard_closed_on_weekday(restaurant: Restaurant, weekday: Weekday) -> bo
     }
 }
 
+/// Returns the stable provider key used in cache filenames and logging.
 pub fn provider_key(provider: Provider) -> &'static str {
     match provider {
         Provider::Compass => "compass",

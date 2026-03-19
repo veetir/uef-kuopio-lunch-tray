@@ -18,6 +18,7 @@ use regex::Regex;
 use time::{Month, OffsetDateTime};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// High-level fetch mode used for logging and fetch policy decisions.
 pub enum FetchMode {
     Current,
     Background,
@@ -35,6 +36,7 @@ impl FetchMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Reason a fetch was requested.
 pub enum FetchReason {
     StartupMissingCache,
     StartupStaleDate,
@@ -80,6 +82,7 @@ impl FetchReason {
 }
 
 #[derive(Debug, Clone)]
+/// Context attached to a fetch request for logging and policy decisions.
 pub struct FetchContext {
     pub mode: FetchMode,
     pub reason: FetchReason,
@@ -96,6 +99,7 @@ impl FetchContext {
     }
 }
 
+/// Normalized result of fetching or parsing a provider payload.
 pub struct FetchOutput {
     pub ok: bool,
     pub error_message: String,
@@ -107,6 +111,7 @@ pub struct FetchOutput {
     pub payload_date: String,
 }
 
+/// Fetches today's menu for the currently selected restaurant.
 pub fn fetch_today(settings: &Settings, context: &FetchContext) -> FetchOutput {
     let restaurant = restaurant_for_code(
         &settings.restaurant_code,
@@ -143,6 +148,7 @@ pub fn fetch_today(settings: &Settings, context: &FetchContext) -> FetchOutput {
     result
 }
 
+/// Parses a previously cached provider payload into the normalized fetch output format.
 pub fn parse_cached_payload(
     raw_payload: &str,
     provider: Provider,
@@ -169,6 +175,7 @@ pub fn parse_cached_payload(
     }
 }
 
+/// Returns a synthetic empty-menu result for restaurants that are closed today by policy.
 pub fn closed_today_fetch_output(restaurant: Restaurant, _language: &str) -> FetchOutput {
     let today = local_today_key();
     FetchOutput {

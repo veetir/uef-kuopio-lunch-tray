@@ -1,3 +1,5 @@
+//! Persistent favorite-snippet storage used for popup highlighting.
+
 use crate::format::normalize_text;
 use crate::settings::settings_dir;
 use anyhow::Context;
@@ -6,6 +8,7 @@ use std::fs;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Default)]
+/// Normalized favorite snippets loaded from disk.
 pub struct FavoritesList {
     pub snippets: Vec<String>,
 }
@@ -16,10 +19,12 @@ struct FavoritesFile {
     favorite_snippets: Vec<String>,
 }
 
+/// Returns the path to the favorites JSON file.
 pub fn favorites_path() -> PathBuf {
     settings_dir().join("favorites.json")
 }
 
+/// Returns the favorites file modification time in epoch milliseconds, if available.
 pub fn favorites_mtime_ms() -> Option<i64> {
     let metadata = fs::metadata(favorites_path()).ok()?;
     let modified = metadata.modified().ok()?;
@@ -27,10 +32,12 @@ pub fn favorites_mtime_ms() -> Option<i64> {
     Some(duration.as_millis() as i64)
 }
 
+/// Normalizes a favorite snippet before comparing or persisting it.
 pub fn normalize_snippet(value: &str) -> String {
     normalize_text(value)
 }
 
+/// Loads favorite snippets from disk, returning an empty list on missing or invalid data.
 pub fn load_favorites() -> FavoritesList {
     let path = favorites_path();
     let data = match fs::read_to_string(path) {
@@ -48,6 +55,7 @@ pub fn load_favorites() -> FavoritesList {
     }
 }
 
+/// Toggles a favorite snippet and returns whether it is now enabled.
 pub fn toggle_snippet(value: &str) -> anyhow::Result<bool> {
     let normalized = normalize_snippet(value);
     if normalized.is_empty() {
