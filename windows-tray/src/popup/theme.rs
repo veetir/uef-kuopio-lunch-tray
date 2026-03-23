@@ -126,19 +126,37 @@ pub(super) fn theme_palette(theme: &str) -> ThemePalette {
             button_bg_color: rgb(0, 145, 0),
             divider_color: rgb(255, 0, 255),
         },
-        _ => ThemePalette {
-            bg_color: COLORREF(0x00000000),
-            body_text_color: COLORREF(0x00FFFFFF),
-            heading_color: COLORREF(0x00FFFFFF),
-            header_title_color: COLORREF(0x00FFFFFF),
-            suffix_color: COLORREF(0x00B0B0B0),
-            suffix_highlight_color: COLORREF(0x00B0B0B0),
-            favorite_highlight_color: COLORREF(0x0000D6FF),
-            selection_bg_color: COLORREF(0x00303030),
-            header_bg_color: COLORREF(0x00101010),
-            button_bg_color: COLORREF(0x00202020),
-            divider_color: COLORREF(0x00202020),
-        },
+        _ => {
+            if let Some(custom) = crate::custom_themes::find_custom_theme(theme) {
+                ThemePalette {
+                    bg_color: custom.bg_color,
+                    body_text_color: custom.body_text_color,
+                    heading_color: custom.heading_color,
+                    header_title_color: custom.header_title_color,
+                    suffix_color: custom.suffix_color,
+                    suffix_highlight_color: custom.suffix_highlight_color,
+                    favorite_highlight_color: custom.favorite_highlight_color,
+                    selection_bg_color: custom.selection_bg_color,
+                    header_bg_color: custom.header_bg_color,
+                    button_bg_color: custom.button_bg_color,
+                    divider_color: custom.divider_color,
+                }
+            } else {
+                ThemePalette {
+                    bg_color: COLORREF(0x00000000),
+                    body_text_color: COLORREF(0x00FFFFFF),
+                    heading_color: COLORREF(0x00FFFFFF),
+                    header_title_color: COLORREF(0x00FFFFFF),
+                    suffix_color: COLORREF(0x00B0B0B0),
+                    suffix_highlight_color: COLORREF(0x00B0B0B0),
+                    favorite_highlight_color: COLORREF(0x0000D6FF),
+                    selection_bg_color: COLORREF(0x00303030),
+                    header_bg_color: COLORREF(0x00101010),
+                    button_bg_color: COLORREF(0x00202020),
+                    divider_color: COLORREF(0x00202020),
+                }
+            }
+        }
     }
 }
 

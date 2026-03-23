@@ -169,6 +169,10 @@ fn decode_settings(data: &str) -> anyhow::Result<Settings> {
 }
 
 /// Normalizes user-facing theme values to the supported internal theme keys.
+///
+/// Built-in themes are returned as their canonical lowercase key.  Custom
+/// themes defined in `themes.json` are returned using the canonical name from
+/// the file so that menu check-marks match correctly.
 pub fn normalize_theme(value: &str) -> String {
     match value.to_ascii_lowercase().as_str() {
         "light" => "light".to_string(),
@@ -179,7 +183,13 @@ pub fn normalize_theme(value: &str) -> String {
         "barbie" => "barbie".to_string(),
         "teletext1" => "teletext1".to_string(),
         "teletext2" => "teletext2".to_string(),
-        _ => "dark".to_string(),
+        _ => {
+            if let Some(custom) = crate::custom_themes::find_custom_theme(value) {
+                custom.name
+            } else {
+                "dark".to_string()
+            }
+        }
     }
 }
 
