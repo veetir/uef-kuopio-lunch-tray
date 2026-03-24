@@ -61,6 +61,8 @@ pub const CMD_WIDGET_SCALE_NORMAL: u16 = 2225;
 pub const CMD_WIDGET_SCALE_125: u16 = 2226;
 pub const CMD_WIDGET_SCALE_150: u16 = 2227;
 pub const CMD_TOGGLE_ANIMATIONS: u16 = 2228;
+pub const CMD_CUSTOM_THEME_BASE: u16 = 2600;
+pub const CMD_CUSTOM_THEME_LAST: u16 = 2615;
 pub const CMD_REFRESH_NOW: u16 = 2301;
 pub const CMD_REFRESH_OFF: u16 = 2400;
 pub const CMD_REFRESH_60: u16 = 2401;
@@ -302,6 +304,7 @@ fn system_uses_light_theme() -> Option<bool> {
 
 /// Shows the tray context menu for the current application state.
 pub fn show_context_menu(hwnd: HWND, state: &AppState) {
+    crate::custom_themes::reload_custom_themes();
     unsafe {
         let menu = build_context_menu(state);
         let mut pt = POINT::default();
@@ -414,6 +417,24 @@ fn build_context_menu(state: &AppState) -> HMENU {
             "Teletext 2",
             state.settings.theme == "teletext2",
         );
+        let custom_themes = crate::custom_themes::custom_themes();
+        if !custom_themes.is_empty() {
+            let _ = AppendMenuW(theme_menu, MF_SEPARATOR, 0, PCWSTR::null());
+            for (i, theme) in custom_themes.iter().enumerate() {
+                let Some(cmd) = CMD_CUSTOM_THEME_BASE.checked_add(i as u16) else {
+                    break;
+                };
+                if cmd > CMD_CUSTOM_THEME_LAST {
+                    break;
+                }
+                append_menu_item(
+                    theme_menu,
+                    cmd,
+                    &theme.name,
+                    state.settings.theme == theme.name,
+                );
+            }
+        }
         let _ = AppendMenuW(theme_menu, MF_SEPARATOR, 0, PCWSTR::null());
         append_menu_toggle(
             theme_menu,

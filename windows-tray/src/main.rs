@@ -4,6 +4,7 @@ mod antell;
 mod api;
 mod app;
 mod cache;
+mod custom_themes;
 mod favorites;
 mod format;
 mod log;

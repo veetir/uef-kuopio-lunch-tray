@@ -611,6 +611,17 @@ fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
                 popup::resize_popup_keep_position(app.hwnd_popup(), &state);
             }
         }
+        cmd if cmd >= tray::CMD_CUSTOM_THEME_BASE && cmd <= tray::CMD_CUSTOM_THEME_LAST => {
+            let index = (cmd - tray::CMD_CUSTOM_THEME_BASE) as usize;
+            let themes = crate::custom_themes::custom_themes();
+            if let Some(theme) = themes.get(index) {
+                app.set_theme(&theme.name);
+                if popup_is_visible(app.hwnd_popup()) {
+                    let state = app.snapshot();
+                    popup::resize_popup_keep_position(app.hwnd_popup(), &state);
+                }
+            }
+        }
         tray::CMD_WIDGET_SCALE_NORMAL => {
             app.set_widget_scale("normal");
         }
