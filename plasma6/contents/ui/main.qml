@@ -801,21 +801,138 @@ PlasmoidItem {
         return best ? localDateIso(best) : ""
     }
 
+    function buildPranzeriaDate(yearNumber, month, day) {
+        var candidate = new Date(yearNumber, month - 1, day)
+        if (candidate.getFullYear() !== yearNumber || candidate.getMonth() !== month - 1 || candidate.getDate() !== day) {
+            return null
+        }
+        return candidate
+    }
+
+    function parsePranzeriaDateIso(dateText) {
+        var clean = MenuFormatter.normalizeText(dateText)
+        if (!clean) {
+            return ""
+        }
+
+        var isoMatch = clean.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/)
+        if (isoMatch) {
+            var isoCandidate = buildPranzeriaDate(Number(isoMatch[1]), Number(isoMatch[2]), Number(isoMatch[3]))
+            return isoCandidate ? localDateIso(isoCandidate) : ""
+        }
+
+        var parts = clean.match(/^(\d{1,2})[./-](\d{1,2})(?:[./-](\d{2,4}))?\.?$/)
+        if (!parts) {
+            return ""
+        }
+
+        var day = Number(parts[1])
+        var month = Number(parts[2])
+        if (!isFinite(day) || !isFinite(month) || day < 1 || day > 31 || month < 1 || month > 12) {
+            return ""
+        }
+
+        if (parts[3]) {
+            var explicitYear = Number(parts[3])
+            if (!isFinite(explicitYear)) {
+                return ""
+            }
+            if (explicitYear < 100) {
+                explicitYear += 2000
+            }
+            var explicitCandidate = buildPranzeriaDate(explicitYear, month, day)
+            return explicitCandidate ? localDateIso(explicitCandidate) : ""
+        }
+
+        var now = new Date()
+        var nowMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+        var years = [now.getFullYear() - 1, now.getFullYear(), now.getFullYear() + 1]
+        var best = null
+        var bestDistance = Number.MAX_VALUE
+        var maxDistance = 14 * 24 * 60 * 60 * 1000
+
+        for (var i = 0; i < years.length; i++) {
+            var candidate = buildPranzeriaDate(years[i], month, day)
+            if (!candidate) {
+                continue
+            }
+            var distance = Math.abs(candidate.getTime() - nowMidnight.getTime())
+            if (distance > maxDistance) {
+                continue
+            }
+            if (distance < bestDistance) {
+                bestDistance = distance
+                best = candidate
+            }
+        }
+
+        return best ? localDateIso(best) : ""
+    }
+
+    function pranzeriaWeekdayPattern() {
+        return "(?:Maanantai|Tiistai|Keskiviikko|Torstai|Perjantai|Lauantai|Sunnuntai|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)"
+    }
+
+    function pranzeriaDatePattern() {
+        return "(?:\\d{4}[-/]\\d{1,2}[-/]\\d{1,2}|\\d{1,2}[./-]\\d{1,2}(?:[./-]\\d{2,4})?\\.?)"
+    }
+
+    function sanitizePranzeriaHeaderRemainder(restText) {
+        var clean = MenuFormatter.normalizeText(restText)
+        if (!clean) {
+            return ""
+        }
+
+        clean = clean.replace(new RegExp("\\b" + pranzeriaWeekdayPattern() + "\\b", "ig"), " ")
+        clean = clean.replace(/^[\s:,\-|/]+|[\s:,\-|/]+$/g, " ")
+        return MenuFormatter.normalizeText(clean)
+    }
+
+    function looksLikePranzeriaTimeRange(dateText, restText) {
+        var cleanDate = MenuFormatter.normalizeText(dateText)
+        var dotCount = (cleanDate.match(/\./g) || []).length
+        if (cleanDate.indexOf("/") >= 0 || cleanDate.indexOf("-") >= 0 || dotCount > 1) {
+            return false
+        }
+
+        var cleanRest = MenuFormatter.normalizeText(restText)
+        if (cleanRest.indexOf("-") !== 0) {
+            return false
+        }
+
+        return /^-\s*\d{1,2}[.:]\d{2}/.test(cleanRest)
+    }
+
     function parsePranzeriaDayHeader(lineText) {
         var clean = MenuFormatter.normalizeText(lineText)
-        var match = clean.match(/^(Maanantai|Tiistai|Keskiviikko|Torstai|Perjantai|Lauantai|Sunnuntai)\s+(\d{1,2}\.\d{1,2}\.\d{2,4})(?:\s+(.+))?$/i)
-        if (!match) {
+        if (!clean) {
             return null
         }
 
-        var iso = parseAntellMenuDateIso(match[2])
+        var weekdayFirst = clean.match(new RegExp("^(?:" + pranzeriaWeekdayPattern() + ")\\s+(" + pranzeriaDatePattern() + ")(.*)$", "i"))
+        if (weekdayFirst) {
+            var weekdayFirstIso = parsePranzeriaDateIso(weekdayFirst[1])
+            if (!weekdayFirstIso) {
+                return null
+            }
+            return {
+                dateIso: weekdayFirstIso,
+                trailing: sanitizePranzeriaHeaderRemainder(weekdayFirst[2])
+            }
+        }
+
+        var dateFirst = clean.match(new RegExp("^(" + pranzeriaDatePattern() + ")(.*)$", "i"))
+        if (!dateFirst || looksLikePranzeriaTimeRange(dateFirst[1], dateFirst[2])) {
+            return null
+        }
+
+        var iso = parsePranzeriaDateIso(dateFirst[1])
         if (!iso) {
             return null
         }
-
         return {
             dateIso: iso,
-            trailing: MenuFormatter.normalizeText(match[3])
+            trailing: sanitizePranzeriaHeaderRemainder(dateFirst[2])
         }
     }
 
@@ -965,12 +1082,12 @@ PlasmoidItem {
     function parsePranzeriaPayload(code, htmlText) {
         var entry = restaurantEntryForCode(code)
         var payloadText = String(htmlText || "")
-        var paragraphRegex = /<p\b[^>]*>([\s\S]*?)<\/p>/gi
+        var blockRegex = /<(?:p|h[1-6]|li)\b[^>]*>([\s\S]*?)<\/(?:p|h[1-6]|li)>/gi
         var dayLinesByIso = {}
         var currentDateIso = ""
         var match
 
-        while ((match = paragraphRegex.exec(payloadText)) !== null) {
+        while ((match = blockRegex.exec(payloadText)) !== null) {
             var line = stripHtmlText(match[1])
             if (!line) {
                 continue

@@ -541,23 +541,142 @@ function isHardWeekendClosedProvider(provider) {
   return provider === "pranzeria";
 }
 
-function parsePranzeriaDayHeader(lineText) {
+function buildPranzeriaDate(yearNumber, month, day) {
+  const candidate = new Date(yearNumber, month - 1, day);
+  if (
+    candidate.getFullYear() !== yearNumber ||
+    candidate.getMonth() !== month - 1 ||
+    candidate.getDate() !== day
+  ) {
+    return null;
+  }
+  return candidate;
+}
+
+function parsePranzeriaDateIso(dateText, nowDate) {
+  const clean = normalizeText(dateText);
+  if (!clean) {
+    return "";
+  }
+
+  const isoMatch = clean.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);
+  if (isoMatch) {
+    const candidate = buildPranzeriaDate(Number(isoMatch[1]), Number(isoMatch[2]), Number(isoMatch[3]));
+    return candidate ? localDateIso(candidate) : "";
+  }
+
+  const parts = clean.match(/^(\d{1,2})[./-](\d{1,2})(?:[./-](\d{2,4}))?\.?$/);
+  if (!parts) {
+    return "";
+  }
+
+  const day = Number(parts[1]);
+  const month = Number(parts[2]);
+  if (!Number.isFinite(day) || !Number.isFinite(month) || day < 1 || day > 31 || month < 1 || month > 12) {
+    return "";
+  }
+
+  if (parts[3]) {
+    let explicitYear = Number(parts[3]);
+    if (!Number.isFinite(explicitYear)) {
+      return "";
+    }
+    if (explicitYear < 100) {
+      explicitYear += 2000;
+    }
+    const explicit = buildPranzeriaDate(explicitYear, month, day);
+    return explicit ? localDateIso(explicit) : "";
+  }
+
+  const now = nowDate instanceof Date ? nowDate : new Date();
+  const nowMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const years = [now.getFullYear() - 1, now.getFullYear(), now.getFullYear() + 1];
+  const maxDistance = 14 * 24 * 60 * 60 * 1000;
+  let best = null;
+  let bestDistance = Number.MAX_VALUE;
+
+  for (const year of years) {
+    const candidate = buildPranzeriaDate(year, month, day);
+    if (!candidate) {
+      continue;
+    }
+    const distance = Math.abs(candidate.getTime() - nowMidnight.getTime());
+    if (distance > maxDistance) {
+      continue;
+    }
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = candidate;
+    }
+  }
+
+  return best ? localDateIso(best) : "";
+}
+
+function pranzeriaWeekdayPattern() {
+  return "(?:Maanantai|Tiistai|Keskiviikko|Torstai|Perjantai|Lauantai|Sunnuntai|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)";
+}
+
+function pranzeriaDatePattern() {
+  return "(?:\\d{4}[-/]\\d{1,2}[-/]\\d{1,2}|\\d{1,2}[./-]\\d{1,2}(?:[./-]\\d{2,4})?\\.?)";
+}
+
+function sanitizePranzeriaHeaderRemainder(restText) {
+  let clean = normalizeText(restText);
+  if (!clean) {
+    return "";
+  }
+
+  clean = clean.replace(new RegExp(`\\b${pranzeriaWeekdayPattern()}\\b`, "ig"), " ");
+  clean = clean.replace(/^[\s:,\-|/]+|[\s:,\-|/]+$/g, " ");
+  return normalizeText(clean);
+}
+
+function looksLikePranzeriaTimeRange(dateText, restText) {
+  const cleanDate = normalizeText(dateText);
+  const dotCount = (cleanDate.match(/\./g) || []).length;
+  if (cleanDate.includes("/") || cleanDate.includes("-") || dotCount > 1) {
+    return false;
+  }
+
+  const cleanRest = normalizeText(restText);
+  if (!cleanRest.startsWith("-")) {
+    return false;
+  }
+
+  return /^-\s*\d{1,2}[.:]\d{2}/.test(cleanRest);
+}
+
+function parsePranzeriaDayHeader(lineText, nowDate) {
   const clean = normalizeText(lineText);
-  const match = clean.match(
-    /^(Maanantai|Tiistai|Keskiviikko|Torstai|Perjantai|Lauantai|Sunnuntai)\s+(\d{1,2}\.\d{1,2}\.\d{2,4})(?:\s+(.+))?$/i
-  );
-  if (!match) {
+  if (!clean) {
     return null;
   }
 
-  const dateIso = parseAntellMenuDateIso(match[2], new Date(2026, 2, 20));
+  const weekdayFirst = clean.match(new RegExp(`^(?:${pranzeriaWeekdayPattern()})\\s+(${pranzeriaDatePattern()})(.*)$`, "i"));
+  if (weekdayFirst) {
+    const dateIso = parsePranzeriaDateIso(weekdayFirst[1], nowDate);
+    if (!dateIso) {
+      return null;
+    }
+    return {
+      dateIso,
+      trailing: sanitizePranzeriaHeaderRemainder(weekdayFirst[2]),
+    };
+  }
+
+  const dateFirst = clean.match(new RegExp(`^(${pranzeriaDatePattern()})(.*)$`, "i"));
+  if (!dateFirst || looksLikePranzeriaTimeRange(dateFirst[1], dateFirst[2])) {
+    return null;
+  }
+
+  const dateIso = parsePranzeriaDateIso(dateFirst[1], nowDate);
   if (!dateIso) {
     return null;
   }
-
   return {
     dateIso,
-    trailing: normalizeText(match[3]),
+    trailing: sanitizePranzeriaHeaderRemainder(dateFirst[2]),
   };
 }
 
@@ -582,18 +701,22 @@ function isPranzeriaLegendLine(lineText) {
 
 function parsePranzeriaDayLines(htmlText, targetDateIso) {
   const html = String(htmlText || "");
-  const paragraphRegex = /<p\b[^>]*>([\s\S]*?)<\/p>/gi;
+  const blockRegex = /<(?:p|h[1-6]|li)\b[^>]*>([\s\S]*?)<\/(?:p|h[1-6]|li)>/gi;
   const linesByDate = {};
+  const targetDate = targetDateIso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const referenceDate = targetDate
+    ? new Date(Number(targetDate[1]), Number(targetDate[2]) - 1, Number(targetDate[3]))
+    : new Date(2026, 2, 20);
   let currentDateIso = "";
   let match;
 
-  while ((match = paragraphRegex.exec(html)) !== null) {
+  while ((match = blockRegex.exec(html)) !== null) {
     const line = stripHtmlText(match[1]);
     if (!line) {
       continue;
     }
 
-    const header = parsePranzeriaDayHeader(line);
+    const header = parsePranzeriaDayHeader(line, referenceDate);
     if (header) {
       currentDateIso = header.dateIso;
       if (!Object.prototype.hasOwnProperty.call(linesByDate, currentDateIso)) {
@@ -782,6 +905,43 @@ function checkPranzeriaFixture(name) {
   assert(stale.lines.length === 0, `${name}: expected no Sunday lines`);
 }
 
+function checkPranzeriaVariants() {
+  const yearless = parsePranzeriaDayLines(
+    "<p>30.3.</p><p>Salaatti- &amp; AntipastoBuffet</p><p>Pollo Limone</p><p>31.3.</p><p>Tomorrow</p>",
+    "2026-03-30"
+  );
+  assert(yearless.providerDateValid, "yearless Pranzeria header should parse");
+  assert(yearless.lines.includes("Pollo Limone"), "yearless Pranzeria header should capture today's lines");
+  assert(!yearless.lines.includes("Tomorrow"), "yearless Pranzeria header should stop at the next date");
+
+  const fullYear = parsePranzeriaDayLines(
+    "<p>Maanantai 30.3.2026</p><p>Pasta Al Forno</p><p>L = Laktoositon</p>",
+    "2026-03-30"
+  );
+  assert(fullYear.providerDateValid, "full-year Pranzeria header should still parse");
+  assert(fullYear.lines.includes("Pasta Al Forno"), "full-year Pranzeria header should retain backward compatibility");
+
+  const headingAndList = parsePranzeriaDayLines(
+    "<h6>Maanantai 30.3.2026</h6><li>Polpette Alla Cacciatora</li><li>L = Laktoositon</li>",
+    "2026-03-30"
+  );
+  assert(headingAndList.providerDateValid, "Pranzeria headers should work in heading tags");
+  assert(
+    headingAndList.lines.includes("Polpette Alla Cacciatora"),
+    "Pranzeria lines should work in list tags"
+  );
+
+  const mixed = parsePranzeriaDayLines(
+    "<p>Torstai 02.4.</p><p>Porco Aglio &amp; Zenzero</p><p>Perjantai 27.3.2026</p><p>EI LOUNASTA!</p><p>L = Laktoositon</p>",
+    "2026-04-02"
+  );
+  assert(mixed.providerDateValid, "mixed-format Pranzeria headers should still find today's menu");
+  assert(mixed.lines.includes("Porco Aglio & Zenzero"), "mixed-format Pranzeria should keep today's rows");
+  assert(!mixed.lines.includes("EI LOUNASTA!"), "mixed-format Pranzeria should stop at the next header");
+
+  assert(parsePranzeriaDayHeader("10.30-14.00", new Date(2026, 2, 30)) === null, "Pranzeria should not read lunch times as dates");
+}
+
 function checkRetryDelays() {
   assert(retryDelayMinutes(1) === 5, "retry delay for first failure should be 5");
   assert(retryDelayMinutes(2) === 10, "retry delay for second failure should be 10");
@@ -821,6 +981,7 @@ function main() {
   checkRssFixture("snellari.rss");
   checkHuomenFixture("huomen.json");
   checkPranzeriaFixture("pranzeria-snippet.html");
+  checkPranzeriaVariants();
   checkWeekendNoMenuAssumption();
   checkRetryDelays();
   process.stdout.write("Parser checks passed for Compass, Antell, RSS, Huomen and Pranzeria freshness rules\n");
