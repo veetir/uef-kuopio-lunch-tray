@@ -94,15 +94,36 @@ function readTextFixture(name) {
 }
 
 function decodeHtmlEntities(value) {
-  return String(value)
-    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
-    .replace(/&#([0-9]+);/g, (_, dec) => String.fromCharCode(parseInt(dec, 10)))
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, "\"")
-    .replace(/&#39;/g, "'")
-    .replace(/&nbsp;/g, " ");
+  return String(value).replace(
+    /&(#[0-9]+|#x[0-9a-fA-F]+|amp|lt|gt|quot|nbsp|#39);/g,
+    (entity, token) => {
+      if (token === "amp") {
+        return "&";
+      }
+      if (token === "lt") {
+        return "<";
+      }
+      if (token === "gt") {
+        return ">";
+      }
+      if (token === "quot") {
+        return "\"";
+      }
+      if (token === "nbsp") {
+        return " ";
+      }
+      if (token === "#39") {
+        return "'";
+      }
+      if (token.indexOf("#x") === 0) {
+        return String.fromCharCode(parseInt(token.slice(2), 16));
+      }
+      if (token.indexOf("#") === 0) {
+        return String.fromCharCode(parseInt(token.slice(1), 10));
+      }
+      return entity;
+    }
+  );
 }
 
 function stripHtmlText(value) {
