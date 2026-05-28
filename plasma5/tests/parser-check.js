@@ -130,6 +130,16 @@ function stripHtmlText(value) {
   return normalizeText(decodeHtmlEntities(String(value).replace(/<[^>]*>/g, " ")));
 }
 
+function stripHtmlTextLines(value) {
+  const withBreaks = String(value || "").replace(/<br\s*\/?>/gi, "\n");
+  const decoded = decodeHtmlEntities(withBreaks);
+  const withoutTags = decoded.replace(/<[^>]*>/g, " ");
+  return withoutTags
+    .split(/\n+/)
+    .map((line) => normalizeText(line))
+    .filter(Boolean);
+}
+
 function parseAntellSections(htmlText) {
   const sections = [];
   const sectionRegex = /<section class="menu-section">([\s\S]*?)<\/section>/gi;
@@ -749,35 +759,39 @@ function parsePranzeriaDayLines(htmlText, targetDateIso) {
     ? new Date(Number(targetDate[1]), Number(targetDate[2]) - 1, Number(targetDate[3]))
     : new Date(2026, 2, 20);
   let currentDateIso = "";
+  let stopParsing = false;
   let match;
 
-  while ((match = blockRegex.exec(html)) !== null) {
-    const line = stripHtmlText(match[1]);
-    if (!line) {
-      continue;
-    }
-
-    const header = parsePranzeriaDayHeader(line, referenceDate);
-    if (header) {
-      currentDateIso = header.dateIso;
-      if (!Object.prototype.hasOwnProperty.call(linesByDate, currentDateIso)) {
-        linesByDate[currentDateIso] = [];
+  while (!stopParsing && (match = blockRegex.exec(html)) !== null) {
+    const blockLines = stripHtmlTextLines(match[1]);
+    for (const line of blockLines) {
+      if (!line) {
+        continue;
       }
-      if (header.trailing) {
-        linesByDate[currentDateIso].push(header.trailing);
+
+      const header = parsePranzeriaDayHeader(line, referenceDate);
+      if (header) {
+        currentDateIso = header.dateIso;
+        if (!Object.prototype.hasOwnProperty.call(linesByDate, currentDateIso)) {
+          linesByDate[currentDateIso] = [];
+        }
+        if (header.trailing) {
+          linesByDate[currentDateIso].push(header.trailing);
+        }
+        continue;
       }
-      continue;
-    }
 
-    if (!currentDateIso) {
-      continue;
-    }
+      if (!currentDateIso) {
+        continue;
+      }
 
-    if (isPranzeriaLegendLine(line)) {
-      break;
-    }
+      if (isPranzeriaLegendLine(line)) {
+        stopParsing = true;
+        break;
+      }
 
-    linesByDate[currentDateIso].push(line);
+      linesByDate[currentDateIso].push(line);
+    }
   }
 
   const providerDateValid = Object.prototype.hasOwnProperty.call(linesByDate, targetDateIso);
@@ -979,6 +993,16 @@ function checkPranzeriaVariants() {
   assert(mixed.providerDateValid, "mixed-format Pranzeria headers should still find today's menu");
   assert(mixed.lines.includes("Porco Aglio & Zenzero"), "mixed-format Pranzeria should keep today's rows");
   assert(!mixed.lines.includes("EI LOUNASTA!"), "mixed-format Pranzeria should stop at the next header");
+
+  const brSeparated = parsePranzeriaDayLines(
+    "<p><b>Torstai 28.05.2026</b></p><p>Salaatti- &amp; AntipastoBuffet<br>Pollo Impanato<br>Pasta &amp; Pepperoni<br>Roomalainen FocacciaPizzaBuffet<br>Yrttiperunoita</p><p>Perjantai 29.05.2026</p><p>Tomorrow</p>",
+    "2026-05-28"
+  );
+  assert(brSeparated.providerDateValid, "br-separated Pranzeria block should find today's menu");
+  assert(brSeparated.lines.length === 5, `br-separated Pranzeria block should split into 5 lines, got ${brSeparated.lines.length}`);
+  assert(brSeparated.lines[0] === "Salaatti- & AntipastoBuffet", "br-separated Pranzeria block should keep salad as first item");
+  assert(brSeparated.lines.includes("Pasta & Pepperoni"), "br-separated Pranzeria block should keep pasta row separate");
+  assert(!brSeparated.lines.includes("Tomorrow"), "br-separated Pranzeria block should stop at next date");
 
   assert(parsePranzeriaDayHeader("10.30-14.00", new Date(2026, 2, 30)) === null, "Pranzeria should not read lunch times as dates");
 }

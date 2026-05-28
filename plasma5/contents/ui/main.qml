@@ -510,6 +510,21 @@ Item {
         return MenuFormatter.normalizeText(withoutTags)
     }
 
+    function stripHtmlTextLines(rawHtml) {
+        var withBreaks = String(rawHtml || "").replace(/<br\s*\/?>/gi, "\n")
+        var decoded = decodeHtmlEntities(withBreaks)
+        var withoutTags = String(decoded || "").replace(/<[^>]*>/g, " ")
+        var rawLines = withoutTags.split(/\n+/)
+        var lines = []
+        for (var i = 0; i < rawLines.length; i++) {
+            var line = MenuFormatter.normalizeText(rawLines[i])
+            if (line) {
+                lines.push(line)
+            }
+        }
+        return lines
+    }
+
     function parseAntellSections(htmlText) {
         var sections = []
         var sectionRegex = /<section class="menu-section">([\s\S]*?)<\/section>/gi
@@ -1145,35 +1160,40 @@ Item {
         var blockRegex = /<(?:p|h[1-6]|li)\b[^>]*>([\s\S]*?)<\/(?:p|h[1-6]|li)>/gi
         var dayLinesByIso = {}
         var currentDateIso = ""
+        var stopParsing = false
         var match
 
-        while ((match = blockRegex.exec(payloadText)) !== null) {
-            var line = stripHtmlText(match[1])
-            if (!line) {
-                continue
-            }
-
-            var dayHeader = parsePranzeriaDayHeader(line)
-            if (dayHeader) {
-                currentDateIso = dayHeader.dateIso
-                if (!Object.prototype.hasOwnProperty.call(dayLinesByIso, currentDateIso)) {
-                    dayLinesByIso[currentDateIso] = []
+        while (!stopParsing && (match = blockRegex.exec(payloadText)) !== null) {
+            var blockLines = stripHtmlTextLines(match[1])
+            for (var blockLineIndex = 0; blockLineIndex < blockLines.length; blockLineIndex++) {
+                var line = blockLines[blockLineIndex]
+                if (!line) {
+                    continue
                 }
-                if (dayHeader.trailing) {
-                    dayLinesByIso[currentDateIso].push(dayHeader.trailing)
+
+                var dayHeader = parsePranzeriaDayHeader(line)
+                if (dayHeader) {
+                    currentDateIso = dayHeader.dateIso
+                    if (!Object.prototype.hasOwnProperty.call(dayLinesByIso, currentDateIso)) {
+                        dayLinesByIso[currentDateIso] = []
+                    }
+                    if (dayHeader.trailing) {
+                        dayLinesByIso[currentDateIso].push(dayHeader.trailing)
+                    }
+                    continue
                 }
-                continue
-            }
 
-            if (!currentDateIso) {
-                continue
-            }
+                if (!currentDateIso) {
+                    continue
+                }
 
-            if (isPranzeriaLegendLine(line)) {
-                break
-            }
+                if (isPranzeriaLegendLine(line)) {
+                    stopParsing = true
+                    break
+                }
 
-            dayLinesByIso[currentDateIso].push(line)
+                dayLinesByIso[currentDateIso].push(line)
+            }
         }
 
         var today = todayIso()
