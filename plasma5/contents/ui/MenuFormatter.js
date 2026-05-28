@@ -323,7 +323,7 @@ function shouldHighlightTag(tag, highlightGlutenFree, highlightVeg, highlightLac
     if (highlightGlutenFree && normalized === "G") {
         return true;
     }
-    if (highlightVeg && normalized === "VEG") {
+    if (highlightVeg && (normalized === "VEG" || normalized === "V" || normalized === "VG")) {
         return true;
     }
     if (highlightLactoseFree && normalized === "L") {

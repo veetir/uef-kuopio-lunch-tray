@@ -750,6 +750,52 @@ function isPranzeriaLegendLine(lineText) {
   );
 }
 
+function normalizePranzeriaAllergenToken(token) {
+  const clean = normalizeText(token).toUpperCase();
+  if (clean === "VEG") {
+    return "VG";
+  }
+  if (["L", "G", "M", "V", "VG"].includes(clean)) {
+    return clean;
+  }
+  return "";
+}
+
+function normalizePranzeriaLunchLine(lineText) {
+  const line = normalizeText(lineText);
+  if (!line || /\((?:\*|[A-Za-z]{1,8})(?:\s*,\s*(?:\*|[A-Za-z]{1,8}))*\)\s*$/.test(line)) {
+    return line;
+  }
+
+  let rest = line;
+  const tags = [];
+  let guard = 0;
+  while (guard < 8) {
+    guard += 1;
+    const requestMatch = rest.match(/^(.*?)(?:[,;\s]+)(?:pyydett[aä]ess[aä]|pyydet[aä]ess[aä])\s+(VG|VEG|L|G|M|V)\s*[.,;:]*$/i);
+    const tokenMatch = requestMatch ? null : rest.match(/^(.*?)(?:[,;\s]+)(VG|VEG|L|G|M|V)\s*[.,;:]*$/i);
+    const match = requestMatch || tokenMatch;
+    if (!match) {
+      break;
+    }
+
+    const tag = normalizePranzeriaAllergenToken(match[2]);
+    if (!tag) {
+      break;
+    }
+    tags.unshift(tag);
+    rest = normalizeText(match[1]).replace(/[,\s;:]+$/g, "");
+  }
+
+  const main = normalizeText(rest);
+  if (!main || tags.length === 0) {
+    return line;
+  }
+
+  const uniqueTags = tags.filter((tag, index) => tags.indexOf(tag) === index);
+  return `${main} (${uniqueTags.join(", ")})`;
+}
+
 function parsePranzeriaDayLines(htmlText, targetDateIso) {
   const html = String(htmlText || "");
   const blockRegex = /<(?:p|h[1-6]|li)\b[^>]*>([\s\S]*?)<\/(?:p|h[1-6]|li)>/gi;
@@ -798,7 +844,7 @@ function parsePranzeriaDayLines(htmlText, targetDateIso) {
   const rawLines = providerDateValid ? linesByDate[targetDateIso] : [];
   const lines = [];
   for (const raw of rawLines) {
-    const clean = normalizeText(raw);
+    const clean = normalizePranzeriaLunchLine(raw);
     if (!clean) {
       continue;
     }
@@ -1003,6 +1049,23 @@ function checkPranzeriaVariants() {
   assert(brSeparated.lines[0] === "Salaatti- & AntipastoBuffet", "br-separated Pranzeria block should keep salad as first item");
   assert(brSeparated.lines.includes("Pasta & Pepperoni"), "br-separated Pranzeria block should keep pasta row separate");
   assert(!brSeparated.lines.includes("Tomorrow"), "br-separated Pranzeria block should stop at next date");
+
+  const allergenRows = parsePranzeriaDayLines(
+    "<p>Torstai 28.05.2026</p><p>Pasta Al Salmone (Tuoretta Pennepastaa Savulohikastikkeella) L, Pyydettäessä G</p><p>Pollo Al Pepe (Paistettua Kanaa Pippurikastikkeella) G, L</p><p>Pasta &amp; Pepperoni (Tuoretta Pastaa Paprikalla Ja Valkosipulilla) V, L Pyydetäessä G</p><p>Perjantai 29.05.2026</p><p>Tomorrow</p>",
+    "2026-05-28"
+  );
+  assert(
+    allergenRows.lines.includes("Pasta Al Salmone (Tuoretta Pennepastaa Savulohikastikkeella) (L, G)"),
+    "Pranzeria should normalize request-based gluten-free marker"
+  );
+  assert(
+    allergenRows.lines.includes("Pollo Al Pepe (Paistettua Kanaa Pippurikastikkeella) (G, L)"),
+    "Pranzeria should normalize comma-separated allergen markers"
+  );
+  assert(
+    allergenRows.lines.includes("Pasta & Pepperoni (Tuoretta Pastaa Paprikalla Ja Valkosipulilla) (V, L, G)"),
+    "Pranzeria should normalize vegetarian/lactose/request markers"
+  );
 
   assert(parsePranzeriaDayHeader("10.30-14.00", new Date(2026, 2, 30)) === null, "Pranzeria should not read lunch times as dates");
 }

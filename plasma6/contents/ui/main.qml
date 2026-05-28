@@ -1032,6 +1032,57 @@ PlasmoidItem {
             || clean.indexOf("Vegaani") >= 0
     }
 
+    function normalizePranzeriaAllergenToken(token) {
+        var clean = MenuFormatter.normalizeText(token).toUpperCase()
+        if (clean === "VEG") {
+            return "VG"
+        }
+        if (clean === "L" || clean === "G" || clean === "M" || clean === "V" || clean === "VG") {
+            return clean
+        }
+        return ""
+    }
+
+    function normalizePranzeriaLunchLine(lineText) {
+        var line = MenuFormatter.normalizeText(lineText)
+        if (!line || /\((?:\*|[A-Za-z]{1,8})(?:\s*,\s*(?:\*|[A-Za-z]{1,8}))*\)\s*$/.test(line)) {
+            return line
+        }
+
+        var rest = line
+        var tags = []
+        var guard = 0
+        while (guard < 8) {
+            guard += 1
+            var requestMatch = rest.match(/^(.*?)(?:[,;\s]+)(?:pyydett[aä]ess[aä]|pyydet[aä]ess[aä])\s+(VG|VEG|L|G|M|V)\s*[.,;:]*$/i)
+            var tokenMatch = requestMatch ? null : rest.match(/^(.*?)(?:[,;\s]+)(VG|VEG|L|G|M|V)\s*[.,;:]*$/i)
+            var match = requestMatch || tokenMatch
+            if (!match) {
+                break
+            }
+
+            var tag = normalizePranzeriaAllergenToken(match[2])
+            if (!tag) {
+                break
+            }
+            tags.unshift(tag)
+            rest = MenuFormatter.normalizeText(match[1]).replace(/[,\s;:]+$/g, "")
+        }
+
+        var main = MenuFormatter.normalizeText(rest)
+        if (!main || tags.length === 0) {
+            return line
+        }
+
+        var uniqueTags = []
+        for (var i = 0; i < tags.length; i++) {
+            if (uniqueTags.indexOf(tags[i]) < 0) {
+                uniqueTags.push(tags[i])
+            }
+        }
+        return main + " (" + uniqueTags.join(", ") + ")"
+    }
+
     function normalizeCompassRssTodayMenu(rawPayload) {
         if (!rawPayload || rawPayload.provider !== "compass-rss" || !rawPayload.providerDateValid) {
             return null
@@ -1206,7 +1257,7 @@ PlasmoidItem {
         var rawLines = providerDateValid ? dayLinesByIso[today] : []
         var lines = []
         for (var i = 0; i < rawLines.length; i++) {
-            var cleanLine = MenuFormatter.normalizeText(rawLines[i])
+            var cleanLine = normalizePranzeriaLunchLine(rawLines[i])
             if (!cleanLine) {
                 continue
             }
