@@ -81,6 +81,7 @@ function textFor(language, key) {
     var fi = {
         loading: "Ladataan ruokalistaa...",
         noMenu: "Tälle päivälle ei ole lounaslistaa.",
+        noService: "Ravintola ei tarjoile lounasta tänään.",
         stale: "Ruokalistan päivä ei vastaa tämän päivän päivämäärää",
         fetchError: "Päivitysvirhe"
     };
@@ -88,6 +89,7 @@ function textFor(language, key) {
     var en = {
         loading: "Loading menu...",
         noMenu: "No lunch menu available for today.",
+        noService: "This restaurant is not serving lunch today.",
         stale: "Menu date does not match today. Waiting for a valid refresh",
         fetchError: "Fetch error"
     };
@@ -365,8 +367,16 @@ function highlightSuffixRich(suffix, highlightGlutenFree, highlightVeg, highligh
     return "(" + styledTags.join(", ") + ")";
 }
 
-function buildTooltipSubText(language, fetchState, errorMessage, lastUpdatedEpochMs, todayMenu, showPrices, showStudentPrice, showStaffPrice, showGuestPrice, isCompassProvider, hideExpensiveStudentMeals, showAllergens, highlightGlutenFree, highlightVeg, highlightLactoseFree) {
+function serviceMessage(language, serviceState, message) {
+    if (!normalizeText(serviceState)) {
+        return "";
+    }
+    return normalizeText(message) || textFor(language, "noService");
+}
+
+function buildTooltipSubText(language, fetchState, errorMessage, lastUpdatedEpochMs, todayMenu, showPrices, showStudentPrice, showStaffPrice, showGuestPrice, isCompassProvider, hideExpensiveStudentMeals, showAllergens, highlightGlutenFree, highlightVeg, highlightLactoseFree, serviceState, serviceStateMessage) {
     var lines = [];
+    var noServiceMessage = serviceMessage(language, serviceState, serviceStateMessage);
 
     if (fetchState === "stale") {
         lines.push("[STALE]");
@@ -381,7 +391,9 @@ function buildTooltipSubText(language, fetchState, errorMessage, lastUpdatedEpoc
         lines.push(dateLine);
     }
 
-    if (todayMenu && todayMenu.menus && todayMenu.menus.length > 0) {
+    if (noServiceMessage) {
+        lines.push(noServiceMessage);
+    } else if (todayMenu && todayMenu.menus && todayMenu.menus.length > 0) {
         var hasVisibleMenu = false;
         for (var i = 0; i < todayMenu.menus.length; i++) {
             var menu = todayMenu.menus[i];
@@ -410,7 +422,7 @@ function buildTooltipSubText(language, fetchState, errorMessage, lastUpdatedEpoc
         lines.push(textFor(language, "stale"));
     }
 
-    var cleanError = normalizeText(errorMessage);
+    var cleanError = noServiceMessage ? "" : normalizeText(errorMessage);
     if (cleanError && fetchState !== "ok") {
         lines.push(textFor(language, "fetchError") + ": " + cleanError);
     }
@@ -418,8 +430,9 @@ function buildTooltipSubText(language, fetchState, errorMessage, lastUpdatedEpoc
     return lines.join("\n");
 }
 
-function buildTooltipSubTextRich(language, fetchState, errorMessage, lastUpdatedEpochMs, todayMenu, showPrices, showStudentPrice, showStaffPrice, showGuestPrice, isCompassProvider, hideExpensiveStudentMeals, showAllergens, highlightGlutenFree, highlightVeg, highlightLactoseFree) {
+function buildTooltipSubTextRich(language, fetchState, errorMessage, lastUpdatedEpochMs, todayMenu, showPrices, showStudentPrice, showStaffPrice, showGuestPrice, isCompassProvider, hideExpensiveStudentMeals, showAllergens, highlightGlutenFree, highlightVeg, highlightLactoseFree, serviceState, serviceStateMessage) {
     var lines = [];
+    var noServiceMessage = serviceMessage(language, serviceState, serviceStateMessage);
 
     if (fetchState === "stale") {
         lines.push("<b>[STALE]</b>");
@@ -434,7 +447,9 @@ function buildTooltipSubTextRich(language, fetchState, errorMessage, lastUpdated
         lines.push("<b>" + escapeHtml(dateLine) + "</b>");
     }
 
-    if (todayMenu && todayMenu.menus && todayMenu.menus.length > 0) {
+    if (noServiceMessage) {
+        lines.push(escapeHtml(noServiceMessage));
+    } else if (todayMenu && todayMenu.menus && todayMenu.menus.length > 0) {
         var hasVisibleMenu = false;
         for (var i = 0; i < todayMenu.menus.length; i++) {
             var menu = todayMenu.menus[i];
@@ -469,7 +484,7 @@ function buildTooltipSubTextRich(language, fetchState, errorMessage, lastUpdated
         lines.push(escapeHtml(textFor(language, "stale")));
     }
 
-    var cleanError = normalizeText(errorMessage);
+    var cleanError = noServiceMessage ? "" : normalizeText(errorMessage);
     if (cleanError && fetchState !== "ok") {
         lines.push(escapeHtml(textFor(language, "fetchError") + ": " + cleanError));
     }

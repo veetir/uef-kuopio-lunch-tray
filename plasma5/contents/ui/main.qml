@@ -15,9 +15,9 @@ Item {
     property string pranzeriaRestaurantCode: "pranzeria-html"
     property var allRestaurantCatalog: [
         { code: "0437", fallbackName: "Snellmania", provider: "compass" },
-        { code: "snellari-rss", fallbackName: "Cafe Snellari", provider: "compass-rss", rssCostNumber: "4370", rssUrlBase: "https://www.compass-group.fi/ravintolat-ja-ruokalistat/foodco/kaupungit/kuopio/cafe-snellari/" },
+        { code: "snellari-rss", fallbackName: "Cafe Snellari", provider: "compass-rss", rssCostNumber: "4370", rssUrlBase: "https://www.compass-group.fi/ravintolat-ja-ruokalistat/foodco/kaupungit/kuopio/cafe-snellari/", temporaryClosure: { startDateIso: "2026-05-08", endDateIso: "2026-08-30", messageFi: "Cafe Snellari on suljettu 8.5.-30.8.", messageEn: "Cafe Snellari is closed from 8 May to 30 August." } },
         { code: "0436", fallbackName: "Canthia", provider: "compass" },
-        { code: "043601", fallbackName: "Mediteknia", provider: "compass" },
+        { code: "043601", fallbackName: "Mediteknia", provider: "compass", restaurantUrlBase: "https://www.compass-group.fi/ravintolat-ja-ruokalistat/foodco/kaupungit/kuopio/ita-suomen-yliopisto-mediteknia/", temporaryClosure: { startDateIso: "2026-05-04", endDateIso: "2026-08-16", messageFi: "Mediteknia ei tarjoile lounasta 4.5.-16.8.", messageEn: "Mediteknia is not serving lunch from 4 May to 16 August." } },
         { code: "0439", fallbackName: "Tietoteknia", provider: "compass" },
         { code: "antell-round", fallbackName: "Antell Round", provider: "antell", antellSlug: "round", antellUrlBase: "https://antell.fi/lounas/kuopio/round/" },
         { code: "antell-highway", fallbackName: "Antell Highway", provider: "antell", antellSlug: "highway", antellUrlBase: "https://antell.fi/lounas/kuopio/highway/" },
@@ -197,9 +197,10 @@ Item {
     }
 
     function restaurantCodes() {
+        var catalog = Array.isArray(restaurantCatalog) ? restaurantCatalog : []
         var list = []
-        for (var i = 0; i < restaurantCatalog.length; i++) {
-            list.push(String(restaurantCatalog[i].code))
+        for (var i = 0; i < catalog.length; i++) {
+            list.push(String(catalog[i].code))
         }
         return list
     }
@@ -211,20 +212,22 @@ Item {
     }
 
     function restaurantEntryForCode(code) {
+        var catalog = Array.isArray(restaurantCatalog) ? restaurantCatalog : []
         var normalized = String(code || "")
-        for (var i = 0; i < restaurantCatalog.length; i++) {
-            if (String(restaurantCatalog[i].code) === normalized) {
-                return restaurantCatalog[i]
+        for (var i = 0; i < catalog.length; i++) {
+            if (String(catalog[i].code) === normalized) {
+                return catalog[i]
             }
         }
         return null
     }
 
     function restaurantLabelForCode(code) {
+        var catalog = Array.isArray(restaurantCatalog) ? restaurantCatalog : []
         var normalized = String(code || "")
-        for (var i = 0; i < restaurantCatalog.length; i++) {
-            if (restaurantCatalog[i].code === normalized) {
-                return restaurantCatalog[i].fallbackName
+        for (var i = 0; i < catalog.length; i++) {
+            if (catalog[i].code === normalized) {
+                return catalog[i].fallbackName
             }
         }
         return "Restaurant " + normalized
@@ -242,6 +245,7 @@ Item {
             menuDateIso: "",
             providerDateValid: false,
             isTodayFresh: false,
+            serviceState: "",
             consecutiveFailures: 0,
             nextRetryEpochMs: 0,
             assumedNoMenuWeekend: false,
@@ -370,6 +374,69 @@ Item {
             dateIso: today,
             lunchTime: "",
             menus: []
+        }
+    }
+
+    function temporaryClosureForEntry(entry, dateIso) {
+        var closure = entry && entry.temporaryClosure ? entry.temporaryClosure : null
+        if (!closure) {
+            return null
+        }
+
+        var today = MenuFormatter.normalizeText(dateIso || todayIso())
+        var start = MenuFormatter.normalizeText(closure.startDateIso)
+        var end = MenuFormatter.normalizeText(closure.endDateIso)
+        if (!today || !start || !end || today < start || today > end) {
+            return null
+        }
+
+        var message = configLanguage === "en"
+            ? MenuFormatter.normalizeText(closure.messageEn)
+            : MenuFormatter.normalizeText(closure.messageFi)
+        if (!message) {
+            message = configLanguage === "en"
+                ? "This restaurant is not serving lunch today."
+                : "Ravintola ei tarjoile lounasta tänään."
+        }
+
+        return {
+            type: "temporary-closure",
+            message: message
+        }
+    }
+
+    function applyNoServiceStateForCode(code, entry, noService) {
+        var nowMs = Date.now()
+        var url = sanitizeExternalUrl(
+            entry && entry.restaurantUrlBase ? String(entry.restaurantUrlBase) : "",
+            entry && entry.rssUrlBase ? String(entry.rssUrlBase) : ""
+        )
+        if (!url) {
+            url = sanitizeExternalUrl(
+                entry && entry.pranzeriaUrlBase ? String(entry.pranzeriaUrlBase) : "",
+                entry && entry.huomenUrlBase ? String(entry.huomenUrlBase) : ""
+            )
+        }
+
+        updateState(code, {
+            status: "ok",
+            errorMessage: MenuFormatter.normalizeText(noService && noService.message),
+            lastUpdatedEpochMs: nowMs,
+            rawPayload: noService || null,
+            menuDateIso: todayIso(),
+            providerDateValid: true,
+            isTodayFresh: true,
+            serviceState: noService && noService.type ? String(noService.type) : "no-service",
+            todayMenu: emptyTodayMenu(),
+            consecutiveFailures: 0,
+            nextRetryEpochMs: 0,
+            assumedNoMenuWeekend: false,
+            assumedNoMenuRetryEpochMs: 0,
+            restaurantName: entry ? String(entry.fallbackName || "Compass Lunch") : "Compass Lunch",
+            restaurantUrl: url
+        })
+        if (String(code) === activeRestaurantCode) {
+            syncSettingsLastUpdatedDisplay()
         }
     }
 
@@ -1407,6 +1474,7 @@ Item {
             status: current.payloadText ? "stale" : "error",
             errorMessage: message,
             isTodayFresh: false,
+            serviceState: "",
             consecutiveFailures: failureCount,
             nextRetryEpochMs: Date.now() + retryDelayMinutes(failureCount) * 60 * 1000,
             assumedNoMenuWeekend: false,
@@ -1539,6 +1607,7 @@ Item {
             menuDateIso: menuDateIso,
             providerDateValid: !!providerDateValid,
             isTodayFresh: freshToday,
+            serviceState: assumeWeekendNoMenu ? "weekend-no-menu" : "",
             consecutiveFailures: failureCount,
             nextRetryEpochMs: nextRetryEpochMs,
             assumedNoMenuWeekend: assumeWeekendNoMenu,
@@ -1640,6 +1709,12 @@ Item {
 
         var entry = restaurantEntryForCode(normalized)
         var provider = entry && entry.provider ? String(entry.provider) : "compass"
+        var noService = temporaryClosureForEntry(entry, todayIso())
+        if (noService) {
+            applyNoServiceStateForCode(normalized, entry, noService)
+            return
+        }
+
         if (isHardWeekendClosedProvider(provider) && isWeekendDate(new Date())) {
             updateState(normalized, {
                 status: "ok",
@@ -1647,6 +1722,7 @@ Item {
                 menuDateIso: todayIso(),
                 providerDateValid: true,
                 isTodayFresh: true,
+                serviceState: "weekend-closure",
                 todayMenu: emptyTodayMenu(),
                 consecutiveFailures: 0,
                 nextRetryEpochMs: 0,
@@ -1667,7 +1743,8 @@ Item {
         if (!current.payloadText) {
             updateState(normalized, {
                 status: "loading",
-                errorMessage: ""
+                errorMessage: "",
+                serviceState: ""
             })
         }
 
@@ -1835,7 +1912,9 @@ Item {
             configShowAllergens,
             configHighlightGlutenFree,
             configHighlightVeg,
-            configHighlightLactoseFree
+            configHighlightLactoseFree,
+            state.serviceState,
+            state.errorMessage
         )
     }
 
@@ -1858,7 +1937,9 @@ Item {
             configShowAllergens,
             configHighlightGlutenFree,
             configHighlightVeg,
-            configHighlightLactoseFree
+            configHighlightLactoseFree,
+            state.serviceState,
+            state.errorMessage
         )
     }
 

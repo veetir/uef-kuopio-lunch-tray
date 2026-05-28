@@ -562,6 +562,26 @@ function isHardWeekendClosedProvider(provider) {
   return provider === "pranzeria";
 }
 
+function temporaryClosureForEntry(entry, dateIso, language = "fi") {
+  const closure = entry && entry.temporaryClosure ? entry.temporaryClosure : null;
+  if (!closure) {
+    return null;
+  }
+
+  const today = normalizeText(dateIso);
+  const start = normalizeText(closure.startDateIso);
+  const end = normalizeText(closure.endDateIso);
+  if (!today || !start || !end || today < start || today > end) {
+    return null;
+  }
+
+  const message = language === "en" ? normalizeText(closure.messageEn) : normalizeText(closure.messageFi);
+  return {
+    type: "temporary-closure",
+    message: message || (language === "en" ? "This restaurant is not serving lunch today." : "Ravintola ei tarjoile lounasta tänään."),
+  };
+}
+
 function buildPranzeriaDate(yearNumber, month, day) {
   const candidate = new Date(yearNumber, month - 1, day);
   if (
@@ -984,6 +1004,31 @@ function checkWeekendNoMenuAssumption() {
   assert(!shouldAssumeWeekendNoMenu("compass-rss", saturday), "compass-rss should not use weekend no-menu assumption");
 }
 
+function checkTemporaryClosureWindows() {
+  const mediteknia = {
+    temporaryClosure: {
+      startDateIso: "2026-05-04",
+      endDateIso: "2026-08-16",
+      messageFi: "Mediteknia ei tarjoile lounasta 4.5.-16.8.",
+      messageEn: "Mediteknia is not serving lunch from 4 May to 16 August.",
+    },
+  };
+  const snellari = {
+    temporaryClosure: {
+      startDateIso: "2026-05-08",
+      endDateIso: "2026-08-30",
+      messageFi: "Cafe Snellari on suljettu 8.5.-30.8.",
+      messageEn: "Cafe Snellari is closed from 8 May to 30 August.",
+    },
+  };
+
+  assert(temporaryClosureForEntry(mediteknia, "2026-05-04").message.includes("Mediteknia"), "Mediteknia closure should include first day");
+  assert(temporaryClosureForEntry(mediteknia, "2026-08-16"), "Mediteknia closure should include last day");
+  assert(temporaryClosureForEntry(mediteknia, "2026-08-17") === null, "Mediteknia closure should expire after last day");
+  assert(temporaryClosureForEntry(snellari, "2026-05-07") === null, "Snellari closure should not start early");
+  assert(temporaryClosureForEntry(snellari, "2026-08-30", "en").message.includes("closed"), "Snellari closure should support English copy");
+}
+
 function main() {
   checkCompassFixture("output-en.json", "Lunch");
   checkCompassFixture("output-fi.json", "Annosruoka");
@@ -1004,6 +1049,7 @@ function main() {
   checkPranzeriaFixture("pranzeria-snippet.html");
   checkPranzeriaVariants();
   checkWeekendNoMenuAssumption();
+  checkTemporaryClosureWindows();
   checkRetryDelays();
   process.stdout.write("Parser checks passed for Compass, Antell, RSS, Huomen and Pranzeria freshness rules\n");
 }
