@@ -2,6 +2,8 @@ use super::content::invalidate_favorites_cache;
 use super::layout::{header_layout, popup_scale};
 use super::*;
 
+const CLICK_SLOP_PX: i32 = 3;
+
 pub(super) fn header_button_at(
     hwnd: HWND,
     settings: &Settings,
@@ -45,6 +47,8 @@ pub(super) fn begin_text_selection(hwnd: HWND, x: i32, y: i32) -> bool {
         item_id: row.item_id,
         anchor: anchor_index,
         current: anchor_index,
+        start_x: x,
+        start_y: y,
     });
     request_repaint(hwnd);
     true
@@ -75,7 +79,7 @@ pub(super) fn update_text_selection(hwnd: HWND, x: i32, y: i32) {
 }
 
 pub(super) fn finish_text_selection(hwnd: HWND, x: i32, y: i32) -> bool {
-    let snippet = {
+    let outcome = {
         let mut state = match selection_state().lock() {
             Ok(value) => value,
             Err(_) => return false,
@@ -91,29 +95,72 @@ pub(super) fn finish_text_selection(hwnd: HWND, x: i32, y: i32) -> bool {
             drag.current = next_index;
         }
         let selected = selected_range(drag.anchor, drag.current);
-        if selected.0 == selected.1 {
-            None
+        let is_click =
+            (x - drag.start_x).abs() <= CLICK_SLOP_PX && (y - drag.start_y).abs() <= CLICK_SLOP_PX;
+        if is_click || selected.0 == selected.1 {
+            if layout
+                .item_ingredient_flags
+                .get(drag.item_id)
+                .copied()
+                .unwrap_or(false)
+            {
+                None
+            } else {
+                let recipe_id = layout.item_recipe_ids.get(drag.item_id).copied().flatten();
+                if let Some(recipe_id) = recipe_id {
+                    state.expanded_recipe_id = if state.expanded_recipe_id == Some(recipe_id) {
+                        None
+                    } else {
+                        Some(recipe_id)
+                    };
+                    Some(TextInteractionOutcome::ToggleRecipe)
+                } else {
+                    None
+                }
+            }
         } else {
             let item = layout.items.get(drag.item_id);
-            item.and_then(|text| {
+            let selected_text = item.and_then(|text| {
                 text.get(selected.0..selected.1)
                     .map(favorites::normalize_snippet)
                     .filter(|value| !value.is_empty())
-            })
+            });
+            if layout
+                .item_ingredient_flags
+                .get(drag.item_id)
+                .copied()
+                .unwrap_or(false)
+            {
+                selected_text.map(TextInteractionOutcome::ToggleIngredient)
+            } else {
+                selected_text.map(TextInteractionOutcome::ToggleFavorite)
+            }
         }
     };
 
-    let Some(value) = snippet else {
+    let Some(outcome) = outcome else {
         request_repaint(hwnd);
         return false;
     };
 
-    if favorites::toggle_snippet(&value).is_err() {
-        request_repaint(hwnd);
-        return false;
+    match outcome {
+        TextInteractionOutcome::ToggleFavorite(value) => {
+            if favorites::toggle_snippet(&value).is_err() {
+                request_repaint(hwnd);
+                return false;
+            }
+            invalidate_favorites_cache();
+        }
+        TextInteractionOutcome::ToggleIngredient(value) => {
+            if favorites::toggle_ingredient_snippet(&value).is_err() {
+                request_repaint(hwnd);
+                return false;
+            }
+            invalidate_favorites_cache();
+        }
+        TextInteractionOutcome::ToggleRecipe => {}
     }
 
-    invalidate_favorites_cache();
     request_repaint(hwnd);
     true
 }
@@ -159,7 +206,19 @@ pub(super) fn clear_selection_layout(hwnd: HWND) {
 }
 
 pub(super) fn clear_selection_state(hwnd: HWND) {
-    clear_selection_layout(hwnd);
+    let mut state = match selection_state().lock() {
+        Ok(value) => value,
+        Err(_) => return,
+    };
+    if state
+        .layout
+        .as_ref()
+        .is_some_and(|layout| layout.hwnd == hwnd)
+    {
+        state.layout = None;
+    }
+    state.drag = None;
+    state.expanded_recipe_id = None;
 }
 
 pub(super) fn store_selection_layout(layout: SelectableLayout) {
@@ -182,6 +241,10 @@ pub(super) fn store_selection_layout(layout: SelectableLayout) {
     }
 }
 
+pub(super) fn expanded_recipe_id() -> Option<u32> {
+    selection_state().lock().ok()?.expanded_recipe_id
+}
+
 pub(super) fn current_selection_range(hwnd: HWND) -> Option<SelectionRange> {
     let state = selection_state().lock().ok()?;
     let layout = state.layout.as_ref()?;
@@ -201,6 +264,12 @@ pub(super) fn current_selection_range(hwnd: HWND) -> Option<SelectionRange> {
         start,
         end,
     })
+}
+
+enum TextInteractionOutcome {
+    ToggleFavorite(String),
+    ToggleIngredient(String),
+    ToggleRecipe,
 }
 
 fn hit_test_row(layout: &SelectableLayout, x: i32, y: i32) -> Option<(&SelectableRow, usize)> {

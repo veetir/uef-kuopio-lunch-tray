@@ -169,6 +169,7 @@ pub fn split_component_suffix(component: &str) -> (String, String) {
 }
 
 /// Converts a menu group's raw component strings into renderable main/suffix pairs.
+#[cfg(test)]
 pub fn renderable_menu_components(group: &MenuGroup) -> Vec<(String, String)> {
     let mut out = Vec::new();
     for component in &group.components {
@@ -593,6 +594,8 @@ mod tests {
             name: "Lunch".to_string(),
             price: String::new(),
             components: vec![],
+            component_recipe_ids: Vec::new(),
+            component_recipe_details: Vec::new(),
         };
         assert!(renderable_menu_components(&group).is_empty());
     }
@@ -603,6 +606,8 @@ mod tests {
             name: "Lunch".to_string(),
             price: String::new(),
             components: vec!["".to_string(), "   ".to_string(), "\n\t".to_string()],
+            component_recipe_ids: Vec::new(),
+            component_recipe_details: Vec::new(),
         };
         assert!(renderable_menu_components(&group).is_empty());
     }
@@ -618,6 +623,8 @@ mod tests {
                 "Soup (L)".to_string(),
                 "()".to_string(),
             ],
+            component_recipe_ids: Vec::new(),
+            component_recipe_details: Vec::new(),
         };
         assert_eq!(
             renderable_menu_components(&group),

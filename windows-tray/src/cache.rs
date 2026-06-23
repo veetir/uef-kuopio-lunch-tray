@@ -70,6 +70,11 @@ pub fn read_cache(provider: Provider, code: &str, language: &str) -> Option<Stri
     }
 }
 
+/// Reads a sidecar cache payload produced by provider-specific enrichment.
+pub fn read_enriched_cache(provider: Provider, code: &str, language: &str) -> Option<String> {
+    fs::read_to_string(enriched_cache_path(provider, code, language)).ok()
+}
+
 /// Returns the cache modification time in epoch milliseconds, if available.
 pub fn cache_mtime_ms(provider: Provider, code: &str, language: &str) -> Option<i64> {
     let path = cache_path(provider, code, language);
@@ -93,4 +98,28 @@ pub fn write_cache(
     let path = cache_path(provider, code, language);
     fs::write(&path, payload).with_context(|| format!("write cache file {}", path.display()))?;
     Ok(())
+}
+
+/// Writes a sidecar cache payload produced by provider-specific enrichment.
+pub fn write_enriched_cache(
+    provider: Provider,
+    code: &str,
+    language: &str,
+    payload: &str,
+) -> anyhow::Result<()> {
+    let dir = cache_dir();
+    fs::create_dir_all(&dir).context("create cache dir")?;
+    let path = enriched_cache_path(provider, code, language);
+    fs::write(&path, payload)
+        .with_context(|| format!("write enriched cache file {}", path.display()))?;
+    Ok(())
+}
+
+fn enriched_cache_path(provider: Provider, code: &str, language: &str) -> PathBuf {
+    cache_dir().join(format!(
+        "{}__{}__{}__enriched.json",
+        sanitize_key_segment(provider_key(provider)),
+        sanitize_key_segment(code),
+        sanitize_key_segment(language),
+    ))
 }

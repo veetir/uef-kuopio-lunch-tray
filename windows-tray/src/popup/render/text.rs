@@ -368,6 +368,7 @@ mod tests {
     fn favorite_match_ranges_prefers_longest_non_overlapping_matches() {
         let favorites = FavoritesSnapshot {
             snippets_lower: vec!["tofu".to_string(), "tofu curry".to_string()],
+            ingredient_snippets_lower: Vec::new(),
         };
         let ranges = favorite_match_ranges("Spicy tofu curry bowl", &favorites);
         assert_eq!(ranges, vec![(6, 16)]);

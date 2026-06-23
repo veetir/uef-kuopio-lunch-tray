@@ -50,6 +50,8 @@ pub fn parse_antell_html(html: &str, today_key: &str) -> TodayMenu {
             name,
             price,
             components: items,
+            component_recipe_ids: Vec::new(),
+            component_recipe_details: Vec::new(),
         });
     }
 

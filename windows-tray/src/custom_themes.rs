@@ -141,4 +141,3 @@ pub fn find_custom_theme(name: &str) -> Option<CustomThemeDef> {
         .into_iter()
         .find(|t| t.name.to_ascii_lowercase() == lower)
 }
-

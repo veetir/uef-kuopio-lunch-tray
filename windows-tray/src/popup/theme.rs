@@ -33,6 +33,85 @@ pub(super) struct ThemePalette {
     pub(super) divider_color: COLORREF,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(super) struct RecipeDetailPalette {
+    pub(super) bg_color: COLORREF,
+    pub(super) border_color: COLORREF,
+    pub(super) label_color: COLORREF,
+    pub(super) text_color: COLORREF,
+    pub(super) ingredient_highlight_color: COLORREF,
+    pub(super) selection_text_color: COLORREF,
+}
+
+pub(super) fn recipe_detail_palette(theme: &str, palette: &ThemePalette) -> RecipeDetailPalette {
+    match theme {
+        "teletext1" => RecipeDetailPalette {
+            bg_color: rgb(0, 0, 120),
+            border_color: rgb(255, 255, 0),
+            label_color: rgb(0, 255, 255),
+            text_color: rgb(255, 255, 255),
+            ingredient_highlight_color: rgb(255, 255, 0),
+            selection_text_color: rgb(0, 0, 0),
+        },
+        "teletext2" => RecipeDetailPalette {
+            bg_color: rgb(0, 0, 130),
+            border_color: rgb(255, 0, 255),
+            label_color: rgb(255, 255, 0),
+            text_color: rgb(225, 255, 225),
+            ingredient_highlight_color: rgb(255, 0, 255),
+            selection_text_color: rgb(0, 0, 0),
+        },
+        "blue" => RecipeDetailPalette {
+            bg_color: lerp_color(palette.bg_color, palette.selection_bg_color, 0.55),
+            border_color: palette.divider_color,
+            label_color: palette.heading_color,
+            text_color: palette.body_text_color,
+            ingredient_highlight_color: rgb(255, 211, 80),
+            selection_text_color: rgb(0, 0, 0),
+        },
+        "green" => RecipeDetailPalette {
+            bg_color: lerp_color(palette.bg_color, palette.selection_bg_color, 0.55),
+            border_color: palette.divider_color,
+            label_color: palette.heading_color,
+            text_color: palette.body_text_color,
+            ingredient_highlight_color: rgb(255, 255, 0),
+            selection_text_color: rgb(0, 0, 0),
+        },
+        "amber" => RecipeDetailPalette {
+            bg_color: lerp_color(palette.bg_color, palette.selection_bg_color, 0.55),
+            border_color: palette.divider_color,
+            label_color: palette.heading_color,
+            text_color: palette.body_text_color,
+            ingredient_highlight_color: rgb(255, 246, 166),
+            selection_text_color: rgb(0, 0, 0),
+        },
+        "light" => RecipeDetailPalette {
+            bg_color: lerp_color(palette.bg_color, palette.selection_bg_color, 0.38),
+            border_color: palette.divider_color,
+            label_color: palette.heading_color,
+            text_color: palette.body_text_color,
+            ingredient_highlight_color: rgb(32, 92, 176),
+            selection_text_color: rgb(255, 255, 255),
+        },
+        "barbie" => RecipeDetailPalette {
+            bg_color: lerp_color(palette.bg_color, palette.selection_bg_color, 0.38),
+            border_color: palette.divider_color,
+            label_color: palette.heading_color,
+            text_color: palette.body_text_color,
+            ingredient_highlight_color: rgb(210, 40, 135),
+            selection_text_color: rgb(255, 255, 255),
+        },
+        _ => RecipeDetailPalette {
+            bg_color: lerp_color(palette.bg_color, palette.selection_bg_color, 0.55),
+            border_color: palette.divider_color,
+            label_color: palette.heading_color,
+            text_color: palette.body_text_color,
+            ingredient_highlight_color: palette.favorite_highlight_color,
+            selection_text_color: rgb(0, 0, 0),
+        },
+    }
+}
+
 pub(super) fn theme_palette(theme: &str) -> ThemePalette {
     match theme {
         "light" => ThemePalette {

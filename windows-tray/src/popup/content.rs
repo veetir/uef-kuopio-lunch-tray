@@ -92,6 +92,8 @@ struct MenuRenderOptions {
 
 fn append_menus(lines: &mut Vec<Line>, menu: &TodayMenu, options: MenuRenderOptions) -> usize {
     let mut rendered_groups = 0;
+    let expanded_recipe_id = super::interaction::expanded_recipe_id();
+    let favorites = current_favorites_snapshot();
     for group in &menu.menus {
         if options.provider == Provider::Compass && options.hide_expensive_student_meals {
             if let Some(price) = student_price_eur(&group.price) {
@@ -101,7 +103,7 @@ fn append_menus(lines: &mut Vec<Line>, menu: &TodayMenu, options: MenuRenderOpti
             }
         }
 
-        let renderable_components = renderable_menu_components(group);
+        let renderable_components = renderable_group_components(group);
         if renderable_components.is_empty() {
             continue;
         }
@@ -114,11 +116,16 @@ fn append_menus(lines: &mut Vec<Line>, menu: &TodayMenu, options: MenuRenderOpti
         );
         lines.push(Line::Heading(heading));
         rendered_groups += 1;
-        for (main, suffix) in renderable_components {
+        for (main, suffix, recipe_id, recipe_detail) in renderable_components {
+            let ingredient_alert = recipe_detail
+                .as_ref()
+                .is_some_and(|detail| ingredient_alert_matches(detail, &favorites));
             if !options.show_allergens || suffix.is_empty() {
                 lines.push(Line::MenuItem {
-                    main,
+                    main: main.clone(),
                     suffix_segments: Vec::new(),
+                    recipe_id,
+                    ingredient_alert,
                 });
             } else {
                 let segments = build_suffix_segments(
@@ -128,13 +135,121 @@ fn append_menus(lines: &mut Vec<Line>, menu: &TodayMenu, options: MenuRenderOpti
                     options.highlight_lactose_free,
                 );
                 lines.push(Line::MenuItem {
-                    main,
+                    main: main.clone(),
                     suffix_segments: segments,
+                    recipe_id,
+                    ingredient_alert,
                 });
+            }
+            if recipe_id.is_some() && recipe_id == expanded_recipe_id {
+                if let Some(detail) = recipe_detail.as_ref() {
+                    let rows = recipe_detail_rows(detail);
+                    if !rows.is_empty() {
+                        lines.push(Line::RecipeDetail { rows });
+                    }
+                }
             }
         }
     }
     rendered_groups
+}
+
+fn ingredient_alert_matches(detail: &RecipeInfo, favorites: &FavoritesSnapshot) -> bool {
+    if favorites.ingredient_snippets_lower.is_empty() {
+        return false;
+    }
+    let ingredients = normalize_text(&detail.ingredients_cleaned).to_lowercase();
+    if ingredients.is_empty() {
+        return false;
+    }
+    favorites
+        .ingredient_snippets_lower
+        .iter()
+        .any(|snippet| !snippet.is_empty() && ingredients.contains(snippet))
+}
+
+fn renderable_group_components(
+    group: &MenuGroup,
+) -> Vec<(String, String, Option<u32>, Option<RecipeInfo>)> {
+    let mut out = Vec::new();
+    for (idx, component) in group.components.iter().enumerate() {
+        let component = normalize_text(component);
+        if component.is_empty() {
+            continue;
+        }
+        let (main, suffix) = split_component_suffix(&component);
+        if main.is_empty() {
+            continue;
+        }
+        let recipe_id = group.component_recipe_ids.get(idx).copied().flatten();
+        let recipe_detail = group.component_recipe_details.get(idx).cloned().flatten();
+        out.push((main, suffix, recipe_id, recipe_detail));
+    }
+    out
+}
+
+fn recipe_detail_rows(detail: &RecipeInfo) -> Vec<RecipeDetailRow> {
+    let mut rows = Vec::new();
+    let ingredients = normalize_text(&detail.ingredients_cleaned);
+    if !ingredients.is_empty() {
+        rows.push(RecipeDetailRow {
+            label: "Ingredients".to_string(),
+            value: ingredients,
+        });
+    }
+    let nutrition = compact_nutrition_line(detail);
+    if !nutrition.is_empty() {
+        rows.push(RecipeDetailRow {
+            label: "Nutrition".to_string(),
+            value: nutrition,
+        });
+    }
+    if let Some(co2) = detail.kg_co2e_per100g {
+        rows.push(RecipeDetailRow {
+            label: "CO2e".to_string(),
+            value: format!("{:.2} kg / 100 g", co2),
+        });
+    }
+    if rows.is_empty() {
+        rows.push(RecipeDetailRow {
+            label: "Recipe ID".to_string(),
+            value: detail.recipe_id.to_string(),
+        });
+    }
+    rows
+}
+
+fn compact_nutrition_line(detail: &RecipeInfo) -> String {
+    let wanted = [
+        ("EnergyKcal", "kcal"),
+        ("Protein", "protein"),
+        ("Carbohydrates", "carbs"),
+        ("Fat", "fat"),
+    ];
+    let mut parts = Vec::new();
+    for (key, label) in wanted {
+        if let Some(value) = detail
+            .nutritional_values
+            .iter()
+            .find(|entry| entry.name == key)
+        {
+            parts.push(format!(
+                "{} {} {}",
+                format_amount(value.amount),
+                value.unit,
+                label
+            ));
+        }
+    }
+    parts.join(", ")
+}
+
+fn format_amount(value: f32) -> String {
+    if (value.fract()).abs() < 0.05 {
+        format!("{:.0}", value)
+    } else {
+        format!("{:.1}", value)
+    }
 }
 
 fn build_suffix_segments(
@@ -204,6 +319,7 @@ pub(super) fn current_favorites_snapshot() -> FavoritesSnapshot {
     if !cache.loaded || mtime != cache.mtime_ms {
         let loaded = favorites::load_favorites();
         let mut snippets_lower = Vec::new();
+        let mut ingredient_snippets_lower = Vec::new();
         for snippet in loaded.snippets {
             let normalized = favorites::normalize_snippet(&snippet);
             if normalized.is_empty() {
@@ -211,7 +327,17 @@ pub(super) fn current_favorites_snapshot() -> FavoritesSnapshot {
             }
             snippets_lower.push(normalized.to_lowercase());
         }
-        cache.snapshot = FavoritesSnapshot { snippets_lower };
+        for snippet in loaded.ingredient_snippets {
+            let normalized = favorites::normalize_snippet(&snippet);
+            if normalized.is_empty() {
+                continue;
+            }
+            ingredient_snippets_lower.push(normalized.to_lowercase());
+        }
+        cache.snapshot = FavoritesSnapshot {
+            snippets_lower,
+            ingredient_snippets_lower,
+        };
         cache.mtime_ms = mtime;
         cache.loaded = true;
     }

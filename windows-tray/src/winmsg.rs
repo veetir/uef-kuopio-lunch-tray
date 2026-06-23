@@ -384,7 +384,11 @@ pub unsafe extern "system" fn popup_wndproc(
             let x = (lparam.0 as u32 & 0xFFFF) as i16 as i32;
             let y = ((lparam.0 as u32 >> 16) & 0xFFFF) as i16 as i32;
             if popup::text_selection_active(hwnd) {
-                let _ = popup::finish_text_selection(hwnd, x, y);
+                if popup::finish_text_selection(hwnd, x, y) {
+                    popup::invalidate_layout_budget_cache();
+                    let state = app.snapshot();
+                    popup::resize_popup_keep_position(hwnd, &state);
+                }
                 return LRESULT(0);
             }
             let state = app.snapshot();

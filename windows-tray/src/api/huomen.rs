@@ -196,6 +196,8 @@ pub(super) fn parse_huomen_payload(
                 },
                 price: String::new(),
                 components: lunch_lines,
+                component_recipe_ids: Vec::new(),
+                component_recipe_details: Vec::new(),
             }],
         })
     } else {

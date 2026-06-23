@@ -11,12 +11,15 @@ use std::path::PathBuf;
 /// Normalized favorite snippets loaded from disk.
 pub struct FavoritesList {
     pub snippets: Vec<String>,
+    pub ingredient_snippets: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct FavoritesFile {
     #[serde(default)]
     favorite_snippets: Vec<String>,
+    #[serde(default)]
+    ingredient_snippets: Vec<String>,
 }
 
 /// Returns the path to the favorites JSON file.
@@ -52,6 +55,7 @@ pub fn load_favorites() -> FavoritesList {
 
     FavoritesList {
         snippets: dedupe_normalized(parsed.favorite_snippets),
+        ingredient_snippets: dedupe_normalized(parsed.ingredient_snippets),
     }
 }
 
@@ -62,26 +66,51 @@ pub fn toggle_snippet(value: &str) -> anyhow::Result<bool> {
         return Ok(false);
     }
 
-    let list = load_favorites().snippets;
+    let favorites = load_favorites();
+    let list = favorites.snippets;
     let key = normalized.to_lowercase();
     if list.iter().any(|entry| entry.to_lowercase() == key) {
         let filtered = remove_variant_family(list, &normalized);
-        save_favorites(&filtered)?;
+        save_favorites(&filtered, &favorites.ingredient_snippets)?;
         Ok(false)
     } else {
         let mut list = list;
         list.push(normalized);
         let deduped = dedupe_normalized(list);
-        save_favorites(&deduped)?;
+        save_favorites(&deduped, &favorites.ingredient_snippets)?;
         Ok(true)
     }
 }
 
-fn save_favorites(snippets: &[String]) -> anyhow::Result<()> {
+/// Toggles an ingredient snippet and returns whether it is now enabled.
+pub fn toggle_ingredient_snippet(value: &str) -> anyhow::Result<bool> {
+    let normalized = normalize_snippet(value);
+    if normalized.is_empty() {
+        return Ok(false);
+    }
+
+    let favorites = load_favorites();
+    let list = favorites.ingredient_snippets;
+    let key = normalized.to_lowercase();
+    if list.iter().any(|entry| entry.to_lowercase() == key) {
+        let filtered = remove_variant_family(list, &normalized);
+        save_favorites(&favorites.snippets, &filtered)?;
+        Ok(false)
+    } else {
+        let mut list = list;
+        list.push(normalized);
+        let deduped = dedupe_normalized(list);
+        save_favorites(&favorites.snippets, &deduped)?;
+        Ok(true)
+    }
+}
+
+fn save_favorites(snippets: &[String], ingredient_snippets: &[String]) -> anyhow::Result<()> {
     let dir = settings_dir();
     fs::create_dir_all(&dir).context("create settings dir for favorites")?;
     let payload = FavoritesFile {
         favorite_snippets: snippets.to_vec(),
+        ingredient_snippets: ingredient_snippets.to_vec(),
     };
     let data = serde_json::to_string_pretty(&payload)?;
     let path = favorites_path();

@@ -155,6 +155,8 @@ fn parse_pranzeria_payload_for_date(
                     name: "Lounas".to_string(),
                     price: String::new(),
                     components: lunch_lines,
+                    component_recipe_ids: Vec::new(),
+                    component_recipe_details: Vec::new(),
                 }]
             },
         })

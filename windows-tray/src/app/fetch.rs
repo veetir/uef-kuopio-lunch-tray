@@ -47,6 +47,20 @@ impl App {
             return true;
         }
 
+        if restaurant.provider == Provider::Compass {
+            if let Some(result) = read_compass_enriched_cache(restaurant, &language) {
+                self.apply_cached_result(&result);
+                self.store_memory_from_fetch_output(restaurant.code, &language, &result);
+                log_line(&format!(
+                    "enriched cache hit provider={} code={} language={}",
+                    provider_key(restaurant.provider),
+                    restaurant.code,
+                    language
+                ));
+                return true;
+            }
+        }
+
         if let Some(raw) = cache::read_cache(restaurant.provider, restaurant.code, &language) {
             match api::parse_cached_payload(&raw, restaurant.provider, restaurant, &language) {
                 Ok(result) => {
@@ -575,6 +589,9 @@ impl App {
                 ));
                 continue;
             }
+            if result.provider == Provider::Compass {
+                persist_compass_enriched_cache(code, language, result);
+            }
             self.store_memory_from_fetch_output(code, language, result);
         }
     }
@@ -749,22 +766,27 @@ impl App {
             return false;
         }
 
-        let (refresh_minutes, payload_date, has_payload) = {
+        let (refresh_minutes, payload_date, has_payload, missing_recipe_metadata) = {
             let state = self.state.lock().unwrap();
             (
                 state.settings.refresh_minutes,
                 state.payload_date.clone(),
                 !state.raw_payload.is_empty(),
+                target.restaurant.provider == Provider::Compass
+                    && compass_menu_lacks_recipe_metadata(state.today_menu.as_ref()),
             )
         };
 
-        let need = refresh_need_for_target(
+        let mut need = refresh_need_for_target(
             &target,
             refresh_minutes,
             &payload_date,
             has_payload,
             now_epoch_ms(),
         );
+        if need.is_none() && missing_recipe_metadata {
+            need = Some(RefreshNeed::RefreshIntervalElapsed);
+        }
 
         let Some(need) = need else {
             log_probe_skip(trigger, &target, "cache_fresh");
@@ -786,5 +808,78 @@ impl App {
             FetchContext::new(FetchMode::Current, reason),
             options,
         )
+    }
+}
+
+fn compass_menu_lacks_recipe_metadata(menu: Option<&TodayMenu>) -> bool {
+    let Some(menu) = menu else {
+        return false;
+    };
+    let has_components = menu.menus.iter().any(|group| {
+        group
+            .components
+            .iter()
+            .any(|component| !crate::format::normalize_text(component).is_empty())
+    });
+    let has_recipe_ids = menu.menus.iter().any(|group| {
+        group
+            .component_recipe_ids
+            .iter()
+            .any(|recipe_id| recipe_id.is_some())
+    });
+    has_components && !has_recipe_ids
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+struct CompassEnrichedCache {
+    version: u32,
+    raw_json: String,
+    restaurant_name: String,
+    restaurant_url: String,
+    payload_date: String,
+    today_menu: Option<TodayMenu>,
+}
+
+fn read_compass_enriched_cache(restaurant: Restaurant, language: &str) -> Option<FetchOutput> {
+    let raw = cache::read_enriched_cache(restaurant.provider, restaurant.code, language)?;
+    let parsed: CompassEnrichedCache = serde_json::from_str(&raw).ok()?;
+    if parsed.version != 1 {
+        return None;
+    }
+    if compass_menu_lacks_recipe_metadata(parsed.today_menu.as_ref()) {
+        return None;
+    }
+    Some(FetchOutput {
+        ok: true,
+        error_message: String::new(),
+        today_menu: parsed.today_menu,
+        restaurant_name: parsed.restaurant_name,
+        restaurant_url: parsed.restaurant_url,
+        provider: Provider::Compass,
+        raw_json: parsed.raw_json,
+        payload_date: parsed.payload_date,
+    })
+}
+
+fn persist_compass_enriched_cache(code: &str, language: &str, result: &FetchOutput) {
+    if compass_menu_lacks_recipe_metadata(result.today_menu.as_ref()) {
+        return;
+    }
+    let payload = CompassEnrichedCache {
+        version: 1,
+        raw_json: result.raw_json.clone(),
+        restaurant_name: result.restaurant_name.clone(),
+        restaurant_url: result.restaurant_url.clone(),
+        payload_date: result.payload_date.clone(),
+        today_menu: result.today_menu.clone(),
+    };
+    let Ok(json) = serde_json::to_string(&payload) else {
+        return;
+    };
+    if let Err(err) = cache::write_enriched_cache(result.provider, code, language, &json) {
+        log_line(&format!(
+            "enriched cache write failed code={} language={} err={}",
+            code, language, err
+        ));
     }
 }

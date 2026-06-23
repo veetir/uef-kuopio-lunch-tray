@@ -34,7 +34,9 @@ const CORE_RESTAURANTS: [Restaurant; 5] = [
         rss_cost_number: None,
         huomen_api_base: None,
         compass_fallback_language: None,
-        url: None,
+        url: Some(
+            "https://www.compass-group.fi/ravintolat-ja-ruokalistat/foodco/kaupungit/kuopio/ita-suomen-yliopistosnellmania/",
+        ),
     },
     Restaurant {
         code: "snellari-rss",

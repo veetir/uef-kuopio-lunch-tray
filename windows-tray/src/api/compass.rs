@@ -1,14 +1,22 @@
 use super::{
     local_today_key, log_fetch_attempt, parse_date_iso, strip_html_text, FetchContext, FetchOutput,
 };
-use crate::format::{normalize_optional, normalize_text};
-use crate::model::{ApiResponse, ApiSetMenu, MenuGroup, TodayMenu};
+use crate::format::{normalize_optional, normalize_text, split_component_suffix};
+use crate::model::{ApiResponse, ApiSetMenu, MenuGroup, RecipeInfo, TodayMenu};
 use crate::restaurant::{compass_fetch_language, Provider, Restaurant};
 use crate::settings::Settings;
 use anyhow::Context;
 use html_escape::decode_html_entities;
 use regex::Regex;
 use reqwest::blocking::Client;
+use serde_json::Value;
+use std::collections::HashMap;
+
+#[derive(Debug, Clone)]
+struct RecipeLookup {
+    recipe_id: u32,
+    detail: Option<RecipeInfo>,
+}
 
 pub(super) fn fetch_compass(
     settings: &Settings,
@@ -95,7 +103,14 @@ pub(super) fn fetch_compass(
         }
     };
 
-    parse_response(api, raw_json)
+    let recipe_page_url = normalize_optional(api.restaurant_url.as_deref());
+    let recipe_source_url = if recipe_page_url.is_empty() {
+        restaurant.url
+    } else {
+        Some(recipe_page_url.as_str())
+    };
+    let recipe_details = fetch_compass_recipe_details(&client, recipe_source_url, fetch_language);
+    parse_response(api, raw_json, recipe_details)
 }
 
 pub(super) fn fetch_compass_rss(
@@ -179,10 +194,14 @@ pub(super) fn fetch_compass_rss(
 
 pub(super) fn parse_cached_compass_payload(raw_payload: &str) -> anyhow::Result<FetchOutput> {
     let api: ApiResponse = serde_json::from_str(raw_payload).context("parse cached JSON")?;
-    Ok(parse_response(api, raw_payload.to_string()))
+    Ok(parse_response(api, raw_payload.to_string(), HashMap::new()))
 }
 
-fn parse_response(api: ApiResponse, raw_json: String) -> FetchOutput {
+fn parse_response(
+    api: ApiResponse,
+    raw_json: String,
+    recipe_details: HashMap<String, RecipeLookup>,
+) -> FetchOutput {
     let error_text = normalize_optional(api.error_text.as_deref());
     if !error_text.is_empty() {
         return FetchOutput {
@@ -217,7 +236,7 @@ fn parse_response(api: ApiResponse, raw_json: String) -> FetchOutput {
         if date_key == today_key {
             let lunch_time = normalize_optional(day.lunch_time.as_deref());
             let set_menus = day.set_menus.unwrap_or_default();
-            let menus = normalize_menus(set_menus);
+            let menus = normalize_menus(set_menus, &recipe_details);
             today_menu = Some(TodayMenu {
                 date_iso: today_key.clone(),
                 lunch_time,
@@ -244,7 +263,10 @@ fn parse_response(api: ApiResponse, raw_json: String) -> FetchOutput {
     }
 }
 
-fn normalize_menus(set_menus: Vec<ApiSetMenu>) -> Vec<MenuGroup> {
+fn normalize_menus(
+    set_menus: Vec<ApiSetMenu>,
+    recipe_details: &HashMap<String, RecipeLookup>,
+) -> Vec<MenuGroup> {
     let mut menus_with_idx: Vec<(usize, ApiSetMenu)> = set_menus.into_iter().enumerate().collect();
     let has_sort = menus_with_idx.iter().any(|(_, m)| m.sort_order.is_some());
     if has_sort {
@@ -253,18 +275,139 @@ fn normalize_menus(set_menus: Vec<ApiSetMenu>) -> Vec<MenuGroup> {
     }
     menus_with_idx
         .into_iter()
-        .map(|(_, menu)| MenuGroup {
-            name: normalize_optional(menu.name.as_deref()),
-            price: normalize_optional(menu.price.as_deref()),
-            components: menu
+        .map(|(_, menu)| {
+            let components: Vec<String> = menu
                 .components
                 .unwrap_or_default()
                 .into_iter()
                 .map(|c| normalize_text(&c))
                 .filter(|c| !c.is_empty())
-                .collect(),
+                .collect();
+            let mut component_recipe_ids = Vec::with_capacity(components.len());
+            let mut component_recipe_details = Vec::with_capacity(components.len());
+            for component in &components {
+                let (main, _) = split_component_suffix(component);
+                let key = recipe_lookup_key(&main);
+                if let Some(recipe) = recipe_details.get(&key) {
+                    component_recipe_ids.push(Some(recipe.recipe_id));
+                    component_recipe_details.push(recipe.detail.clone());
+                } else {
+                    component_recipe_ids.push(None);
+                    component_recipe_details.push(None);
+                }
+            }
+            MenuGroup {
+                name: normalize_optional(menu.name.as_deref()),
+                price: normalize_optional(menu.price.as_deref()),
+                components,
+                component_recipe_ids,
+                component_recipe_details,
+            }
         })
         .collect()
+}
+
+fn fetch_compass_recipe_details(
+    client: &Client,
+    restaurant_url: Option<&str>,
+    language: &str,
+) -> HashMap<String, RecipeLookup> {
+    let Some(url) = restaurant_url else {
+        return HashMap::new();
+    };
+
+    let html = match client.get(url).send().and_then(|resp| resp.text()) {
+        Ok(value) => value,
+        Err(_) => return HashMap::new(),
+    };
+    let Some(initial_json) = extract_initial_menu_json(&html) else {
+        return HashMap::new();
+    };
+    let parsed: Value = match serde_json::from_str(&initial_json) {
+        Ok(value) => value,
+        Err(_) => return HashMap::new(),
+    };
+
+    let mut out = HashMap::new();
+    if let Some(packages) = parsed
+        .pointer("/dayMenu/menuPackages")
+        .and_then(Value::as_array)
+    {
+        for package in packages {
+            let Some(meals) = package.get("meals").and_then(Value::as_array) else {
+                continue;
+            };
+            for meal in meals {
+                let name = normalize_optional(meal.get("name").and_then(Value::as_str));
+                let Some(recipe_id) = meal.get("recipeId").and_then(Value::as_u64) else {
+                    continue;
+                };
+                if name.is_empty() || recipe_id == 0 || recipe_id > u32::MAX as u64 {
+                    continue;
+                }
+                let recipe_id = recipe_id as u32;
+                let detail = fetch_recipe_detail(client, recipe_id, language);
+                out.insert(recipe_lookup_key(&name), RecipeLookup { recipe_id, detail });
+            }
+        }
+    }
+    out
+}
+
+fn fetch_recipe_detail(client: &Client, recipe_id: u32, language: &str) -> Option<RecipeInfo> {
+    let url = format!(
+        "https://www.compass-group.fi/menuapi/recipes/{}?language={}",
+        recipe_id, language
+    );
+    client
+        .get(url)
+        .send()
+        .and_then(|resp| resp.json::<RecipeInfo>())
+        .ok()
+}
+
+fn recipe_lookup_key(value: &str) -> String {
+    normalize_text(value).to_lowercase()
+}
+
+fn extract_initial_menu_json(html: &str) -> Option<String> {
+    let marker = "window.__INITIAL_MENU__";
+    let marker_pos = html.find(marker)?;
+    let after_marker = &html[marker_pos + marker.len()..];
+    let equals_pos = after_marker.find('=')?;
+    let after_equals = &after_marker[equals_pos + 1..];
+    let start_rel = after_equals.find('{')?;
+    let start = marker_pos + marker.len() + equals_pos + 1 + start_rel;
+    let mut depth = 0i32;
+    let mut in_string = false;
+    let mut escaped = false;
+    for (offset, ch) in html[start..].char_indices() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        if ch == '"' {
+            in_string = true;
+            continue;
+        }
+        if ch == '{' {
+            depth += 1;
+        } else if ch == '}' {
+            depth -= 1;
+            if depth == 0 {
+                let end = start + offset + ch.len_utf8();
+                return Some(html[start..end].to_string());
+            }
+        }
+    }
+    None
 }
 
 pub(super) fn parse_compass_rss_payload(
@@ -319,6 +462,8 @@ pub(super) fn parse_compass_rss_payload(
                 },
                 price: String::new(),
                 components,
+                component_recipe_ids: Vec::new(),
+                component_recipe_details: Vec::new(),
             }],
         })
     } else {
@@ -539,7 +684,7 @@ mod tests {
             error_text: None,
         };
 
-        let parsed = parse_response(response, "{}".to_string());
+        let parsed = parse_response(response, "{}".to_string(), HashMap::new());
         assert!(parsed.ok);
         assert_eq!(parsed.payload_date, today);
         let today_menu = parsed.today_menu.expect("today_menu");

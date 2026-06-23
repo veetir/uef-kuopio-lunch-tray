@@ -34,6 +34,7 @@ pub(super) fn measure_lines_layout(
             Line::MenuItem {
                 main,
                 suffix_segments,
+                ..
             } => {
                 let styled_width = text_with_suffix_width(
                     hdc,
@@ -65,6 +66,34 @@ pub(super) fn measure_lines_layout(
                         }
                     }
                 }
+            }
+            Line::RecipeDetail { rows } => {
+                let block_wrap_width =
+                    (wrap_width - bullet_width - RECIPE_DETAIL_PAD_X * 2).max(40);
+                let value_wrap_width = (block_wrap_width - RECIPE_DETAIL_PAD_X).max(32);
+                let mut block_row_count = 0usize;
+                for row in rows {
+                    let label = format!("{}:", normalize_text(&row.label));
+                    let value = normalize_text(&row.value);
+                    let label_width = text_width_with_font(hdc, small_bold_font, &label);
+                    let value_width = text_width_with_font(hdc, normal_font, &value);
+                    let same_line_width = if value.is_empty() {
+                        label_width
+                    } else {
+                        label_width + 6 + value_width
+                    };
+                    required_content_width = required_content_width
+                        .max(bullet_width + RECIPE_DETAIL_PAD_X * 2 + same_line_width);
+                    if same_line_width <= block_wrap_width {
+                        block_row_count += 1;
+                    } else {
+                        block_row_count += 1;
+                        block_row_count +=
+                            wrapped_line_count_for_text(hdc, normal_font, &value, value_wrap_width)
+                                .max(1);
+                    }
+                }
+                wrapped_line_count += block_row_count.max(1) + 1;
             }
             Line::Spacer => {
                 wrapped_line_count += 1;

@@ -8,10 +8,10 @@ use crate::api;
 use crate::app::{AppState, FetchStatus};
 use crate::favorites;
 use crate::format::{
-    date_and_time_line, menu_heading, normalize_text, renderable_menu_components,
-    student_price_eur, text_for, PriceGroups,
+    date_and_time_line, menu_heading, normalize_text, split_component_suffix, student_price_eur,
+    text_for, PriceGroups,
 };
-use crate::model::TodayMenu;
+use crate::model::{MenuGroup, RecipeInfo, TodayMenu};
 use crate::restaurant::{available_restaurants, is_hard_closed_today, Provider, Restaurant};
 use crate::settings::Settings;
 use crate::util::to_wstring;
@@ -53,6 +53,10 @@ const FAVORITES_RELOAD_INTERVAL_MS: i64 = 1000;
 const POPUP_DESIRED_SIZE_CACHE_LIMIT: usize = 32;
 const BULLET_PREFIX: &str = "▸ ";
 const HEADER_TITLE_BUTTON_MARGIN: i32 = 12;
+const RECIPE_DETAIL_PAD_X: i32 = 8;
+const RECIPE_DETAIL_PAD_Y: i32 = 5;
+const RECIPE_DETAIL_ROW_GAP: i32 = 2;
+const RECIPE_DETAIL_MARGIN_Y: i32 = 3;
 
 static POPUP_LINE_BUDGET_CACHE: OnceLock<Mutex<Option<PopupLineBudgetCache>>> = OnceLock::new();
 static POPUP_LINE_SIGNATURE_CACHE: OnceLock<Mutex<Option<PopupLineSignatureCache>>> =
@@ -155,8 +159,19 @@ enum Line {
     MenuItem {
         main: String,
         suffix_segments: Vec<(String, bool)>,
+        recipe_id: Option<u32>,
+        ingredient_alert: bool,
+    },
+    RecipeDetail {
+        rows: Vec<RecipeDetailRow>,
     },
     Spacer,
+}
+
+#[derive(Debug, Clone)]
+struct RecipeDetailRow {
+    label: String,
+    value: String,
 }
 
 #[derive(Debug, Clone)]
@@ -187,6 +202,8 @@ struct SelectableRow {
 struct SelectableLayout {
     hwnd: HWND,
     items: Vec<String>,
+    item_recipe_ids: Vec<Option<u32>>,
+    item_ingredient_flags: Vec<bool>,
     rows: Vec<SelectableRow>,
 }
 
@@ -200,6 +217,8 @@ struct SelectionDrag {
     item_id: usize,
     anchor: usize,
     current: usize,
+    start_x: i32,
+    start_y: i32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -213,11 +232,13 @@ struct SelectionRange {
 struct PopupSelectionState {
     layout: Option<SelectableLayout>,
     drag: Option<SelectionDrag>,
+    expanded_recipe_id: Option<u32>,
 }
 
 #[derive(Debug, Clone, Default)]
 struct FavoritesSnapshot {
     snippets_lower: Vec<String>,
+    ingredient_snippets_lower: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default)]
