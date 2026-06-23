@@ -9,6 +9,7 @@ pub struct PriceGroups {
     pub student: bool,
     pub staff: bool,
     pub guest: bool,
+    pub names: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,6 +103,8 @@ pub fn text_for(language: &str, key: &str) -> String {
                 "Ei verkkoyhteyttä. Näytetään viimeisin tallennettu lista.".to_string()
             }
             "fetchError" => "Päivitysvirhe".to_string(),
+            "ingredients" => "Ainesosat".to_string(),
+            "nutrition" => "Ravintoarvot".to_string(),
             _ => key.to_string(),
         }
     } else {
@@ -111,19 +114,49 @@ pub fn text_for(language: &str, key: &str) -> String {
             "stale" => "Update failed. Showing last cached menu.".to_string(),
             "staleNetwork" => "Offline. Showing last cached menu.".to_string(),
             "fetchError" => "Fetch error".to_string(),
+            "ingredients" => "Ingredients".to_string(),
+            "nutrition" => "Nutrition".to_string(),
             _ => key.to_string(),
         }
     }
 }
 
 /// Builds a rendered menu heading, optionally including filtered price information.
-pub fn menu_heading(
+#[cfg(test)]
+fn menu_heading(
     menu: &MenuGroup,
     provider: Provider,
     show_prices: bool,
     groups: PriceGroups,
 ) -> String {
-    let mut heading = normalize_text(&menu.name);
+    menu_heading_with_name(
+        menu,
+        normalize_text(&menu.name),
+        provider,
+        show_prices,
+        groups,
+    )
+}
+
+/// Builds a rendered menu heading with restaurant-specific display cleanup.
+pub fn menu_heading_for_restaurant(
+    menu: &MenuGroup,
+    restaurant_code: &str,
+    provider: Provider,
+    show_prices: bool,
+    groups: PriceGroups,
+) -> String {
+    let heading = display_menu_group_name(&menu.name, restaurant_code);
+    menu_heading_with_name(menu, heading, provider, show_prices, groups)
+}
+
+fn menu_heading_with_name(
+    menu: &MenuGroup,
+    mut heading: String,
+    provider: Provider,
+    show_prices: bool,
+    groups: PriceGroups,
+) -> String {
     if heading.is_empty() {
         heading = "Menu".to_string();
     }
@@ -141,6 +174,21 @@ pub fn menu_heading(
         }
     } else {
         heading
+    }
+}
+
+fn display_menu_group_name(name: &str, restaurant_code: &str) -> String {
+    let name = normalize_text(name);
+    if restaurant_code != "0439" {
+        return name;
+    }
+
+    match name.as_str() {
+        "LUNCH BUFFEE" => "Main course".to_string(),
+        "PÄIVÄN SOPPA" => "Keitto".to_string(),
+        "LOUNAS BUFFA" => "Pääruoka".to_string(),
+        "JÄLKKÄRI" => "Jälkiruoka".to_string(),
+        _ => name,
     }
 }
 
@@ -398,10 +446,46 @@ fn price_text_for_groups(price: &str, groups: PriceGroups) -> String {
             PriceGroup::Guest => groups.guest,
         };
         if include {
-            parts.push(entry.text);
+            parts.push(if groups.names {
+                entry.text
+            } else {
+                entry.text_without_group_label()
+            });
         }
     }
     parts.join(" / ")
+}
+
+impl PriceEntry {
+    fn text_without_group_label(&self) -> String {
+        let labels = match self.group {
+            PriceGroup::Student => &["student", "op", "opisk", "opiskelija"][..],
+            PriceGroup::Staff => &["staff", "hk", "henkilokunta", "henkilökunta"][..],
+            PriceGroup::Guest => &["guest", "vieras"][..],
+        };
+        strip_leading_price_group_label(&self.text, labels)
+    }
+}
+
+fn strip_leading_price_group_label(text: &str, labels: &[&str]) -> String {
+    let clean = normalize_text(text);
+    let lower = clean.to_lowercase();
+    for label in labels {
+        if !lower.starts_with(label) {
+            continue;
+        }
+        if !is_word_boundary(&lower, 0, label.len()) {
+            continue;
+        }
+        let stripped = clean
+            .get(label.len()..)
+            .unwrap_or_default()
+            .trim_start_matches([' ', '.', ':', '-', '–']);
+        if !stripped.is_empty() {
+            return stripped.to_string();
+        }
+    }
+    clean
 }
 
 fn parse_compass_price_entries(price: &str) -> Vec<PriceEntry> {
@@ -414,7 +498,7 @@ fn parse_compass_price_entries(price: &str) -> Vec<PriceEntry> {
         .map(|segment| PriceEntry {
             group: classify_compass_price_group(&segment),
             value: parse_price_value(&segment),
-            text: segment,
+            text: normalize_price_decimals(&segment),
         })
         .collect()
 }
@@ -532,10 +616,66 @@ fn parse_price_value(text: &str) -> Option<f32> {
     cleaned.parse::<f32>().ok()
 }
 
+fn normalize_price_decimals(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        out.push(ch);
+        if !ch.is_ascii_digit() {
+            continue;
+        }
+
+        while let Some(next) = chars.peek().copied() {
+            if next.is_ascii_digit() {
+                out.push(next);
+                chars.next();
+            } else {
+                break;
+            }
+        }
+
+        let Some(separator) = chars.peek().copied() else {
+            continue;
+        };
+        if separator != ',' && separator != '.' {
+            continue;
+        }
+
+        let mut lookahead = chars.clone();
+        lookahead.next();
+        if !lookahead
+            .peek()
+            .copied()
+            .is_some_and(|next| next.is_ascii_digit())
+        {
+            continue;
+        }
+
+        out.push(separator);
+        chars.next();
+        let mut decimals = 0usize;
+        while let Some(next) = chars.peek().copied() {
+            if !next.is_ascii_digit() {
+                break;
+            }
+            if decimals < 2 {
+                out.push(next);
+            }
+            decimals += 1;
+            chars.next();
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{renderable_menu_components, split_component_suffix};
+    use super::{
+        menu_heading, menu_heading_for_restaurant, renderable_menu_components,
+        split_component_suffix, PriceGroups,
+    };
     use crate::model::MenuGroup;
+    use crate::restaurant::Provider;
 
     #[test]
     fn extracts_compass_suffix_with_parentheses() {
@@ -630,5 +770,169 @@ mod tests {
             renderable_menu_components(&group),
             vec![("Soup".to_string(), "(L)".to_string())]
         );
+    }
+
+    #[test]
+    fn compass_heading_truncates_extra_price_decimals() {
+        let group = MenuGroup {
+            name: "Lunch buffet".to_string(),
+            price: "student 3,100 € / staff 8,567 € / guest 10,000 €".to_string(),
+            components: Vec::new(),
+            component_recipe_ids: Vec::new(),
+            component_recipe_details: Vec::new(),
+        };
+
+        let heading = menu_heading(
+            &group,
+            Provider::Compass,
+            true,
+            PriceGroups {
+                student: true,
+                staff: true,
+                guest: true,
+                names: true,
+            },
+        );
+
+        assert_eq!(
+            heading,
+            "Lunch buffet - student 3,10 € / staff 8,56 € / guest 10,00 €"
+        );
+    }
+
+    #[test]
+    fn compass_heading_preserves_two_or_fewer_price_decimals() {
+        let group = MenuGroup {
+            name: "Lunch buffet".to_string(),
+            price: "student 3,10 € / staff 8,5 €".to_string(),
+            components: Vec::new(),
+            component_recipe_ids: Vec::new(),
+            component_recipe_details: Vec::new(),
+        };
+
+        let heading = menu_heading(
+            &group,
+            Provider::Compass,
+            true,
+            PriceGroups {
+                student: true,
+                staff: true,
+                guest: false,
+                names: true,
+            },
+        );
+
+        assert_eq!(heading, "Lunch buffet - student 3,10 € / staff 8,5 €");
+    }
+
+    #[test]
+    fn compass_heading_can_hide_price_group_names() {
+        let group = MenuGroup {
+            name: "Lunch buffet".to_string(),
+            price: "student 3,10 € / staff 8,5 € / guest 10,00 €".to_string(),
+            components: Vec::new(),
+            component_recipe_ids: Vec::new(),
+            component_recipe_details: Vec::new(),
+        };
+
+        let heading = menu_heading(
+            &group,
+            Provider::Compass,
+            true,
+            PriceGroups {
+                student: true,
+                staff: true,
+                guest: false,
+                names: false,
+            },
+        );
+
+        assert_eq!(heading, "Lunch buffet - 3,10 € / 8,5 €");
+    }
+
+    #[test]
+    fn compass_heading_hides_abbreviated_price_group_names_with_periods() {
+        let group = MenuGroup {
+            name: "Päivän soppa".to_string(),
+            price: "opisk. 3,10€".to_string(),
+            components: Vec::new(),
+            component_recipe_ids: Vec::new(),
+            component_recipe_details: Vec::new(),
+        };
+
+        let heading = menu_heading(
+            &group,
+            Provider::Compass,
+            true,
+            PriceGroups {
+                student: true,
+                staff: false,
+                guest: false,
+                names: false,
+            },
+        );
+
+        assert_eq!(heading, "Päivän soppa - 3,10€");
+    }
+
+    #[test]
+    fn tietoteknia_headings_use_clean_display_names() {
+        let cases = [
+            ("LUNCH BUFFEE", "Main course"),
+            ("PÄIVÄN SOPPA", "Keitto"),
+            ("LOUNAS BUFFA", "Pääruoka"),
+            ("JÄLKKÄRI", "Jälkiruoka"),
+        ];
+
+        for (raw, expected) in cases {
+            let group = MenuGroup {
+                name: raw.to_string(),
+                price: String::new(),
+                components: Vec::new(),
+                component_recipe_ids: Vec::new(),
+                component_recipe_details: Vec::new(),
+            };
+
+            let heading = menu_heading_for_restaurant(
+                &group,
+                "0439",
+                Provider::Compass,
+                false,
+                PriceGroups {
+                    student: true,
+                    staff: false,
+                    guest: false,
+                    names: true,
+                },
+            );
+
+            assert_eq!(heading, expected);
+        }
+    }
+
+    #[test]
+    fn non_tietoteknia_headings_are_not_remapped() {
+        let group = MenuGroup {
+            name: "LOUNAS BUFFA".to_string(),
+            price: String::new(),
+            components: Vec::new(),
+            component_recipe_ids: Vec::new(),
+            component_recipe_details: Vec::new(),
+        };
+
+        let heading = menu_heading_for_restaurant(
+            &group,
+            "0436",
+            Provider::Compass,
+            false,
+            PriceGroups {
+                student: true,
+                staff: false,
+                guest: false,
+                names: true,
+            },
+        );
+
+        assert_eq!(heading, "LOUNAS BUFFA");
     }
 }

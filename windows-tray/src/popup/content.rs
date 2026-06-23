@@ -28,6 +28,7 @@ pub(super) fn build_lines(state: &AppState) -> Vec<Line> {
                     student: state.settings.show_student_price,
                     staff: state.settings.show_staff_price,
                     guest: state.settings.show_guest_price,
+                    names: state.settings.show_price_group_names,
                 };
                 let rendered_groups = append_menus(
                     &mut lines,
@@ -36,6 +37,8 @@ pub(super) fn build_lines(state: &AppState) -> Vec<Line> {
                         provider: state.provider,
                         show_prices: state.settings.show_prices,
                         price_groups,
+                        restaurant_code: &state.settings.restaurant_code,
+                        language: &state.settings.language,
                         show_allergens: state.settings.show_allergens,
                         highlight_gluten_free: state.settings.highlight_gluten_free,
                         highlight_veg: state.settings.highlight_veg,
@@ -79,10 +82,12 @@ pub(super) fn build_lines(state: &AppState) -> Vec<Line> {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct MenuRenderOptions {
+struct MenuRenderOptions<'a> {
     provider: Provider,
     show_prices: bool,
     price_groups: PriceGroups,
+    restaurant_code: &'a str,
+    language: &'a str,
     show_allergens: bool,
     highlight_gluten_free: bool,
     highlight_veg: bool,
@@ -108,8 +113,9 @@ fn append_menus(lines: &mut Vec<Line>, menu: &TodayMenu, options: MenuRenderOpti
             continue;
         }
 
-        let heading = menu_heading(
+        let heading = menu_heading_for_restaurant(
             group,
+            &options.restaurant_code,
             options.provider,
             options.show_prices,
             options.price_groups,
@@ -143,7 +149,7 @@ fn append_menus(lines: &mut Vec<Line>, menu: &TodayMenu, options: MenuRenderOpti
             }
             if recipe_id.is_some() && recipe_id == expanded_recipe_id {
                 if let Some(detail) = recipe_detail.as_ref() {
-                    let rows = recipe_detail_rows(detail);
+                    let rows = recipe_detail_rows(detail, options.language);
                     if !rows.is_empty() {
                         lines.push(Line::RecipeDetail { rows });
                     }
@@ -188,32 +194,36 @@ fn renderable_group_components(
     out
 }
 
-fn recipe_detail_rows(detail: &RecipeInfo) -> Vec<RecipeDetailRow> {
+fn recipe_detail_rows(detail: &RecipeInfo, language: &str) -> Vec<RecipeDetailRow> {
     let mut rows = Vec::new();
     let ingredients = normalize_text(&detail.ingredients_cleaned);
     if !ingredients.is_empty() {
         rows.push(RecipeDetailRow {
-            label: "Ingredients".to_string(),
+            label: text_for(language, "ingredients"),
             value: ingredients,
+            selectable: true,
         });
     }
     let nutrition = compact_nutrition_line(detail);
     if !nutrition.is_empty() {
         rows.push(RecipeDetailRow {
-            label: "Nutrition".to_string(),
+            label: text_for(language, "nutrition"),
             value: nutrition,
+            selectable: false,
         });
     }
     if let Some(co2) = detail.kg_co2e_per100g {
         rows.push(RecipeDetailRow {
             label: "CO2e".to_string(),
             value: format!("{:.2} kg / 100 g", co2),
+            selectable: false,
         });
     }
     if rows.is_empty() {
         rows.push(RecipeDetailRow {
             label: "Recipe ID".to_string(),
             value: detail.recipe_id.to_string(),
+            selectable: false,
         });
     }
     rows
@@ -351,5 +361,34 @@ pub(super) fn invalidate_favorites_cache() {
         cache.loaded = false;
         cache.next_check_epoch_ms = 0;
         cache.mtime_ms = -1;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::NutritionalValue;
+
+    #[test]
+    fn recipe_detail_rows_use_finnish_labels_for_finnish_ui() {
+        let detail = RecipeInfo {
+            recipe_id: 42,
+            name: "Soup".to_string(),
+            ingredients_cleaned: "vesi, suola".to_string(),
+            nutritional_values: vec![NutritionalValue {
+                name: "Protein".to_string(),
+                amount: 3.2,
+                unit: "g".to_string(),
+            }],
+            kg_co2e_per100g: None,
+            diets: String::new(),
+        };
+
+        let rows = recipe_detail_rows(&detail, "fi");
+
+        assert_eq!(rows[0].label, "Ainesosat");
+        assert!(rows[0].selectable);
+        assert_eq!(rows[1].label, "Ravintoarvot");
+        assert!(!rows[1].selectable);
     }
 }

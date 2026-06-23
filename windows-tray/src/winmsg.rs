@@ -12,15 +12,15 @@ use crate::util::to_wstring;
 use std::sync::{Mutex, OnceLock};
 use time::{OffsetDateTime, Time};
 use windows::core::PCWSTR;
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
-    DefWindowProcW, DestroyWindow, GetCursorPos, GetWindowLongPtrW, KillTimer, LoadCursorW,
-    MessageBoxW, PostQuitMessage, RegisterClassExW, SetForegroundWindow, SetTimer,
-    SetWindowLongPtrW, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, IDC_ARROW, IDYES,
-    MB_DEFBUTTON2, MB_ICONINFORMATION, MB_ICONWARNING, MB_YESNO, WM_ACTIVATE, WM_APP, WM_COMMAND,
-    WM_CONTEXTMENU, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_PAINT, WM_RBUTTONUP,
-    WM_SETTINGCHANGE, WM_THEMECHANGED, WM_TIMER, WNDCLASSEXW,
+    DefWindowProcW, DestroyWindow, GetCursorPos, GetWindowLongPtrW, GetWindowRect, KillTimer,
+    LoadCursorW, MessageBoxW, PostQuitMessage, RegisterClassExW, SetCursor, SetForegroundWindow,
+    SetTimer, SetWindowLongPtrW, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, IDC_ARROW,
+    IDC_HAND, IDC_IBEAM, IDYES, MB_DEFBUTTON2, MB_ICONINFORMATION, MB_ICONWARNING, MB_YESNO,
+    WM_ACTIVATE, WM_APP, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND,
+    WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+    WM_NCCREATE, WM_PAINT, WM_RBUTTONUP, WM_SETTINGCHANGE, WM_THEMECHANGED, WM_TIMER, WNDCLASSEXW,
 };
 
 pub const TRAY_WND_CLASS: &str = "CompassLunchTrayWindow";
@@ -373,6 +373,12 @@ pub unsafe extern "system" fn popup_wndproc(
             let x = (lparam.0 as u32 & 0xFFFF) as i16 as i32;
             let y = ((lparam.0 as u32 >> 16) & 0xFFFF) as i16 as i32;
             popup::update_text_selection(hwnd, x, y);
+            let app = app_from_hwnd(hwnd);
+            if !app.is_null() {
+                let app = &*(app);
+                let state = app.snapshot();
+                apply_popup_cursor(hwnd, &state.settings, x, y);
+            }
             LRESULT(0)
         }
         WM_LBUTTONUP => {
@@ -385,7 +391,6 @@ pub unsafe extern "system" fn popup_wndproc(
             let y = ((lparam.0 as u32 >> 16) & 0xFFFF) as i16 as i32;
             if popup::text_selection_active(hwnd) {
                 if popup::finish_text_selection(hwnd, x, y) {
-                    popup::invalidate_layout_budget_cache();
                     let state = app.snapshot();
                     popup::resize_popup_keep_position(hwnd, &state);
                 }
@@ -430,6 +435,18 @@ pub unsafe extern "system" fn popup_wndproc(
             }
             let app = &*(app);
             let delta = ((wparam.0 >> 16) & 0xFFFF) as i16 as i32;
+            let mut point = POINT {
+                x: (lparam.0 as u32 & 0xFFFF) as i16 as i32,
+                y: ((lparam.0 as u32 >> 16) & 0xFFFF) as i16 as i32,
+            };
+            let mut window_rect = RECT::default();
+            if GetWindowRect(hwnd, &mut window_rect).is_ok() {
+                point.x -= window_rect.left;
+                point.y -= window_rect.top;
+            }
+            if popup::scroll_recipe_detail_at(hwnd, point.x, point.y, delta) {
+                return LRESULT(0);
+            }
             if delta > 0 {
                 cycle_popup_restaurant(hwnd, app, -1);
             } else if delta < 0 {
@@ -455,9 +472,21 @@ pub unsafe extern "system" fn popup_wndproc(
     }
 }
 
+fn apply_popup_cursor(hwnd: HWND, settings: &crate::settings::Settings, x: i32, y: i32) {
+    let cursor_id = match popup::cursor_kind_at(hwnd, settings, x, y) {
+        popup::PopupCursorKind::Hand => IDC_HAND,
+        popup::PopupCursorKind::Text => IDC_IBEAM,
+        popup::PopupCursorKind::Arrow => IDC_ARROW,
+    };
+    unsafe {
+        let _ = SetCursor(LoadCursorW(None, cursor_id).unwrap_or_default());
+    }
+}
+
 fn cycle_popup_restaurant(hwnd: HWND, app: &App, direction: i32) {
     let old_state = app.snapshot();
     popup::press_navigation_button(hwnd, direction);
+    popup::clear_interaction_state(hwnd);
     app.cycle_restaurant(direction);
     let _ = app.load_cache_for_current();
     app.maybe_refresh_on_selection();
@@ -488,6 +517,7 @@ fn select_popup_restaurant_index(hwnd: HWND, app: &App, index: usize) {
         return;
     }
 
+    popup::clear_interaction_state(hwnd);
     let _ = app.load_cache_for_current();
     app.maybe_refresh_on_selection();
 
@@ -497,6 +527,7 @@ fn select_popup_restaurant_index(hwnd: HWND, app: &App, index: usize) {
         .position(|restaurant| restaurant.code == new_state.settings.restaurant_code)
         .unwrap_or(index);
     if new_index == old_index {
+        popup::resize_popup_keep_position(hwnd, &new_state);
         return;
     }
 
@@ -508,6 +539,7 @@ fn select_popup_restaurant_index(hwnd: HWND, app: &App, index: usize) {
 fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
     if let Some(code) = tray::restaurant_code_for_command(cmd) {
         app.set_restaurant(code);
+        popup::clear_interaction_state(app.hwnd_popup());
         let _ = app.load_cache_for_current();
         app.maybe_refresh_on_selection();
         if popup_is_visible(app.hwnd_popup()) {
@@ -555,6 +587,9 @@ fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
         }
         tray::CMD_TOGGLE_SHOW_GUEST_PRICE => {
             app.toggle_show_guest_price();
+        }
+        tray::CMD_TOGGLE_PRICE_GROUP_NAMES => {
+            app.toggle_show_price_group_names();
         }
         tray::CMD_TOGGLE_HIDE_EXPENSIVE_STUDENT => {
             app.toggle_hide_expensive_student_meals();

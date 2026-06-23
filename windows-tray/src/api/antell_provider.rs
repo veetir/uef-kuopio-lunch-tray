@@ -67,7 +67,12 @@ pub(super) fn fetch_antell(
     match response {
         Ok(resp) => match resp.text() {
             Ok(text) => {
-                let today_menu = antell::parse_antell_html(&text, &today_key);
+                let mut today_menu = antell::parse_antell_html(&text, &today_key);
+                if let Some(detail_html) =
+                    fetch_antell_detail_html(&client, settings, restaurant, slug)
+                {
+                    antell::enrich_antell_menu_details(&mut today_menu, &detail_html, weekday);
+                }
                 FetchOutput {
                     ok: true,
                     error_message: String::new(),
@@ -101,6 +106,24 @@ pub(super) fn fetch_antell(
             payload_date: String::new(),
         },
     }
+}
+
+fn fetch_antell_detail_html(
+    client: &Client,
+    settings: &Settings,
+    restaurant: Restaurant,
+    slug: &str,
+) -> Option<String> {
+    let base_url = if settings.language == "en" {
+        format!("https://antell.fi/en/lunch/kuopio/{}/", slug)
+    } else {
+        restaurant.url?.to_string()
+    };
+    client
+        .get(base_url)
+        .send()
+        .and_then(|resp| resp.text())
+        .ok()
 }
 
 pub(super) fn parse_cached_antell_payload(

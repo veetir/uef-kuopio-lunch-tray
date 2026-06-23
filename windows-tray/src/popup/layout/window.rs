@@ -12,6 +12,7 @@ pub(in crate::popup) fn show_popup(hwnd: HWND, state: &AppState) {
         let (width, height) = desired_size(hwnd, state);
         let mut cursor = POINT::default();
         let _ = GetCursorPos(&mut cursor);
+        let (width, height) = constrain_size_to_work_area_near_point(width, height, cursor);
         let (x, y) = position_near_point(width, height, cursor);
         let _ = SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, SWP_SHOWWINDOW);
         begin_open_animation(hwnd, state);
@@ -22,6 +23,7 @@ pub(in crate::popup) fn show_popup(hwnd: HWND, state: &AppState) {
 pub(in crate::popup) fn show_popup_at(hwnd: HWND, state: &AppState, anchor: POINT) {
     unsafe {
         let (width, height) = desired_size(hwnd, state);
+        let (width, height) = constrain_size_to_work_area_near_point(width, height, anchor);
         let (x, y) = position_near_point(width, height, anchor);
         let _ = SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, SWP_SHOWWINDOW);
         begin_open_animation(hwnd, state);
@@ -33,6 +35,7 @@ pub(in crate::popup) fn show_popup_for_tray_icon(hwnd: HWND, state: &AppState, t
     unsafe {
         let (width, height) = desired_size(hwnd, state);
         let scale = popup_scale(&state.settings);
+        let (width, height) = constrain_size_to_work_area_near_tray_rect(width, height, tray_rect);
         let (x, y) = position_near_tray_rect(width, height, tray_rect, scale.anchor_gap);
         let _ = SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, SWP_SHOWWINDOW);
         begin_open_animation(hwnd, state);
@@ -52,6 +55,7 @@ pub(in crate::popup) fn resize_popup_keep_position(hwnd: HWND, state: &AppState)
             x: rect.right,
             y: rect.bottom,
         };
+        let (width, height) = constrain_size_to_work_area_near_point(width, height, anchor);
         let (x, y) = position_near_point(width, height, anchor);
         if rect.left == x
             && rect.top == y
@@ -131,7 +135,8 @@ fn desired_size(hwnd: HWND, state: &AppState) -> (i32, i32) {
     unsafe {
         let hdc = windows::Win32::Graphics::Gdi::GetDC(hwnd);
         let dpi_y = GetDeviceCaps(hdc, LOGPIXELSY);
-        if let Some(key) = desired_size_cache_key(state, dpi_y) {
+        let expanded_recipe_id = super::super::interaction::expanded_recipe_id();
+        if let Some(key) = desired_size_cache_key(state, dpi_y, expanded_recipe_id) {
             if let Some(size) = cached_desired_size(&key) {
                 windows::Win32::Graphics::Gdi::ReleaseDC(hwnd, hdc);
                 return size;
@@ -207,7 +212,7 @@ fn desired_size(hwnd: HWND, state: &AppState) -> (i32, i32) {
             width,
             height.max(scale.header_height + scale_px(120, scale.factor)),
         );
-        if let Some(key) = desired_size_cache_key(state, dpi_y) {
+        if let Some(key) = desired_size_cache_key(state, dpi_y, expanded_recipe_id) {
             update_desired_size_cache(key, size);
         }
         size
@@ -296,27 +301,24 @@ pub(in crate::popup) fn create_fonts(
 fn position_near_point(width: i32, height: i32, point: POINT) -> (i32, i32) {
     unsafe {
         let monitor = MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST);
-        let mut info = MONITORINFO {
-            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-            ..Default::default()
-        };
-        let mut work_area = RECT::default();
-        if GetMonitorInfoW(monitor, &mut info).as_bool() {
-            work_area = info.rcWork;
-        }
+        let work_area = work_area_for_monitor(monitor);
+        let work_width = work_area.right - work_area.left;
+        let work_height = work_area.bottom - work_area.top;
 
         let mut x = point.x - width;
         let mut y = point.y - height;
-        if x < work_area.left {
+        if width >= work_width {
             x = work_area.left;
-        }
-        if y < work_area.top {
-            y = work_area.top;
-        }
-        if x + width > work_area.right {
+        } else if x < work_area.left {
+            x = work_area.left;
+        } else if x + width > work_area.right {
             x = work_area.right - width;
         }
-        if y + height > work_area.bottom {
+        if height >= work_height {
+            y = work_area.top;
+        } else if y < work_area.top {
+            y = work_area.top;
+        } else if y + height > work_area.bottom {
             y = work_area.bottom - height;
         }
 
@@ -336,38 +338,77 @@ fn position_near_tray_rect(
             y: (tray_rect.top + tray_rect.bottom) / 2,
         };
         let monitor = MonitorFromPoint(center, MONITOR_DEFAULTTONEAREST);
-        let mut info = MONITORINFO {
-            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-            ..Default::default()
-        };
-        let mut work_area = RECT::default();
-        if GetMonitorInfoW(monitor, &mut info).as_bool() {
-            work_area = info.rcWork;
-        }
+        let work_area = work_area_for_monitor(monitor);
+        let work_width = work_area.right - work_area.left;
+        let work_height = work_area.bottom - work_area.top;
 
         let mut x = tray_rect.right - width;
         let mut y = tray_rect.top - height - anchor_gap;
 
-        if y < work_area.top {
+        if height >= work_height {
+            y = work_area.top;
+        } else if y < work_area.top {
             y = tray_rect.bottom + anchor_gap;
         }
-        if y + height > work_area.bottom {
+        if height < work_height && y + height > work_area.bottom {
             y = (tray_rect.top - height - anchor_gap).max(work_area.top);
         }
 
-        if x < work_area.left {
+        if width >= work_width {
             x = work_area.left;
-        }
-        if x + width > work_area.right {
+        } else if x < work_area.left {
+            x = work_area.left;
+        } else if x + width > work_area.right {
             x = work_area.right - width;
         }
-        if y < work_area.top {
+        if height >= work_height {
             y = work_area.top;
-        }
-        if y + height > work_area.bottom {
+        } else if y < work_area.top {
+            y = work_area.top;
+        } else if y + height > work_area.bottom {
             y = work_area.bottom - height;
         }
 
         (x, y)
+    }
+}
+
+fn constrain_size_to_work_area_near_point(width: i32, height: i32, point: POINT) -> (i32, i32) {
+    unsafe {
+        let monitor = MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST);
+        constrain_size_to_work_area(width, height, work_area_for_monitor(monitor))
+    }
+}
+
+fn constrain_size_to_work_area_near_tray_rect(
+    width: i32,
+    height: i32,
+    tray_rect: RECT,
+) -> (i32, i32) {
+    unsafe {
+        let center = POINT {
+            x: (tray_rect.left + tray_rect.right) / 2,
+            y: (tray_rect.top + tray_rect.bottom) / 2,
+        };
+        let monitor = MonitorFromPoint(center, MONITOR_DEFAULTTONEAREST);
+        constrain_size_to_work_area(width, height, work_area_for_monitor(monitor))
+    }
+}
+
+fn constrain_size_to_work_area(width: i32, height: i32, work_area: RECT) -> (i32, i32) {
+    let max_width = (work_area.right - work_area.left).max(1);
+    let max_height = (work_area.bottom - work_area.top).max(1);
+    (width.min(max_width), height.min(max_height))
+}
+
+unsafe fn work_area_for_monitor(monitor: windows::Win32::Graphics::Gdi::HMONITOR) -> RECT {
+    let mut info = MONITORINFO {
+        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    if GetMonitorInfoW(monitor, &mut info).as_bool() {
+        info.rcWork
+    } else {
+        RECT::default()
     }
 }

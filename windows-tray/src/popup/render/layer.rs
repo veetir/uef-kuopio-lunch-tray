@@ -534,17 +534,20 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                     };
                     let row_segments =
                         segments_for_row(&clipped_main, row.start, row.end, &favorite_ranges);
+                    let main_width = text_segments_width(
+                        hdc,
+                        &row_segments,
+                        params.normal_font,
+                        params.bold_font,
+                    );
                     draw_text_line(hdc, BULLET_PREFIX, params.scale.padding_x, y);
                     if *ingredient_alert {
-                        let alert_width = (styled_width - bullet_width)
-                            .min(params.content_width - bullet_width)
-                            .max(text_width(hdc, &clipped_main));
                         draw_outline_rect(
                             hdc,
                             &RECT {
                                 left: line_x - 2,
                                 top: y,
-                                right: line_x + alert_width + 2,
+                                right: line_x + main_width + 2,
                                 bottom: y + params.line_height - 1,
                             },
                             params.recipe_border_color,
@@ -598,12 +601,6 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                         );
                     }
                     if !suffix_segments.is_empty() {
-                        let main_width = text_segments_width(
-                            hdc,
-                            &row_segments,
-                            params.normal_font,
-                            params.bold_font,
-                        );
                         let suffix_x = line_x + main_width + 4;
                         if suffix_x < (params.scale.padding_x + params.content_width) {
                             draw_text_segments(
@@ -819,7 +816,12 @@ fn draw_recipe_detail_block(
         .max(1);
     let gaps = row_gap * rows.len().saturating_sub(1) as i32;
     let block_top = y + margin_y;
-    let block_height = pad_y * 2 + content_rows as i32 * line_height + gaps;
+    let content_height = content_rows as i32 * line_height + gaps;
+    let viewport_rows = content_rows.min(RECIPE_DETAIL_MAX_VISIBLE_ROWS).max(1);
+    let viewport_height = viewport_rows as i32 * line_height;
+    let max_scroll_offset = (content_height - viewport_height).max(0);
+    let scroll_offset = recipe_detail_scroll_offset_px().min(max_scroll_offset);
+    let block_height = pad_y * 2 + viewport_height;
     let block_rect = RECT {
         left: block_x,
         top: block_top,
@@ -833,8 +835,49 @@ fn draw_recipe_detail_block(
         DeleteObject(brush);
     }
     draw_recipe_detail_border(hdc, &block_rect, border_color);
+    if let Some(ref mut draw_capture) = capture {
+        draw_capture.layout.recipe_scroll_rect = Some(block_rect);
+        draw_capture.layout.recipe_scroll_max_offset_px = max_scroll_offset;
+        draw_capture.layout.recipe_scroll_line_height = line_height;
+    }
+    if max_scroll_offset > 0 {
+        draw_recipe_detail_scrollbar(
+            hdc,
+            &block_rect,
+            pad_y,
+            scale_px(RECIPE_DETAIL_SCROLLBAR_WIDTH, scale.factor).max(3),
+            scroll_offset,
+            max_scroll_offset,
+            viewport_height,
+            content_height,
+            border_color,
+            label_color,
+        );
+    }
 
-    let mut text_y = block_top + pad_y;
+    let clip_rect = RECT {
+        left: block_rect.left + 1,
+        top: block_top + pad_y,
+        right: block_rect.right
+            - if max_scroll_offset > 0 {
+                scale_px(RECIPE_DETAIL_SCROLLBAR_WIDTH, scale.factor).max(3) + 2
+            } else {
+                1
+            },
+        bottom: block_top + pad_y + viewport_height,
+    };
+    let saved_dc = unsafe { SaveDC(hdc) };
+    unsafe {
+        IntersectClipRect(
+            hdc,
+            clip_rect.left,
+            clip_rect.top,
+            clip_rect.right,
+            clip_rect.bottom,
+        );
+    }
+
+    let mut text_y = block_top + pad_y - scroll_offset;
     for (idx, layout) in layouts.iter().enumerate() {
         let item_id = if layout.selectable {
             if let Some(ref mut draw_capture) = capture {
@@ -872,7 +915,7 @@ fn draw_recipe_detail_block(
                 },
                 RecipeValueStyle {
                     normal_font,
-                    highlight_font: label_font,
+                    highlight_font: normal_font,
                     normal_color: text_color,
                     highlight_color: ingredient_highlight_color,
                     selection_bg_color: ingredient_highlight_color,
@@ -884,20 +927,22 @@ fn draw_recipe_detail_block(
             );
             if let Some(ref mut draw_capture) = capture {
                 if let Some(item_id) = item_id {
-                    add_selectable_row(
-                        &mut draw_capture.layout,
-                        item_id,
-                        first_value,
-                        RowCaptureContext {
-                            bounds: RowBounds {
-                                left: value_x,
-                                top: text_y,
-                                line_height,
+                    if row_intersects_clip(text_y, line_height, &clip_rect) {
+                        add_selectable_row(
+                            &mut draw_capture.layout,
+                            item_id,
+                            first_value,
+                            RowCaptureContext {
+                                bounds: RowBounds {
+                                    left: value_x,
+                                    top: text_y,
+                                    line_height,
+                                },
+                                hdc,
+                                font: normal_font,
                             },
-                            hdc,
-                            font: normal_font,
-                        },
-                    );
+                        );
+                    }
                 }
             }
         }
@@ -919,7 +964,7 @@ fn draw_recipe_detail_block(
                     },
                     RecipeValueStyle {
                         normal_font,
-                        highlight_font: label_font,
+                        highlight_font: normal_font,
                         normal_color: text_color,
                         highlight_color: ingredient_highlight_color,
                         selection_bg_color: ingredient_highlight_color,
@@ -931,20 +976,22 @@ fn draw_recipe_detail_block(
                 );
                 if let Some(ref mut draw_capture) = capture {
                     if let Some(item_id) = item_id {
-                        add_selectable_row(
-                            &mut draw_capture.layout,
-                            item_id,
-                            value_line,
-                            RowCaptureContext {
-                                bounds: RowBounds {
-                                    left: value_x,
-                                    top: text_y,
-                                    line_height,
+                        if row_intersects_clip(text_y, line_height, &clip_rect) {
+                            add_selectable_row(
+                                &mut draw_capture.layout,
+                                item_id,
+                                value_line,
+                                RowCaptureContext {
+                                    bounds: RowBounds {
+                                        left: value_x,
+                                        top: text_y,
+                                        line_height,
+                                    },
+                                    hdc,
+                                    font: normal_font,
                                 },
-                                hdc,
-                                font: normal_font,
-                            },
-                        );
+                            );
+                        }
                     }
                 }
                 text_y += line_height;
@@ -954,8 +1001,58 @@ fn draw_recipe_detail_block(
             text_y += row_gap;
         }
     }
+    unsafe {
+        RestoreDC(hdc, saved_dc);
+    }
 
     block_rect.bottom + margin_y
+}
+
+fn row_intersects_clip(y: i32, line_height: i32, clip_rect: &RECT) -> bool {
+    y + line_height > clip_rect.top && y < clip_rect.bottom
+}
+
+fn draw_recipe_detail_scrollbar(
+    hdc: HDC,
+    block_rect: &RECT,
+    pad_y: i32,
+    width: i32,
+    offset: i32,
+    max_offset: i32,
+    viewport_height: i32,
+    content_height: i32,
+    track_color: COLORREF,
+    thumb_color: COLORREF,
+) {
+    if max_offset <= 0 || content_height <= 0 || viewport_height <= 0 {
+        return;
+    }
+    let track_top = block_rect.top + pad_y;
+    let track_bottom = block_rect.bottom - pad_y;
+    let track_height = (track_bottom - track_top).max(1);
+    let thumb_height = ((track_height * viewport_height) / content_height).clamp(12, track_height);
+    let travel = (track_height - thumb_height).max(0);
+    let thumb_top = track_top + ((travel * offset) / max_offset.max(1));
+    let track_rect = RECT {
+        left: block_rect.right - width - 3,
+        top: track_top,
+        right: block_rect.right - 3,
+        bottom: track_bottom,
+    };
+    let thumb_rect = RECT {
+        left: track_rect.left,
+        top: thumb_top,
+        right: track_rect.right,
+        bottom: thumb_top + thumb_height,
+    };
+    unsafe {
+        let track_brush = CreateSolidBrush(track_color);
+        FillRect(hdc, &track_rect, track_brush);
+        DeleteObject(track_brush);
+        let thumb_brush = CreateSolidBrush(thumb_color);
+        FillRect(hdc, &thumb_rect, thumb_brush);
+        DeleteObject(thumb_brush);
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1146,7 +1243,7 @@ fn recipe_detail_row_layouts(
     for row in rows {
         let label = format!("{}:", normalize_text(&row.label));
         let value = normalize_text(&row.value);
-        let selectable = row.label.eq_ignore_ascii_case("Ingredients") && !value.is_empty();
+        let selectable = row.selectable && !value.is_empty();
         let label_width = text_width_with_font(hdc, label_font, &label);
         let value_width = text_width_with_font(hdc, normal_font, &value);
         let inline_width = label_width + 6 + value_width;

@@ -63,6 +63,7 @@ fn line_budget_key(settings: &Settings, today_key: &str, dpi_y: i32) -> PopupLin
         show_student_price: settings.show_student_price,
         show_staff_price: settings.show_staff_price,
         show_guest_price: settings.show_guest_price,
+        show_price_group_names: settings.show_price_group_names,
         hide_expensive_student_meals: settings.hide_expensive_student_meals,
         show_allergens: settings.show_allergens,
         highlight_gluten_free: settings.highlight_gluten_free,
@@ -138,13 +139,18 @@ fn update_line_budget_cache(
     }
 }
 
-pub(super) fn desired_size_cache_key(state: &AppState, dpi_y: i32) -> Option<PopupDesiredSizeKey> {
+pub(super) fn desired_size_cache_key(
+    state: &AppState,
+    dpi_y: i32,
+    expanded_recipe_id: Option<u32>,
+) -> Option<PopupDesiredSizeKey> {
     if state.status == FetchStatus::Loading {
         return None;
     }
 
     Some(PopupDesiredSizeKey {
         today_key: local_today_key(),
+        expanded_recipe_id,
         enable_antell_restaurants: state.settings.enable_antell_restaurants,
         language: state.settings.language.clone(),
         theme: state.settings.theme.clone(),
@@ -154,6 +160,7 @@ pub(super) fn desired_size_cache_key(state: &AppState, dpi_y: i32) -> Option<Pop
         show_student_price: state.settings.show_student_price,
         show_staff_price: state.settings.show_staff_price,
         show_guest_price: state.settings.show_guest_price,
+        show_price_group_names: state.settings.show_price_group_names,
         hide_expensive_student_meals: state.settings.hide_expensive_student_meals,
         show_allergens: state.settings.show_allergens,
         highlight_gluten_free: state.settings.highlight_gluten_free,

@@ -93,7 +93,8 @@ pub(super) fn measure_lines_layout(
                                 .max(1);
                     }
                 }
-                wrapped_line_count += block_row_count.max(1) + 1;
+                let visible_rows = block_row_count.max(1).min(RECIPE_DETAIL_MAX_VISIBLE_ROWS);
+                wrapped_line_count += visible_rows + 1;
             }
             Line::Spacer => {
                 wrapped_line_count += 1;

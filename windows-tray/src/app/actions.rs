@@ -111,6 +111,13 @@ impl App {
         let _ = save_settings(&state.settings);
     }
 
+    /// Toggles whether rendered prices include the price-group label.
+    pub fn toggle_show_price_group_names(&self) {
+        let mut state = self.state.lock().unwrap();
+        state.settings.show_price_group_names = !state.settings.show_price_group_names;
+        let _ = save_settings(&state.settings);
+    }
+
     /// Toggles hiding expensive student meals from rendered menus.
     pub fn toggle_hide_expensive_student_meals(&self) {
         let mut state = self.state.lock().unwrap();

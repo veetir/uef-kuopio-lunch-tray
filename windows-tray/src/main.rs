@@ -21,8 +21,8 @@ mod winmsg;
 use crate::api::{FetchContext, FetchMode, FetchReason};
 use crate::app::App;
 use crate::format::{
-    date_and_time_line, menu_heading, normalize_text, split_component_suffix, student_price_eur,
-    text_for, PriceGroups,
+    date_and_time_line, menu_heading_for_restaurant, normalize_text, split_component_suffix,
+    student_price_eur, text_for, PriceGroups,
 };
 use crate::restaurant::{restaurant_for_code, Provider};
 use crate::settings::load_settings;
@@ -262,6 +262,7 @@ fn print_today_menu_with_settings(settings: &crate::settings::Settings) -> anyho
         student: settings.show_student_price,
         staff: settings.show_staff_price,
         guest: settings.show_guest_price,
+        names: settings.show_price_group_names,
     };
     match &today_menu {
         Some(menu) => {
@@ -276,7 +277,13 @@ fn print_today_menu_with_settings(settings: &crate::settings::Settings) -> anyho
                     }
                     println!(
                         "{}",
-                        menu_heading(group, provider, settings.show_prices, price_groups)
+                        menu_heading_for_restaurant(
+                            group,
+                            &settings.restaurant_code,
+                            provider,
+                            settings.show_prices,
+                            price_groups
+                        )
                     );
                     for component in &group.components {
                         let component = normalize_text(component);

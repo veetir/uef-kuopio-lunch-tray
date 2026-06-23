@@ -14,6 +14,7 @@ pub struct Settings {
     pub show_student_price: bool,
     pub show_staff_price: bool,
     pub show_guest_price: bool,
+    pub show_price_group_names: bool,
     pub hide_expensive_student_meals: bool,
     pub theme: String,
     pub widget_scale: String,
@@ -37,6 +38,7 @@ impl Default for Settings {
             show_student_price: true,
             show_staff_price: true,
             show_guest_price: false,
+            show_price_group_names: true,
             hide_expensive_student_meals: false,
             theme: "dark".to_string(),
             widget_scale: "normal".to_string(),
@@ -90,6 +92,7 @@ struct RawSettings {
     show_student_price: Option<bool>,
     show_staff_price: Option<bool>,
     show_guest_price: Option<bool>,
+    show_price_group_names: Option<bool>,
     hide_expensive_student_meals: Option<bool>,
     theme: Option<String>,
     widget_scale: Option<String>,
@@ -143,6 +146,9 @@ fn decode_settings(data: &str) -> anyhow::Result<Settings> {
             .unwrap_or(defaults.show_student_price),
         show_staff_price: raw.show_staff_price.unwrap_or(defaults.show_staff_price),
         show_guest_price: raw.show_guest_price.unwrap_or(defaults.show_guest_price),
+        show_price_group_names: raw
+            .show_price_group_names
+            .unwrap_or(defaults.show_price_group_names),
         hide_expensive_student_meals: raw
             .hide_expensive_student_meals
             .unwrap_or(defaults.hide_expensive_student_meals),

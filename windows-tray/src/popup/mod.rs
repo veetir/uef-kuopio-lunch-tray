@@ -8,8 +8,8 @@ use crate::api;
 use crate::app::{AppState, FetchStatus};
 use crate::favorites;
 use crate::format::{
-    date_and_time_line, menu_heading, normalize_text, split_component_suffix, student_price_eur,
-    text_for, PriceGroups,
+    date_and_time_line, menu_heading_for_restaurant, normalize_text, split_component_suffix,
+    student_price_eur, text_for, PriceGroups,
 };
 use crate::model::{MenuGroup, RecipeInfo, TodayMenu};
 use crate::restaurant::{available_restaurants, is_hard_closed_today, Provider, Restaurant};
@@ -23,9 +23,9 @@ use windows::Win32::Foundation::{COLORREF, HWND, POINT, RECT};
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW, CreateSolidBrush,
     DeleteDC, DeleteObject, EndPaint, FillRect, GetDeviceCaps, GetMonitorInfoW,
-    GetTextExtentPoint32W, GetTextMetricsW, InvalidateRect, MonitorFromPoint, SelectObject,
-    SetBkMode, SetTextColor, TextOutW, HDC, HFONT, LOGPIXELSY, MONITORINFO,
-    MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, SRCCOPY, TEXTMETRICW, TRANSPARENT,
+    GetTextExtentPoint32W, GetTextMetricsW, IntersectClipRect, InvalidateRect, MonitorFromPoint,
+    RestoreDC, SaveDC, SelectObject, SetBkMode, SetTextColor, TextOutW, HDC, HFONT, LOGPIXELSY,
+    MONITORINFO, MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, SRCCOPY, TEXTMETRICW, TRANSPARENT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GetClientRect, GetCursorPos, GetWindowRect, KillTimer, SetTimer, SetWindowPos, ShowWindow,
@@ -57,6 +57,9 @@ const RECIPE_DETAIL_PAD_X: i32 = 8;
 const RECIPE_DETAIL_PAD_Y: i32 = 5;
 const RECIPE_DETAIL_ROW_GAP: i32 = 2;
 const RECIPE_DETAIL_MARGIN_Y: i32 = 3;
+const RECIPE_DETAIL_MAX_VISIBLE_ROWS: usize = 14;
+const RECIPE_DETAIL_SCROLLBAR_WIDTH: i32 = 5;
+const RECIPE_DETAIL_WHEEL_ROWS: i32 = 3;
 
 static POPUP_LINE_BUDGET_CACHE: OnceLock<Mutex<Option<PopupLineBudgetCache>>> = OnceLock::new();
 static POPUP_LINE_SIGNATURE_CACHE: OnceLock<Mutex<Option<PopupLineSignatureCache>>> =
@@ -99,6 +102,7 @@ struct PopupLineBudgetKey {
     show_student_price: bool,
     show_staff_price: bool,
     show_guest_price: bool,
+    show_price_group_names: bool,
     hide_expensive_student_meals: bool,
     show_allergens: bool,
     highlight_gluten_free: bool,
@@ -129,6 +133,7 @@ struct PopupLineSignatureCache {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PopupDesiredSizeKey {
     today_key: String,
+    expanded_recipe_id: Option<u32>,
     enable_antell_restaurants: bool,
     language: String,
     theme: String,
@@ -138,6 +143,7 @@ struct PopupDesiredSizeKey {
     show_student_price: bool,
     show_staff_price: bool,
     show_guest_price: bool,
+    show_price_group_names: bool,
     hide_expensive_student_meals: bool,
     show_allergens: bool,
     highlight_gluten_free: bool,
@@ -172,6 +178,7 @@ enum Line {
 struct RecipeDetailRow {
     label: String,
     value: String,
+    selectable: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -205,6 +212,9 @@ struct SelectableLayout {
     item_recipe_ids: Vec<Option<u32>>,
     item_ingredient_flags: Vec<bool>,
     rows: Vec<SelectableRow>,
+    recipe_scroll_rect: Option<RECT>,
+    recipe_scroll_max_offset_px: i32,
+    recipe_scroll_line_height: i32,
 }
 
 #[derive(Debug, Clone)]
@@ -233,6 +243,7 @@ struct PopupSelectionState {
     layout: Option<SelectableLayout>,
     drag: Option<SelectionDrag>,
     expanded_recipe_id: Option<u32>,
+    recipe_scroll_offset_px: i32,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -306,6 +317,14 @@ pub enum HeaderButtonAction {
     Close,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Cursor affordance for the popup point under the mouse.
+pub enum PopupCursorKind {
+    Arrow,
+    Hand,
+    Text,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct HeaderLayout {
     prev: RECT,
@@ -357,6 +376,11 @@ pub fn hide_popup(hwnd: HWND) {
     layout::hide_popup(hwnd);
 }
 
+/// Clears transient text selection and expanded recipe details for this popup.
+pub fn clear_interaction_state(hwnd: HWND) {
+    interaction::clear_selection_state(hwnd);
+}
+
 /// Starts the navigation button press feedback animation.
 pub fn press_navigation_button(hwnd: HWND, direction: i32) {
     animation::press_navigation_button(hwnd, direction);
@@ -397,6 +421,14 @@ pub fn header_button_at(
     interaction::header_button_at(hwnd, settings, x, y)
 }
 
+/// Returns the cursor affordance for the given client-space popup point.
+pub fn cursor_kind_at(hwnd: HWND, settings: &Settings, x: i32, y: i32) -> PopupCursorKind {
+    if header_button_at(hwnd, settings, x, y).is_some() {
+        return PopupCursorKind::Hand;
+    }
+    interaction::content_cursor_kind_at(hwnd, x, y).unwrap_or(PopupCursorKind::Arrow)
+}
+
 /// Starts a text selection drag in the popup content area.
 pub fn begin_text_selection(hwnd: HWND, x: i32, y: i32) -> bool {
     interaction::begin_text_selection(hwnd, x, y)
@@ -420,6 +452,11 @@ pub fn cancel_text_selection(hwnd: HWND) {
 /// Reports whether a text selection drag is currently active.
 pub fn text_selection_active(hwnd: HWND) -> bool {
     interaction::text_selection_active(hwnd)
+}
+
+/// Scrolls a capped recipe detail block at the given client-space point.
+pub fn scroll_recipe_detail_at(hwnd: HWND, x: i32, y: i32, delta: i32) -> bool {
+    interaction::scroll_recipe_detail_at(hwnd, x, y, delta)
 }
 
 /// Paint entry point used by the popup window procedure.

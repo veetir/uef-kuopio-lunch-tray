@@ -113,6 +113,7 @@ pub(super) fn finish_text_selection(hwnd: HWND, x: i32, y: i32) -> bool {
                     } else {
                         Some(recipe_id)
                     };
+                    state.recipe_scroll_offset_px = 0;
                     Some(TextInteractionOutcome::ToggleRecipe)
                 } else {
                     None
@@ -202,6 +203,7 @@ pub(super) fn clear_selection_layout(hwnd: HWND) {
             state.layout = None;
         }
         state.drag = None;
+        state.recipe_scroll_offset_px = 0;
     }
 }
 
@@ -219,10 +221,12 @@ pub(super) fn clear_selection_state(hwnd: HWND) {
     }
     state.drag = None;
     state.expanded_recipe_id = None;
+    state.recipe_scroll_offset_px = 0;
 }
 
 pub(super) fn store_selection_layout(layout: SelectableLayout) {
     if let Ok(mut state) = selection_state().lock() {
+        let max_scroll_offset = layout.recipe_scroll_max_offset_px.max(0);
         if let Some(ref existing_drag) = state.drag {
             let keep_drag = state
                 .layout
@@ -237,12 +241,80 @@ pub(super) fn store_selection_layout(layout: SelectableLayout) {
                 state.drag = None;
             }
         }
+        state.recipe_scroll_offset_px = state.recipe_scroll_offset_px.clamp(0, max_scroll_offset);
         state.layout = Some(layout);
     }
 }
 
-pub(super) fn expanded_recipe_id() -> Option<u32> {
+pub(in crate::popup) fn expanded_recipe_id() -> Option<u32> {
     selection_state().lock().ok()?.expanded_recipe_id
+}
+
+pub(in crate::popup) fn recipe_detail_scroll_offset_px() -> i32 {
+    selection_state()
+        .lock()
+        .ok()
+        .map(|state| state.recipe_scroll_offset_px.max(0))
+        .unwrap_or(0)
+}
+
+pub(super) fn scroll_recipe_detail_at(hwnd: HWND, x: i32, y: i32, delta: i32) -> bool {
+    let mut state = match selection_state().lock() {
+        Ok(value) => value,
+        Err(_) => return false,
+    };
+    let Some(layout) = state.layout.as_ref() else {
+        return false;
+    };
+    if layout.hwnd != hwnd || layout.recipe_scroll_max_offset_px <= 0 {
+        return false;
+    }
+    let Some(rect) = layout.recipe_scroll_rect else {
+        return false;
+    };
+    if !point_in_rect(&rect, x, y) {
+        return false;
+    }
+
+    let step = (layout.recipe_scroll_line_height * RECIPE_DETAIL_WHEEL_ROWS).max(1);
+    let next = if delta > 0 {
+        state.recipe_scroll_offset_px.saturating_sub(step)
+    } else {
+        state.recipe_scroll_offset_px.saturating_add(step)
+    }
+    .clamp(0, layout.recipe_scroll_max_offset_px);
+
+    if next == state.recipe_scroll_offset_px {
+        return true;
+    }
+    state.recipe_scroll_offset_px = next;
+    request_repaint(hwnd);
+    true
+}
+
+pub(super) fn content_cursor_kind_at(hwnd: HWND, x: i32, y: i32) -> Option<PopupCursorKind> {
+    let state = selection_state().lock().ok()?;
+    let layout = state.layout.as_ref()?;
+    if layout.hwnd != hwnd {
+        return None;
+    }
+    let (row, _) = hit_test_row(layout, x, y)?;
+    if layout
+        .item_recipe_ids
+        .get(row.item_id)
+        .copied()
+        .flatten()
+        .is_some()
+        && !layout
+            .item_ingredient_flags
+            .get(row.item_id)
+            .copied()
+            .unwrap_or(false)
+    {
+        Some(PopupCursorKind::Hand)
+    } else {
+        Some(PopupCursorKind::Text)
+    }
 }
 
 pub(super) fn current_selection_range(hwnd: HWND) -> Option<SelectionRange> {
@@ -276,7 +348,7 @@ fn hit_test_row(layout: &SelectableLayout, x: i32, y: i32) -> Option<(&Selectabl
     let row = layout
         .rows
         .iter()
-        .find(|row| y >= row.top && y <= row.bottom)?;
+        .find(|row| point_in_selectable_row(row, x, y))?;
     let local = row_byte_index_from_x(row, x);
     Some((row, row.start + local))
 }
@@ -329,6 +401,19 @@ fn row_byte_index_from_x(row: &SelectableRow, x: i32) -> usize {
         }
     }
     selected.min(row.end.saturating_sub(row.start))
+}
+
+fn point_in_selectable_row(row: &SelectableRow, x: i32, y: i32) -> bool {
+    if y < row.top || y > row.bottom {
+        return false;
+    }
+    let width = row
+        .boundaries
+        .last()
+        .map(|boundary| boundary.x_offset)
+        .unwrap_or(0)
+        .max(1);
+    x >= row.left && x <= row.left + width
 }
 
 fn selected_range(a: usize, b: usize) -> (usize, usize) {

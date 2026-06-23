@@ -46,6 +46,7 @@ pub const CMD_TOGGLE_SHOW_STUDENT_PRICE: u16 = 2206;
 pub const CMD_TOGGLE_SHOW_STAFF_PRICE: u16 = 2207;
 pub const CMD_TOGGLE_SHOW_GUEST_PRICE: u16 = 2208;
 pub const CMD_TOGGLE_HIDE_EXPENSIVE_STUDENT: u16 = 2209;
+pub const CMD_TOGGLE_PRICE_GROUP_NAMES: u16 = 2210;
 pub const CMD_THEME_LIGHT: u16 = 2211;
 pub const CMD_THEME_DARK: u16 = 2212;
 pub const CMD_THEME_BLUE: u16 = 2213;
@@ -500,6 +501,12 @@ fn build_context_menu(state: &AppState) -> HMENU {
             CMD_TOGGLE_SHOW_GUEST_PRICE,
             "Guest",
             state.settings.show_guest_price,
+        );
+        append_menu_toggle(
+            price_menu,
+            CMD_TOGGLE_PRICE_GROUP_NAMES,
+            "Show names",
+            state.settings.show_price_group_names,
         );
         let _ = AppendMenuW(
             menu,
