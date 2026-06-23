@@ -31,6 +31,8 @@ Item {
     property var cacheStore: ({})
     property int modelVersion: 0
     property bool initialized: false
+    property string lastObservedDateIso: ""
+    property int refreshProbeIntervalMs: 60000
     property var supportedIconNames: ["food", "compass", "map-globe", "map-flat"]
     property int maxPayloadChars: 524288
     property int maxCacheBlobChars: 1048576
@@ -1726,6 +1728,25 @@ Item {
         }
     }
 
+    function refreshIfDateChangedOrStale() {
+        var currentDateIso = todayIso()
+        var previousDateIso = MenuFormatter.normalizeText(lastObservedDateIso)
+
+        if (!previousDateIso) {
+            lastObservedDateIso = currentDateIso
+        } else if (previousDateIso !== currentDateIso) {
+            lastObservedDateIso = currentDateIso
+            rederiveStateFromCachedPayload()
+            evaluateFreshnessAndRefresh(false, false)
+            scheduleMidnightTimer()
+            return
+        }
+
+        if (!isStateFreshForToday(stateFor(activeRestaurantCode))) {
+            evaluateFreshnessAndRefresh(false, false)
+        }
+    }
+
     function buildRequestUrl(code) {
         var entry = restaurantEntryForCode(code)
         if (!entry) {
@@ -1950,7 +1971,7 @@ Item {
         activeRestaurantCode = codes[nextIdx]
 
         if (!isStateFreshForToday(stateFor(activeRestaurantCode))) {
-            fetchRestaurant(activeRestaurantCode, false)
+            evaluateFreshnessAndRefresh(false, false)
         }
     }
 
@@ -2022,6 +2043,7 @@ Item {
     function bootstrapData() {
         ensureStateMaps()
         activeRestaurantCode = configRestaurantCode
+        lastObservedDateIso = todayIso()
         loadCacheStore()
         loadCachedPayloadsForCurrentLanguage()
         evaluateFreshnessAndRefresh(false, false)
@@ -2083,7 +2105,7 @@ Item {
         interval: Math.max(1, root.configRefreshMinutes) * 60 * 1000
         running: root.configRefreshMinutes > 0
         repeat: true
-        onTriggered: root.evaluateFreshnessAndRefresh(false, false)
+        onTriggered: root.evaluateFreshnessAndRefresh(true, false)
     }
 
     Timer {
@@ -2095,10 +2117,19 @@ Item {
     }
 
     Timer {
+        id: freshnessProbeTimer
+        interval: root.refreshProbeIntervalMs
+        running: true
+        repeat: true
+        onTriggered: root.refreshIfDateChangedOrStale()
+    }
+
+    Timer {
         id: midnightTimer
         repeat: false
         running: false
         onTriggered: {
+            root.lastObservedDateIso = root.todayIso()
             root.rederiveStateFromCachedPayload()
             root.evaluateFreshnessAndRefresh(false, false)
             root.scheduleMidnightTimer()
@@ -2141,7 +2172,10 @@ Item {
             hoverEnabled: true
             acceptedButtons: Qt.LeftButton | Qt.MiddleButton
 
+            onEntered: root.refreshIfDateChangedOrStale()
+
             onClicked: {
+                root.refreshIfDateChangedOrStale()
                 if (mouse.button === Qt.MiddleButton) {
                     var state = root.stateFor(root.activeRestaurantCode)
                     var safeUrl = root.sanitizeExternalUrl(state.restaurantUrl, "")
@@ -2157,6 +2191,7 @@ Item {
                 if (!root.configEnableWheelCycle) {
                     return
                 }
+                root.refreshIfDateChangedOrStale()
                 if (wheel.angleDelta.y > 0) {
                     root.cycleRestaurant(-1)
                 } else if (wheel.angleDelta.y < 0) {
