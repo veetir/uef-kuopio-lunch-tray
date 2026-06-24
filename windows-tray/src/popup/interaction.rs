@@ -292,6 +292,30 @@ pub(super) fn scroll_recipe_detail_at(hwnd: HWND, x: i32, y: i32, delta: i32) ->
     true
 }
 
+pub(super) fn collapse_recipe_detail_at(hwnd: HWND, x: i32, y: i32) -> bool {
+    let mut state = match selection_state().lock() {
+        Ok(value) => value,
+        Err(_) => return false,
+    };
+    let Some(layout) = state.layout.as_ref() else {
+        return false;
+    };
+    if layout.hwnd != hwnd {
+        return false;
+    }
+    let Some(rect) = layout.recipe_scroll_rect else {
+        return false;
+    };
+    if !point_in_rect(&rect, x, y) || state.expanded_recipe_id.is_none() {
+        return false;
+    }
+
+    state.expanded_recipe_id = None;
+    state.recipe_scroll_offset_px = 0;
+    request_repaint(hwnd);
+    true
+}
+
 pub(super) fn content_cursor_kind_at(hwnd: HWND, x: i32, y: i32) -> Option<PopupCursorKind> {
     let state = selection_state().lock().ok()?;
     let layout = state.layout.as_ref()?;

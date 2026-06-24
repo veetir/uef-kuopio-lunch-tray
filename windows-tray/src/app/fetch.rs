@@ -47,8 +47,8 @@ impl App {
             return true;
         }
 
-        if restaurant.provider == Provider::Compass {
-            if let Some(result) = read_compass_enriched_cache(restaurant, &language) {
+        if matches!(restaurant.provider, Provider::Compass | Provider::Antell) {
+            if let Some(result) = read_enriched_menu_cache(restaurant, &language) {
                 self.apply_cached_result(&result);
                 self.store_memory_from_fetch_output(restaurant.code, &language, &result);
                 log_line(&format!(
@@ -589,8 +589,8 @@ impl App {
                 ));
                 continue;
             }
-            if result.provider == Provider::Compass {
-                persist_compass_enriched_cache(code, language, result);
+            if matches!(result.provider, Provider::Compass | Provider::Antell) {
+                persist_enriched_menu_cache(code, language, result);
             }
             self.store_memory_from_fetch_output(code, language, result);
         }
@@ -772,8 +772,10 @@ impl App {
                 state.settings.refresh_minutes,
                 state.payload_date.clone(),
                 !state.raw_payload.is_empty(),
-                target.restaurant.provider == Provider::Compass
-                    && compass_menu_lacks_recipe_metadata(state.today_menu.as_ref()),
+                provider_menu_lacks_recipe_metadata(
+                    target.restaurant.provider,
+                    state.today_menu.as_ref(),
+                ),
             )
         };
 
@@ -811,7 +813,10 @@ impl App {
     }
 }
 
-fn compass_menu_lacks_recipe_metadata(menu: Option<&TodayMenu>) -> bool {
+fn provider_menu_lacks_recipe_metadata(provider: Provider, menu: Option<&TodayMenu>) -> bool {
+    if !matches!(provider, Provider::Compass | Provider::Antell) {
+        return false;
+    }
     let Some(menu) = menu else {
         return false;
     };
@@ -831,7 +836,7 @@ fn compass_menu_lacks_recipe_metadata(menu: Option<&TodayMenu>) -> bool {
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
-struct CompassEnrichedCache {
+struct EnrichedMenuCache {
     version: u32,
     raw_json: String,
     restaurant_name: String,
@@ -840,13 +845,13 @@ struct CompassEnrichedCache {
     today_menu: Option<TodayMenu>,
 }
 
-fn read_compass_enriched_cache(restaurant: Restaurant, language: &str) -> Option<FetchOutput> {
+fn read_enriched_menu_cache(restaurant: Restaurant, language: &str) -> Option<FetchOutput> {
     let raw = cache::read_enriched_cache(restaurant.provider, restaurant.code, language)?;
-    let parsed: CompassEnrichedCache = serde_json::from_str(&raw).ok()?;
+    let parsed: EnrichedMenuCache = serde_json::from_str(&raw).ok()?;
     if parsed.version != 1 {
         return None;
     }
-    if compass_menu_lacks_recipe_metadata(parsed.today_menu.as_ref()) {
+    if provider_menu_lacks_recipe_metadata(restaurant.provider, parsed.today_menu.as_ref()) {
         return None;
     }
     Some(FetchOutput {
@@ -855,17 +860,17 @@ fn read_compass_enriched_cache(restaurant: Restaurant, language: &str) -> Option
         today_menu: parsed.today_menu,
         restaurant_name: parsed.restaurant_name,
         restaurant_url: parsed.restaurant_url,
-        provider: Provider::Compass,
+        provider: restaurant.provider,
         raw_json: parsed.raw_json,
         payload_date: parsed.payload_date,
     })
 }
 
-fn persist_compass_enriched_cache(code: &str, language: &str, result: &FetchOutput) {
-    if compass_menu_lacks_recipe_metadata(result.today_menu.as_ref()) {
+fn persist_enriched_menu_cache(code: &str, language: &str, result: &FetchOutput) {
+    if provider_menu_lacks_recipe_metadata(result.provider, result.today_menu.as_ref()) {
         return;
     }
-    let payload = CompassEnrichedCache {
+    let payload = EnrichedMenuCache {
         version: 1,
         raw_json: result.raw_json.clone(),
         restaurant_name: result.restaurant_name.clone(),
@@ -880,6 +885,72 @@ fn persist_compass_enriched_cache(code: &str, language: &str, result: &FetchOutp
         log_line(&format!(
             "enriched cache write failed code={} language={} err={}",
             code, language, err
+        ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{MenuGroup, TodayMenu};
+
+    #[test]
+    fn antell_menu_with_components_and_no_recipe_ids_lacks_recipe_metadata() {
+        let menu = TodayMenu {
+            date_iso: "2026-06-24".to_string(),
+            lunch_time: String::new(),
+            menus: vec![MenuGroup {
+                name: "Lunch".to_string(),
+                price: "12,50/3,10 €".to_string(),
+                components: vec!["Soup".to_string()],
+                component_recipe_ids: vec![None],
+                component_recipe_details: vec![None],
+            }],
+        };
+
+        assert!(provider_menu_lacks_recipe_metadata(
+            Provider::Antell,
+            Some(&menu)
+        ));
+    }
+
+    #[test]
+    fn antell_menu_with_recipe_ids_has_recipe_metadata() {
+        let menu = TodayMenu {
+            date_iso: "2026-06-24".to_string(),
+            lunch_time: String::new(),
+            menus: vec![MenuGroup {
+                name: "Lunch".to_string(),
+                price: "12,50/3,10 €".to_string(),
+                components: vec!["Soup".to_string()],
+                component_recipe_ids: vec![Some(1)],
+                component_recipe_details: vec![None],
+            }],
+        };
+
+        assert!(!provider_menu_lacks_recipe_metadata(
+            Provider::Antell,
+            Some(&menu)
+        ));
+    }
+
+    #[test]
+    fn providers_without_recipe_details_do_not_lack_recipe_metadata() {
+        let menu = TodayMenu {
+            date_iso: "2026-06-24".to_string(),
+            lunch_time: String::new(),
+            menus: vec![MenuGroup {
+                name: "Lunch".to_string(),
+                price: String::new(),
+                components: vec!["Soup".to_string()],
+                component_recipe_ids: Vec::new(),
+                component_recipe_details: Vec::new(),
+            }],
+        };
+
+        assert!(!provider_menu_lacks_recipe_metadata(
+            Provider::PranzeriaHtml,
+            Some(&menu)
         ));
     }
 }

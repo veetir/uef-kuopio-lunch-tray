@@ -443,7 +443,7 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
 
     let mut y = params.scale.header_height + params.scale.padding_y + params.y_offset;
     let mut capture = params.capture;
-    for line in lines {
+    for (line_index, line) in lines.iter().enumerate() {
         match line {
             Line::Heading(text) => {
                 unsafe {
@@ -456,6 +456,34 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                 } else {
                     for row in wrapped {
                         draw_text_line(hdc, &row, params.scale.padding_x, y);
+                        y += params.line_height;
+                    }
+                }
+            }
+            Line::Subheading {
+                text,
+                reserve_prefix,
+            } => {
+                unsafe {
+                    SelectObject(hdc, params.small_font);
+                    SetTextColor(hdc, params.suffix_color);
+                }
+                let prefix_width = reserve_prefix
+                    .as_deref()
+                    .map(|prefix| text_width_with_font(hdc, params.normal_font, prefix))
+                    .unwrap_or(0);
+                let indent = params.scale.padding_x + bullet_width + prefix_width;
+                let wrapped = wrap_text_to_width_with_font(
+                    hdc,
+                    params.small_font,
+                    text,
+                    (params.content_width - bullet_width - prefix_width).max(24),
+                );
+                if wrapped.is_empty() {
+                    y += params.line_height;
+                } else {
+                    for row in wrapped {
+                        draw_text_line(hdc, &row, indent, y + 1);
                         y += params.line_height;
                     }
                 }
@@ -476,6 +504,9 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                 }
             }
             Line::MenuItem {
+                show_bullet,
+                price_prefix,
+                reserve_prefix,
                 main,
                 suffix_segments,
                 recipe_id,
@@ -486,6 +517,11 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                     SetTextColor(hdc, params.body_text_color);
                 }
                 let favorite_ranges = favorite_match_ranges(main, params.favorites);
+                let prefix_width = price_prefix
+                    .as_deref()
+                    .or(reserve_prefix.as_deref())
+                    .map(|prefix| text_width_with_font(hdc, params.normal_font, prefix))
+                    .unwrap_or(0);
                 let styled_width = text_with_suffix_width(
                     hdc,
                     params.normal_font,
@@ -493,7 +529,7 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                     params.small_bold_font,
                     main,
                     suffix_segments,
-                    bullet_width,
+                    bullet_width + prefix_width,
                 );
                 let item_id = if let Some(ref mut draw_capture) = capture {
                     let id = draw_capture.layout.items.len();
@@ -508,6 +544,20 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                     .and_then(|id| params.selection.filter(|sel| sel.item_id == id).copied());
 
                 if styled_width <= params.content_width {
+                    let aligned_main_width = inline_suffix_alignment_width(
+                        hdc,
+                        lines,
+                        line_index,
+                        bullet_width,
+                        InlineSuffixAlignmentParams {
+                            normal_font: params.normal_font,
+                            bold_font: params.bold_font,
+                            small_font: params.small_font,
+                            small_bold_font: params.small_bold_font,
+                            content_width: params.content_width,
+                            favorites: params.favorites,
+                        },
+                    );
                     let mut suffix_width = 0;
                     for (segment, bold) in suffix_segments {
                         let font = if *bold {
@@ -520,13 +570,16 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                         }
                         suffix_width += text_width(hdc, segment);
                     }
-                    let max_main = (params.content_width - bullet_width - suffix_width - 4).max(24);
+                    let max_main =
+                        (params.content_width - bullet_width - prefix_width - suffix_width - 4)
+                            .max(24);
                     unsafe {
                         SelectObject(hdc, params.normal_font);
                         SetTextColor(hdc, params.body_text_color);
                     }
                     let clipped_main = fit_text_to_width(hdc, main, max_main);
                     let line_x = params.scale.padding_x + bullet_width;
+                    let main_x = line_x + prefix_width;
                     let row = WrappedRow {
                         start: 0,
                         end: clipped_main.len(),
@@ -540,14 +593,19 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                         params.normal_font,
                         params.bold_font,
                     );
-                    draw_text_line(hdc, BULLET_PREFIX, params.scale.padding_x, y);
+                    if *show_bullet {
+                        draw_text_line(hdc, BULLET_PREFIX, params.scale.padding_x, y);
+                    }
+                    if let Some(prefix) = price_prefix.as_deref() {
+                        draw_text_line(hdc, prefix, line_x, y);
+                    }
                     if *ingredient_alert {
                         draw_outline_rect(
                             hdc,
                             &RECT {
-                                left: line_x - 2,
+                                left: main_x - 2,
                                 top: y,
-                                right: line_x + main_width + 2,
+                                right: main_x + main_width + 2,
                                 bottom: y + params.line_height - 1,
                             },
                             params.recipe_border_color,
@@ -558,7 +616,7 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                             hdc,
                             &row,
                             RowBounds {
-                                left: line_x,
+                                left: main_x,
                                 top: y,
                                 line_height: params.line_height,
                             },
@@ -572,7 +630,7 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                     draw_main_segments(
                         hdc,
                         &row_segments,
-                        LinePlacement { x: line_x, y },
+                        LinePlacement { x: main_x, y },
                         SegmentStyle {
                             fonts: SegmentFonts {
                                 normal: params.normal_font,
@@ -591,7 +649,7 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                             &row,
                             RowCaptureContext {
                                 bounds: RowBounds {
-                                    left: line_x,
+                                    left: main_x,
                                     top: y,
                                     line_height: params.line_height,
                                 },
@@ -601,8 +659,13 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                         );
                     }
                     if !suffix_segments.is_empty() {
-                        let suffix_x = line_x + main_width + 4;
-                        if suffix_x < (params.scale.padding_x + params.content_width) {
+                        let tight_suffix_x = main_x + main_width + 4;
+                        let aligned_suffix_x = aligned_main_width.map(|width| main_x + width + 4);
+                        let right_edge = params.scale.padding_x + params.content_width;
+                        let suffix_x = aligned_suffix_x
+                            .filter(|x| *x + suffix_width <= right_edge)
+                            .unwrap_or(tight_suffix_x);
+                        if suffix_x + suffix_width <= right_edge {
                             draw_text_segments(
                                 hdc,
                                 suffix_segments,
@@ -631,23 +694,29 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                     hdc,
                     params.normal_font,
                     main,
-                    main_wrap_width,
+                    (main_wrap_width - prefix_width).max(24),
                 );
                 if wrapped_main.is_empty() {
                     y += params.line_height;
                 } else {
                     for (idx, row) in wrapped_main.iter().enumerate() {
                         let line_x = params.scale.padding_x + bullet_width;
+                        let main_x = line_x + prefix_width;
                         if idx == 0 {
-                            draw_text_line(hdc, BULLET_PREFIX, params.scale.padding_x, y);
+                            if *show_bullet {
+                                draw_text_line(hdc, BULLET_PREFIX, params.scale.padding_x, y);
+                            }
+                            if let Some(prefix) = price_prefix.as_deref() {
+                                draw_text_line(hdc, prefix, line_x, y);
+                            }
                         }
                         if *ingredient_alert {
                             draw_outline_rect(
                                 hdc,
                                 &RECT {
-                                    left: line_x - 2,
+                                    left: main_x - 2,
                                     top: y,
-                                    right: line_x + text_width(hdc, &row.text) + 2,
+                                    right: main_x + text_width(hdc, &row.text) + 2,
                                     bottom: y + params.line_height - 1,
                                 },
                                 params.recipe_border_color,
@@ -658,7 +727,7 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                                 hdc,
                                 row,
                                 RowBounds {
-                                    left: line_x,
+                                    left: main_x,
                                     top: y,
                                     line_height: params.line_height,
                                 },
@@ -674,7 +743,7 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                         draw_main_segments(
                             hdc,
                             &row_segments,
-                            LinePlacement { x: line_x, y },
+                            LinePlacement { x: main_x, y },
                             SegmentStyle {
                                 fonts: SegmentFonts {
                                     normal: params.normal_font,
@@ -693,7 +762,7 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                                 row,
                                 RowCaptureContext {
                                     bounds: RowBounds {
-                                        left: line_x,
+                                        left: main_x,
                                         top: y,
                                         line_height: params.line_height,
                                     },
@@ -713,14 +782,14 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                             hdc,
                             params.small_font,
                             &suffix_plain,
-                            params.content_width,
+                            (params.content_width - bullet_width - prefix_width).max(24),
                         );
                         if wrapped_suffix.len() == 1 {
                             draw_text_segments(
                                 hdc,
                                 suffix_segments,
                                 LinePlacement {
-                                    x: params.scale.padding_x + bullet_width,
+                                    x: params.scale.padding_x + bullet_width + prefix_width,
                                     y: y + 1,
                                 },
                                 SegmentStyle {
@@ -743,7 +812,12 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                                 SetTextColor(hdc, params.suffix_color);
                             }
                             for row in wrapped_suffix {
-                                draw_text_line(hdc, &row, params.scale.padding_x + bullet_width, y);
+                                draw_text_line(
+                                    hdc,
+                                    &row,
+                                    params.scale.padding_x + bullet_width + prefix_width,
+                                    y,
+                                );
                                 y += params.line_height;
                             }
                         }
@@ -777,6 +851,86 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
             }
         }
     }
+}
+
+fn inline_suffix_alignment_width(
+    hdc: HDC,
+    lines: &[Line],
+    line_index: usize,
+    bullet_width: i32,
+    params: InlineSuffixAlignmentParams<'_>,
+) -> Option<i32> {
+    let Line::MenuItem { .. } = lines.get(line_index)? else {
+        return None;
+    };
+
+    let start = lines[..line_index]
+        .iter()
+        .rposition(|line| !matches!(line, Line::MenuItem { .. }))
+        .map(|idx| idx + 1)
+        .unwrap_or(0);
+    let end = lines[line_index..]
+        .iter()
+        .position(|line| !matches!(line, Line::MenuItem { .. }))
+        .map(|idx| line_index + idx)
+        .unwrap_or(lines.len());
+
+    let mut max_width: Option<i32> = None;
+    let mut candidates = 0usize;
+    for line in &lines[start..end] {
+        let Line::MenuItem {
+            price_prefix,
+            reserve_prefix,
+            main,
+            suffix_segments,
+            ..
+        } = line
+        else {
+            continue;
+        };
+        if suffix_segments.is_empty() {
+            continue;
+        }
+        let prefix_width = price_prefix
+            .as_deref()
+            .or(reserve_prefix.as_deref())
+            .map(|prefix| text_width_with_font(hdc, params.normal_font, prefix))
+            .unwrap_or(0);
+        let styled_width = text_with_suffix_width(
+            hdc,
+            params.normal_font,
+            params.small_font,
+            params.small_bold_font,
+            main,
+            suffix_segments,
+            bullet_width + prefix_width,
+        );
+        if styled_width > params.content_width {
+            continue;
+        }
+
+        let favorite_ranges = favorite_match_ranges(main, params.favorites);
+        let row_segments = segments_for_row(main, 0, main.len(), &favorite_ranges);
+        let width = text_segments_width(hdc, &row_segments, params.normal_font, params.bold_font);
+        max_width = Some(max_width.map_or(width, |current| current.max(width)));
+        candidates += 1;
+    }
+
+    if candidates >= 2 {
+        max_width
+    } else {
+        None
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct InlineSuffixAlignmentParams<'a> {
+    normal_font: HFONT,
+    bold_font: HFONT,
+    small_font: HFONT,
+    small_bold_font: HFONT,
+    content_width: i32,
+    favorites: &'a FavoritesSnapshot,
 }
 
 fn draw_recipe_detail_block(
@@ -818,7 +972,11 @@ fn draw_recipe_detail_block(
     let block_top = y + margin_y;
     let content_height = content_rows as i32 * line_height + gaps;
     let viewport_rows = content_rows.min(RECIPE_DETAIL_MAX_VISIBLE_ROWS).max(1);
-    let viewport_height = viewport_rows as i32 * line_height;
+    let viewport_height = if content_rows <= RECIPE_DETAIL_MAX_VISIBLE_ROWS {
+        content_height
+    } else {
+        viewport_rows as i32 * line_height
+    };
     let max_scroll_offset = (content_height - viewport_height).max(0);
     let scroll_offset = recipe_detail_scroll_offset_px().min(max_scroll_offset);
     let block_height = pad_y * 2 + viewport_height;

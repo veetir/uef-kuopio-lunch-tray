@@ -25,6 +25,25 @@ pub(super) fn measure_lines_layout(
                 let rows = wrapped_line_count_for_text(hdc, bold_font, text, wrap_width);
                 wrapped_line_count += rows.max(1);
             }
+            Line::Subheading {
+                text,
+                reserve_prefix,
+            } => {
+                let prefix_width = reserve_prefix
+                    .as_deref()
+                    .map(|prefix| text_width_with_font(hdc, normal_font, prefix))
+                    .unwrap_or(0);
+                let width = text_width_with_font(hdc, small_font, text);
+                required_content_width =
+                    required_content_width.max(width + bullet_width + prefix_width);
+                let rows = wrapped_line_count_for_text(
+                    hdc,
+                    small_font,
+                    text,
+                    (main_wrap_width - prefix_width).max(24),
+                );
+                wrapped_line_count += rows.max(1);
+            }
             Line::Text(text) => {
                 let width = text_width_with_font(hdc, normal_font, text);
                 required_content_width = required_content_width.max(width);
@@ -32,10 +51,17 @@ pub(super) fn measure_lines_layout(
                 wrapped_line_count += rows.max(1);
             }
             Line::MenuItem {
+                price_prefix,
+                reserve_prefix,
                 main,
                 suffix_segments,
                 ..
             } => {
+                let prefix_width = price_prefix
+                    .as_deref()
+                    .or(reserve_prefix.as_deref())
+                    .map(|prefix| text_width_with_font(hdc, normal_font, prefix))
+                    .unwrap_or(0);
                 let styled_width = text_with_suffix_width(
                     hdc,
                     normal_font,
@@ -43,14 +69,16 @@ pub(super) fn measure_lines_layout(
                     small_bold_font,
                     main,
                     suffix_segments,
-                    bullet_width,
+                    bullet_width + prefix_width,
                 );
                 required_content_width = required_content_width.max(styled_width);
                 if styled_width <= wrap_width {
                     wrapped_line_count += 1;
                 } else {
+                    let item_main_wrap_width = (main_wrap_width - prefix_width).max(24);
                     let main_rows =
-                        wrapped_line_count_for_text(hdc, normal_font, main, main_wrap_width).max(1);
+                        wrapped_line_count_for_text(hdc, normal_font, main, item_main_wrap_width)
+                            .max(1);
                     wrapped_line_count += main_rows;
                     if !suffix_segments.is_empty() {
                         let suffix_plain = flatten_suffix_segments(suffix_segments);
@@ -59,7 +87,7 @@ pub(super) fn measure_lines_layout(
                                 hdc,
                                 small_font,
                                 &suffix_plain,
-                                main_wrap_width,
+                                item_main_wrap_width,
                             )
                             .max(1);
                             wrapped_line_count += suffix_rows;
@@ -94,7 +122,12 @@ pub(super) fn measure_lines_layout(
                     }
                 }
                 let visible_rows = block_row_count.max(1).min(RECIPE_DETAIL_MAX_VISIBLE_ROWS);
-                wrapped_line_count += visible_rows + 1;
+                let gap_rows = if block_row_count <= RECIPE_DETAIL_MAX_VISIBLE_ROWS {
+                    rows.len().saturating_sub(1)
+                } else {
+                    0
+                };
+                wrapped_line_count += visible_rows + gap_rows + 1;
             }
             Line::Spacer => {
                 wrapped_line_count += 1;

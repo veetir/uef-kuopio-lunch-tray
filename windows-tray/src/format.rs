@@ -132,6 +132,7 @@ fn menu_heading(
     menu_heading_with_name(
         menu,
         normalize_text(&menu.name),
+        "",
         provider,
         show_prices,
         groups,
@@ -147,12 +148,63 @@ pub fn menu_heading_for_restaurant(
     groups: PriceGroups,
 ) -> String {
     let heading = display_menu_group_name(&menu.name, restaurant_code);
-    menu_heading_with_name(menu, heading, provider, show_prices, groups)
+    menu_heading_with_name(
+        menu,
+        heading,
+        restaurant_code,
+        provider,
+        show_prices,
+        groups,
+    )
+}
+
+/// Returns the cleaned display category/title for a menu group.
+pub fn menu_group_title_for_restaurant(menu: &MenuGroup, restaurant_code: &str) -> String {
+    let title = display_menu_group_name(&menu.name, restaurant_code);
+    if title.is_empty() {
+        "Menu".to_string()
+    } else {
+        title
+    }
+}
+
+/// Returns the filtered display price text for a menu group.
+#[cfg(test)]
+pub fn menu_price_for_display(
+    menu: &MenuGroup,
+    provider: Provider,
+    show_prices: bool,
+    groups: PriceGroups,
+) -> String {
+    menu_price_for_restaurant_display(menu, "", provider, show_prices, groups)
+}
+
+/// Returns the filtered display price text for a menu group with restaurant-specific rules.
+pub fn menu_price_for_restaurant_display(
+    menu: &MenuGroup,
+    restaurant_code: &str,
+    provider: Provider,
+    show_prices: bool,
+    groups: PriceGroups,
+) -> String {
+    if !show_prices {
+        return String::new();
+    }
+    let price = normalize_text(&menu.price);
+    if price.is_empty() {
+        return String::new();
+    }
+    if provider == Provider::Compass {
+        price_text_for_restaurant_groups(&price, restaurant_code, groups)
+    } else {
+        normalize_price_text(&price)
+    }
 }
 
 fn menu_heading_with_name(
     menu: &MenuGroup,
     mut heading: String,
+    restaurant_code: &str,
     provider: Provider,
     show_prices: bool,
     groups: PriceGroups,
@@ -162,15 +214,12 @@ fn menu_heading_with_name(
     }
     let price = normalize_text(&menu.price);
     if show_prices && !price.is_empty() {
-        if provider == Provider::Compass {
-            let filtered = price_text_for_groups(&price, groups);
-            if filtered.is_empty() {
-                heading
-            } else {
-                format!("{} - {}", heading, filtered)
-            }
+        let filtered =
+            menu_price_for_restaurant_display(menu, restaurant_code, provider, show_prices, groups);
+        if filtered.is_empty() {
+            heading
         } else {
-            format!("{} - {}", heading, price)
+            format!("{} - {}", heading, filtered)
         }
     } else {
         heading
@@ -436,8 +485,24 @@ pub fn student_price_eur(price: &str) -> Option<f32> {
         .and_then(|entry| entry.value)
 }
 
-fn price_text_for_groups(price: &str, groups: PriceGroups) -> String {
+/// Extracts every numeric price component from display text for descending menu sorting.
+pub fn price_values_for_sort(text: &str) -> Vec<f32> {
+    parse_price_values(text)
+}
+
+fn price_text_for_restaurant_groups(
+    price: &str,
+    restaurant_code: &str,
+    groups: PriceGroups,
+) -> String {
     let entries = parse_compass_price_entries(price);
+    if restaurant_code == "0439" {
+        return tietoteknia_price_text_for_groups(entries, groups);
+    }
+    price_text_for_entries(entries, groups)
+}
+
+fn price_text_for_entries(entries: Vec<PriceEntry>, groups: PriceGroups) -> String {
     let mut parts = Vec::new();
     for entry in entries {
         let include = match entry.group {
@@ -454,6 +519,50 @@ fn price_text_for_groups(price: &str, groups: PriceGroups) -> String {
         }
     }
     parts.join(" / ")
+}
+
+fn tietoteknia_price_text_for_groups(entries: Vec<PriceEntry>, groups: PriceGroups) -> String {
+    if entries.is_empty() {
+        return String::new();
+    }
+
+    let has_explicit_student = entries
+        .iter()
+        .any(|entry| entry.group == PriceGroup::Student);
+    if has_explicit_student {
+        return price_text_for_entries(entries, groups);
+    }
+
+    if entries.len() == 1 {
+        if groups.student || groups.staff || groups.guest {
+            return price_entry_text(entries.into_iter().next().unwrap(), groups.names);
+        }
+        return String::new();
+    }
+
+    let last_index = entries.len().saturating_sub(1);
+    entries
+        .into_iter()
+        .enumerate()
+        .filter_map(|(idx, entry)| {
+            let is_inferred_student = idx == last_index;
+            let include = if is_inferred_student {
+                groups.student
+            } else {
+                groups.staff || groups.guest
+            };
+            include.then(|| price_entry_text(entry, groups.names))
+        })
+        .collect::<Vec<_>>()
+        .join(" / ")
+}
+
+fn price_entry_text(entry: PriceEntry, show_group_names: bool) -> String {
+    if show_group_names {
+        entry.text
+    } else {
+        entry.text_without_group_label()
+    }
 }
 
 impl PriceEntry {
@@ -498,7 +607,7 @@ fn parse_compass_price_entries(price: &str) -> Vec<PriceEntry> {
         .map(|segment| PriceEntry {
             group: classify_compass_price_group(&segment),
             value: parse_price_value(&segment),
-            text: normalize_price_decimals(&segment),
+            text: normalize_price_text(&segment),
         })
         .collect()
 }
@@ -598,20 +707,32 @@ fn is_word_boundary(text: &str, start: usize, len: usize) -> bool {
 }
 
 fn parse_price_value(text: &str) -> Option<f32> {
+    parse_price_values(text).pop()
+}
+
+fn parse_price_values(text: &str) -> Vec<f32> {
     let mut current = String::new();
-    let mut tokens: Vec<String> = Vec::new();
+    let mut values = Vec::new();
     for ch in text.chars() {
         if ch.is_ascii_digit() || ch == ',' || ch == '.' {
             current.push(ch);
         } else if !current.is_empty() {
-            tokens.push(current.clone());
+            if let Some(value) = parse_price_token(&current) {
+                values.push(value);
+            }
             current.clear();
         }
     }
     if !current.is_empty() {
-        tokens.push(current);
+        if let Some(value) = parse_price_token(&current) {
+            values.push(value);
+        }
     }
-    let token = tokens.last()?.replace(',', ".");
+    values
+}
+
+fn parse_price_token(token: &str) -> Option<f32> {
+    let token = token.replace(',', ".");
     let cleaned = token.trim_matches('.');
     cleaned.parse::<f32>().ok()
 }
@@ -668,11 +789,32 @@ fn normalize_price_decimals(text: &str) -> String {
     out
 }
 
+fn normalize_price_text(text: &str) -> String {
+    normalize_euro_spacing(&normalize_price_decimals(text))
+}
+
+fn normalize_euro_spacing(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 2);
+    for ch in text.chars() {
+        if ch == '€' {
+            while out.ends_with(' ') {
+                out.pop();
+            }
+            if !out.is_empty() {
+                out.push(' ');
+            }
+        }
+        out.push(ch);
+    }
+    normalize_text(&out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        menu_heading, menu_heading_for_restaurant, renderable_menu_components,
-        split_component_suffix, PriceGroups,
+        menu_heading, menu_heading_for_restaurant, menu_price_for_display,
+        menu_price_for_restaurant_display, renderable_menu_components, split_component_suffix,
+        PriceGroups,
     };
     use crate::model::MenuGroup;
     use crate::restaurant::Provider;
@@ -872,7 +1014,114 @@ mod tests {
             },
         );
 
-        assert_eq!(heading, "Päivän soppa - 3,10€");
+        assert_eq!(heading, "Päivän soppa - 3,10 €");
+    }
+
+    #[test]
+    fn raw_provider_price_display_normalizes_euro_spacing() {
+        let group = MenuGroup {
+            name: "Lunch".to_string(),
+            price: "12,50/3,10€".to_string(),
+            components: Vec::new(),
+            component_recipe_ids: Vec::new(),
+            component_recipe_details: Vec::new(),
+        };
+
+        let price = menu_price_for_display(
+            &group,
+            Provider::Antell,
+            true,
+            PriceGroups {
+                student: true,
+                staff: false,
+                guest: false,
+                names: false,
+            },
+        );
+
+        assert_eq!(price, "12,50/3,10 €");
+    }
+
+    #[test]
+    fn tietoteknia_student_only_uses_inferred_student_price_from_unlabeled_pair() {
+        let group = MenuGroup {
+            name: "Pääruoka".to_string(),
+            price: "13,30 € / 3,10 €".to_string(),
+            components: Vec::new(),
+            component_recipe_ids: Vec::new(),
+            component_recipe_details: Vec::new(),
+        };
+
+        let price = menu_price_for_restaurant_display(
+            &group,
+            "0439",
+            Provider::Compass,
+            true,
+            PriceGroups {
+                student: true,
+                staff: false,
+                guest: false,
+                names: false,
+            },
+        );
+
+        assert_eq!(price, "3,10 €");
+    }
+
+    #[test]
+    fn tietoteknia_staff_or_guest_uses_non_student_price_from_unlabeled_pair() {
+        let group = MenuGroup {
+            name: "Pääruoka".to_string(),
+            price: "13,30 € / 3,10 €".to_string(),
+            components: Vec::new(),
+            component_recipe_ids: Vec::new(),
+            component_recipe_details: Vec::new(),
+        };
+
+        for groups in [
+            PriceGroups {
+                student: false,
+                staff: true,
+                guest: false,
+                names: false,
+            },
+            PriceGroups {
+                student: false,
+                staff: false,
+                guest: true,
+                names: false,
+            },
+        ] {
+            let price =
+                menu_price_for_restaurant_display(&group, "0439", Provider::Compass, true, groups);
+            assert_eq!(price, "13,30 €");
+        }
+    }
+
+    #[test]
+    fn tietoteknia_student_only_falls_back_to_single_unlabeled_price() {
+        let group = MenuGroup {
+            name: "Kesäsalaatti".to_string(),
+            price: "11,00 €".to_string(),
+            components: Vec::new(),
+            component_recipe_ids: Vec::new(),
+            component_recipe_details: Vec::new(),
+        };
+
+        let price = menu_price_for_restaurant_display(
+            &group,
+            "0439",
+            Provider::Compass,
+            true,
+            PriceGroups {
+                student: true,
+                staff: false,
+                guest: false,
+                names: false,
+            },
+        );
+
+        assert_eq!(price, "11,00 €");
     }
 
     #[test]

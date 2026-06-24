@@ -33,6 +33,7 @@ Only do this for binaries downloaded from the official GitHub Releases page of t
 - Mouse wheel on tray icon: switch restaurant
 - Drag-select text on a dish row: toggle it as a favorite highlight
 - Right-click tray icon: open settings, refresh, and quit
+- Right-click tray icon > Theme > Lunch item layout: choose Legacy, Standard, or Compact menu rows
 
 ## First-time setup
 
@@ -48,6 +49,11 @@ Open settings from the tray menu and set:
 - Settings: `%LOCALAPPDATA%\compass-lunch\settings.json`
 - Cache: `%LOCALAPPDATA%\compass-lunch\cache\`
 - Favorites: `%LOCALAPPDATA%\compass-lunch\favorites.json`
+
+The `settings.json` key for the menu row layout is `lunch_item_display_mode`.
+Supported values are `"legacy"`, `"standard"`, and `"compact"`. New installs
+default to `"standard"` with prices shown; upgraded installs without this key
+keep the legacy layout until changed from the tray menu.
 
 To reset the app:
 

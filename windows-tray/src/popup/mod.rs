@@ -8,8 +8,9 @@ use crate::api;
 use crate::app::{AppState, FetchStatus};
 use crate::favorites;
 use crate::format::{
-    date_and_time_line, menu_heading_for_restaurant, normalize_text, split_component_suffix,
-    student_price_eur, text_for, PriceGroups,
+    date_and_time_line, menu_group_title_for_restaurant, menu_heading_for_restaurant,
+    menu_price_for_restaurant_display, normalize_text, price_values_for_sort,
+    split_component_suffix, student_price_eur, text_for, PriceGroups,
 };
 use crate::model::{MenuGroup, RecipeInfo, TodayMenu};
 use crate::restaurant::{available_restaurants, is_hard_closed_today, Provider, Restaurant};
@@ -103,6 +104,7 @@ struct PopupLineBudgetKey {
     show_staff_price: bool,
     show_guest_price: bool,
     show_price_group_names: bool,
+    lunch_item_display_mode: crate::settings::LunchItemDisplayMode,
     hide_expensive_student_meals: bool,
     show_allergens: bool,
     highlight_gluten_free: bool,
@@ -144,6 +146,7 @@ struct PopupDesiredSizeKey {
     show_staff_price: bool,
     show_guest_price: bool,
     show_price_group_names: bool,
+    lunch_item_display_mode: crate::settings::LunchItemDisplayMode,
     hide_expensive_student_meals: bool,
     show_allergens: bool,
     highlight_gluten_free: bool,
@@ -161,8 +164,15 @@ struct PopupDesiredSizeCacheEntry {
 #[derive(Debug, Clone)]
 enum Line {
     Heading(String),
+    Subheading {
+        text: String,
+        reserve_prefix: Option<String>,
+    },
     Text(String),
     MenuItem {
+        show_bullet: bool,
+        price_prefix: Option<String>,
+        reserve_prefix: Option<String>,
         main: String,
         suffix_segments: Vec<(String, bool)>,
         recipe_id: Option<u32>,
@@ -457,6 +467,11 @@ pub fn text_selection_active(hwnd: HWND) -> bool {
 /// Scrolls a capped recipe detail block at the given client-space point.
 pub fn scroll_recipe_detail_at(hwnd: HWND, x: i32, y: i32, delta: i32) -> bool {
     interaction::scroll_recipe_detail_at(hwnd, x, y, delta)
+}
+
+/// Collapses the expanded recipe detail block when the point is inside it.
+pub fn collapse_recipe_detail_at(hwnd: HWND, x: i32, y: i32) -> bool {
+    interaction::collapse_recipe_detail_at(hwnd, x, y)
 }
 
 /// Paint entry point used by the popup window procedure.

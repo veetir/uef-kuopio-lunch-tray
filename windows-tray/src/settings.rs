@@ -4,6 +4,14 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LunchItemDisplayMode {
+    Legacy,
+    Standard,
+    Compact,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Persisted settings that drive fetch behavior and popup rendering.
 pub struct Settings {
@@ -15,6 +23,7 @@ pub struct Settings {
     pub show_staff_price: bool,
     pub show_guest_price: bool,
     pub show_price_group_names: bool,
+    pub lunch_item_display_mode: LunchItemDisplayMode,
     pub hide_expensive_student_meals: bool,
     pub theme: String,
     pub widget_scale: String,
@@ -34,11 +43,12 @@ impl Default for Settings {
             restaurant_code: "0437".to_string(),
             language: "fi".to_string(),
             refresh_minutes: 1440,
-            show_prices: false,
+            show_prices: true,
             show_student_price: true,
             show_staff_price: true,
             show_guest_price: false,
             show_price_group_names: true,
+            lunch_item_display_mode: LunchItemDisplayMode::Standard,
             hide_expensive_student_meals: false,
             theme: "dark".to_string(),
             widget_scale: "normal".to_string(),
@@ -93,6 +103,7 @@ struct RawSettings {
     show_staff_price: Option<bool>,
     show_guest_price: Option<bool>,
     show_price_group_names: Option<bool>,
+    lunch_item_display_mode: Option<String>,
     hide_expensive_student_meals: Option<bool>,
     theme: Option<String>,
     widget_scale: Option<String>,
@@ -140,7 +151,10 @@ fn decode_settings(data: &str) -> anyhow::Result<Settings> {
         restaurant_code: raw.restaurant_code.unwrap_or(defaults.restaurant_code),
         language: raw.language.unwrap_or(defaults.language),
         refresh_minutes: raw.refresh_minutes.unwrap_or(defaults.refresh_minutes),
-        show_prices: raw.show_prices.unwrap_or(defaults.show_prices),
+        // Existing installs without this key predate the price-first layout.
+        // Keep their old hidden-price behavior; brand-new installs use the
+        // current default from Settings::default().
+        show_prices: raw.show_prices.unwrap_or(false),
         show_student_price: raw
             .show_student_price
             .unwrap_or(defaults.show_student_price),
@@ -149,6 +163,13 @@ fn decode_settings(data: &str) -> anyhow::Result<Settings> {
         show_price_group_names: raw
             .show_price_group_names
             .unwrap_or(defaults.show_price_group_names),
+        // Existing installs have no saved display mode. Keep their current layout
+        // instead of switching the menu structure during upgrade.
+        lunch_item_display_mode: raw
+            .lunch_item_display_mode
+            .as_deref()
+            .map(normalize_lunch_item_display_mode)
+            .unwrap_or(LunchItemDisplayMode::Legacy),
         hide_expensive_student_meals: raw
             .hide_expensive_student_meals
             .unwrap_or(defaults.hide_expensive_student_meals),
@@ -206,5 +227,54 @@ pub fn normalize_widget_scale(value: &str) -> String {
         "125" | "125%" => "125".to_string(),
         "150" | "150%" => "150".to_string(),
         _ => "normal".to_string(),
+    }
+}
+
+/// Normalizes user-facing lunch item display mode values to the supported presets.
+pub fn normalize_lunch_item_display_mode(value: &str) -> LunchItemDisplayMode {
+    match value.to_ascii_lowercase().as_str() {
+        "legacy" => LunchItemDisplayMode::Legacy,
+        "compact" => LunchItemDisplayMode::Compact,
+        "standard" => LunchItemDisplayMode::Standard,
+        _ => LunchItemDisplayMode::Standard,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_default_uses_standard_lunch_item_display_mode() {
+        let settings = Settings::default();
+
+        assert_eq!(
+            settings.lunch_item_display_mode,
+            LunchItemDisplayMode::Standard
+        );
+        assert!(settings.show_prices);
+    }
+
+    #[test]
+    fn missing_lunch_item_display_mode_keeps_existing_settings_on_legacy() {
+        let settings = decode_settings(r#"{"language":"en","theme":"blue"}"#).unwrap();
+
+        assert_eq!(settings.language, "en");
+        assert_eq!(settings.theme, "blue");
+        assert!(!settings.show_prices);
+        assert_eq!(
+            settings.lunch_item_display_mode,
+            LunchItemDisplayMode::Legacy
+        );
+    }
+
+    #[test]
+    fn lunch_item_display_mode_decodes_supported_values() {
+        let settings = decode_settings(r#"{"lunch_item_display_mode":"compact"}"#).unwrap();
+
+        assert_eq!(
+            settings.lunch_item_display_mode,
+            LunchItemDisplayMode::Compact
+        );
     }
 }

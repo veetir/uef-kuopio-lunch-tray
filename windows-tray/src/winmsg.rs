@@ -7,6 +7,7 @@ use crate::app::{App, FetchApplyOutcome, FetchMessage, UpdateCheckMessage, Updat
 use crate::log::log_line;
 use crate::popup;
 use crate::restaurant::available_restaurants;
+use crate::settings::LunchItemDisplayMode;
 use crate::tray;
 use crate::util::to_wstring;
 use std::sync::{Mutex, OnceLock};
@@ -428,6 +429,21 @@ pub unsafe extern "system" fn popup_wndproc(
             }
             LRESULT(0)
         }
+        WM_MBUTTONUP => {
+            let app = app_from_hwnd(hwnd);
+            if app.is_null() {
+                return LRESULT(0);
+            }
+            let app = &*(app);
+            let x = (lparam.0 as u32 & 0xFFFF) as i16 as i32;
+            let y = ((lparam.0 as u32 >> 16) & 0xFFFF) as i16 as i32;
+            popup::cancel_text_selection(hwnd);
+            if popup::collapse_recipe_detail_at(hwnd, x, y) {
+                let state = app.snapshot();
+                popup::resize_popup_keep_position(hwnd, &state);
+            }
+            LRESULT(0)
+        }
         WM_MOUSEWHEEL => {
             let app = app_from_hwnd(hwnd);
             if app.is_null() {
@@ -590,6 +606,18 @@ fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
         }
         tray::CMD_TOGGLE_PRICE_GROUP_NAMES => {
             app.toggle_show_price_group_names();
+        }
+        tray::CMD_LUNCH_LAYOUT_LEGACY => {
+            app.set_lunch_item_display_mode(LunchItemDisplayMode::Legacy);
+            popup::invalidate_layout_budget_cache();
+        }
+        tray::CMD_LUNCH_LAYOUT_STANDARD => {
+            app.set_lunch_item_display_mode(LunchItemDisplayMode::Standard);
+            popup::invalidate_layout_budget_cache();
+        }
+        tray::CMD_LUNCH_LAYOUT_COMPACT => {
+            app.set_lunch_item_display_mode(LunchItemDisplayMode::Compact);
+            popup::invalidate_layout_budget_cache();
         }
         tray::CMD_TOGGLE_HIDE_EXPENSIVE_STUDENT => {
             app.toggle_hide_expensive_student_meals();

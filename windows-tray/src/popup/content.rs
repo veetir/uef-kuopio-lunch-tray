@@ -39,6 +39,7 @@ pub(super) fn build_lines(state: &AppState) -> Vec<Line> {
                         price_groups,
                         restaurant_code: &state.settings.restaurant_code,
                         language: &state.settings.language,
+                        display_mode: state.settings.lunch_item_display_mode,
                         show_allergens: state.settings.show_allergens,
                         highlight_gluten_free: state.settings.highlight_gluten_free,
                         highlight_veg: state.settings.highlight_veg,
@@ -88,6 +89,7 @@ struct MenuRenderOptions<'a> {
     price_groups: PriceGroups,
     restaurant_code: &'a str,
     language: &'a str,
+    display_mode: crate::settings::LunchItemDisplayMode,
     show_allergens: bool,
     highlight_gluten_free: bool,
     highlight_veg: bool,
@@ -99,7 +101,16 @@ fn append_menus(lines: &mut Vec<Line>, menu: &TodayMenu, options: MenuRenderOpti
     let mut rendered_groups = 0;
     let expanded_recipe_id = super::interaction::expanded_recipe_id();
     let favorites = current_favorites_snapshot();
-    for group in &menu.menus {
+    let mut groups: Vec<RenderableGroup<'_>> = menu
+        .menus
+        .iter()
+        .enumerate()
+        .filter_map(|(index, group)| renderable_group(index, group, options))
+        .collect();
+    groups.sort_by(compare_renderable_groups);
+
+    for render_group in groups {
+        let group = render_group.group;
         if options.provider == Provider::Compass && options.hide_expensive_student_meals {
             if let Some(price) = student_price_eur(&group.price) {
                 if price > 4.0 {
@@ -113,21 +124,34 @@ fn append_menus(lines: &mut Vec<Line>, menu: &TodayMenu, options: MenuRenderOpti
             continue;
         }
 
-        let heading = menu_heading_for_restaurant(
-            group,
-            &options.restaurant_code,
-            options.provider,
-            options.show_prices,
-            options.price_groups,
-        );
-        lines.push(Line::Heading(heading));
+        let category = render_group.category;
+        if options.display_mode == crate::settings::LunchItemDisplayMode::Legacy {
+            lines.push(Line::Heading(render_group.heading));
+        }
         rendered_groups += 1;
-        for (main, suffix, recipe_id, recipe_detail) in renderable_components {
+        let mut rendered_component_count = 0usize;
+        for (main, suffix, recipe_id, recipe_detail) in render_group.components {
+            let is_primary_component = rendered_component_count == 0
+                || options.display_mode == crate::settings::LunchItemDisplayMode::Legacy;
+            let price_prefix = if is_primary_component {
+                render_group.price_prefix.clone()
+            } else {
+                None
+            };
+            let reserve_prefix = if is_primary_component {
+                None
+            } else {
+                render_group.price_prefix.clone()
+            };
+            let show_bullet = is_primary_component;
             let ingredient_alert = recipe_detail
                 .as_ref()
                 .is_some_and(|detail| ingredient_alert_matches(detail, &favorites));
             if !options.show_allergens || suffix.is_empty() {
                 lines.push(Line::MenuItem {
+                    show_bullet,
+                    price_prefix: price_prefix.clone(),
+                    reserve_prefix: reserve_prefix.clone(),
                     main: main.clone(),
                     suffix_segments: Vec::new(),
                     recipe_id,
@@ -141,6 +165,9 @@ fn append_menus(lines: &mut Vec<Line>, menu: &TodayMenu, options: MenuRenderOpti
                     options.highlight_lactose_free,
                 );
                 lines.push(Line::MenuItem {
+                    show_bullet,
+                    price_prefix: price_prefix.clone(),
+                    reserve_prefix: reserve_prefix.clone(),
                     main: main.clone(),
                     suffix_segments: segments,
                     recipe_id,
@@ -155,9 +182,102 @@ fn append_menus(lines: &mut Vec<Line>, menu: &TodayMenu, options: MenuRenderOpti
                     }
                 }
             }
+            rendered_component_count += 1;
+        }
+        if options.display_mode == crate::settings::LunchItemDisplayMode::Standard {
+            lines.push(Line::Subheading {
+                text: category.clone(),
+                reserve_prefix: render_group.price_prefix.clone(),
+            });
         }
     }
     rendered_groups
+}
+
+#[derive(Debug)]
+struct RenderableGroup<'a> {
+    group: &'a MenuGroup,
+    components: Vec<(String, String, Option<u32>, Option<RecipeInfo>)>,
+    category: String,
+    heading: String,
+    price_prefix: Option<String>,
+    sort_prices: Vec<f32>,
+    original_index: usize,
+}
+
+fn renderable_group<'a>(
+    original_index: usize,
+    group: &'a MenuGroup,
+    options: MenuRenderOptions,
+) -> Option<RenderableGroup<'a>> {
+    let components = renderable_group_components(group);
+    if components.is_empty() {
+        return None;
+    }
+    let category = menu_group_title_for_restaurant(group, options.restaurant_code);
+    let heading = menu_heading_for_restaurant(
+        group,
+        options.restaurant_code,
+        options.provider,
+        options.show_prices,
+        options.price_groups,
+    );
+    let price_text = menu_price_for_restaurant_display(
+        group,
+        options.restaurant_code,
+        options.provider,
+        options.show_prices,
+        options.price_groups,
+    );
+    let price_prefix = if options.display_mode == crate::settings::LunchItemDisplayMode::Legacy
+        || price_text.is_empty()
+    {
+        None
+    } else {
+        Some(format!("{}   ", price_text))
+    };
+    let sort_prices = if price_text.is_empty() {
+        price_values_for_sort(&group.price)
+    } else {
+        price_values_for_sort(&price_text)
+    };
+
+    Some(RenderableGroup {
+        group,
+        components,
+        category,
+        heading,
+        price_prefix,
+        sort_prices,
+        original_index,
+    })
+}
+
+fn compare_renderable_groups(
+    left: &RenderableGroup<'_>,
+    right: &RenderableGroup<'_>,
+) -> std::cmp::Ordering {
+    compare_price_vectors_desc(&left.sort_prices, &right.sort_prices)
+        .then_with(|| left.original_index.cmp(&right.original_index))
+}
+
+fn compare_price_vectors_desc(left: &[f32], right: &[f32]) -> std::cmp::Ordering {
+    let max_len = left.len().max(right.len());
+    for idx in 0..max_len {
+        match (left.get(idx), right.get(idx)) {
+            (Some(a), Some(b)) => {
+                if let Some(ordering) = b.partial_cmp(a) {
+                    if ordering != std::cmp::Ordering::Equal {
+                        return ordering;
+                    }
+                }
+            }
+            (Some(_), None) => return std::cmp::Ordering::Less,
+            (None, Some(_)) => return std::cmp::Ordering::Greater,
+            (None, None) => break,
+        }
+    }
+    std::cmp::Ordering::Equal
 }
 
 fn ingredient_alert_matches(detail: &RecipeInfo, favorites: &FavoritesSnapshot) -> bool {
@@ -367,7 +487,8 @@ pub(super) fn invalidate_favorites_cache() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::NutritionalValue;
+    use crate::model::{MenuGroup, NutritionalValue, TodayMenu};
+    use crate::settings::LunchItemDisplayMode;
 
     #[test]
     fn recipe_detail_rows_use_finnish_labels_for_finnish_ui() {
@@ -390,5 +511,216 @@ mod tests {
         assert!(rows[0].selectable);
         assert_eq!(rows[1].label, "Ravintoarvot");
         assert!(!rows[1].selectable);
+    }
+
+    #[test]
+    fn legacy_layout_renders_heading_then_menu_item() {
+        let lines = render_test_lines(LunchItemDisplayMode::Legacy);
+
+        assert!(matches!(&lines[0], Line::Heading(text) if text == "Main course - 3,10 €"));
+        assert!(
+            matches!(&lines[1], Line::MenuItem { main, .. } if main == "Sweet sour tofu and vegetable wok - Tofu Kung Pao")
+        );
+    }
+
+    #[test]
+    fn standard_layout_renders_price_first_item_with_secondary_category() {
+        let lines = render_test_lines(LunchItemDisplayMode::Standard);
+
+        assert!(
+            matches!(&lines[0], Line::MenuItem { price_prefix, main, .. } if price_prefix.as_deref() == Some("3,10 €   ") && main == "Sweet sour tofu and vegetable wok - Tofu Kung Pao")
+        );
+        assert!(
+            matches!(&lines[1], Line::Subheading { text, reserve_prefix } if text == "Main course" && reserve_prefix.as_deref() == Some("3,10 €   "))
+        );
+    }
+
+    #[test]
+    fn compact_layout_renders_price_first_item_without_category() {
+        let lines = render_test_lines(LunchItemDisplayMode::Compact);
+
+        assert_eq!(lines.len(), 1);
+        assert!(
+            matches!(&lines[0], Line::MenuItem { price_prefix, main, .. } if price_prefix.as_deref() == Some("3,10 €   ") && main == "Sweet sour tofu and vegetable wok - Tofu Kung Pao")
+        );
+    }
+
+    #[test]
+    fn standard_layout_sorts_groups_by_visible_price_descending() {
+        let menu = TodayMenu {
+            date_iso: "2026-06-24".to_string(),
+            lunch_time: String::new(),
+            menus: vec![
+                test_group("Soup", "student 1,46 €", "Bataattikeittoa"),
+                test_group("Lunch", "student 2,95 €", "Rapeaa yrttikalaa"),
+                test_group("Dessert", "student 0,66 €", "Suklaamoussea"),
+                test_group("Vegetable lunch", "student 1,87 €", "Mifua Margherita"),
+            ],
+        };
+        let mut lines = Vec::new();
+        append_menus(
+            &mut lines,
+            &menu,
+            test_options(LunchItemDisplayMode::Standard),
+        );
+
+        let mains: Vec<&str> = lines
+            .iter()
+            .filter_map(|line| match line {
+                Line::MenuItem { main, .. } => Some(main.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(
+            mains,
+            vec![
+                "Rapeaa yrttikalaa",
+                "Mifua Margherita",
+                "Bataattikeittoa",
+                "Suklaamoussea"
+            ]
+        );
+    }
+
+    #[test]
+    fn antell_style_prices_sort_by_second_value_when_first_value_ties() {
+        let menu = TodayMenu {
+            date_iso: "2026-06-24".to_string(),
+            lunch_time: String::new(),
+            menus: vec![
+                test_group("A", "12,50/3,10€", "Lower student price"),
+                test_group("B", "12,50/5,90€", "Higher student price"),
+                test_group("C", "12,50/3,10€", "Same lower price"),
+            ],
+        };
+        let mut lines = Vec::new();
+        let mut options = test_options(LunchItemDisplayMode::Standard);
+        options.provider = Provider::Antell;
+        append_menus(&mut lines, &menu, options);
+
+        let mains: Vec<&str> = lines
+            .iter()
+            .filter_map(|line| match line {
+                Line::MenuItem { main, .. } => Some(main.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(
+            mains,
+            vec![
+                "Higher student price",
+                "Lower student price",
+                "Same lower price"
+            ]
+        );
+    }
+
+    #[test]
+    fn standard_layout_keeps_multi_component_group_as_one_meal_block() {
+        let menu = TodayMenu {
+            date_iso: "2026-06-24".to_string(),
+            lunch_time: String::new(),
+            menus: vec![MenuGroup {
+                name: "Main course".to_string(),
+                price: "student 3,10 €".to_string(),
+                components: vec![
+                    "Chicken rissoles".to_string(),
+                    "Roasted potatoes".to_string(),
+                    "Tzatsiki yoghurt".to_string(),
+                ],
+                component_recipe_ids: Vec::new(),
+                component_recipe_details: Vec::new(),
+            }],
+        };
+        let mut lines = Vec::new();
+        append_menus(
+            &mut lines,
+            &menu,
+            test_options(LunchItemDisplayMode::Standard),
+        );
+
+        assert!(matches!(
+            &lines[0],
+            Line::MenuItem {
+                show_bullet: true,
+                price_prefix,
+                reserve_prefix: None,
+                main,
+                ..
+            } if price_prefix.as_deref() == Some("3,10 €   ") && main == "Chicken rissoles"
+        ));
+        assert!(matches!(
+            &lines[1],
+            Line::MenuItem {
+                show_bullet: false,
+                price_prefix: None,
+                reserve_prefix,
+                main,
+                ..
+            } if reserve_prefix.as_deref() == Some("3,10 €   ") && main == "Roasted potatoes"
+        ));
+        assert!(matches!(
+            &lines[2],
+            Line::MenuItem {
+                show_bullet: false,
+                price_prefix: None,
+                reserve_prefix,
+                main,
+                ..
+            } if reserve_prefix.as_deref() == Some("3,10 €   ") && main == "Tzatsiki yoghurt"
+        ));
+        assert!(
+            matches!(&lines[3], Line::Subheading { text, reserve_prefix } if text == "Main course" && reserve_prefix.as_deref() == Some("3,10 €   "))
+        );
+    }
+
+    fn render_test_lines(display_mode: LunchItemDisplayMode) -> Vec<Line> {
+        let menu = TodayMenu {
+            date_iso: "2026-06-24".to_string(),
+            lunch_time: "10:30-13:30".to_string(),
+            menus: vec![MenuGroup {
+                name: "Main course".to_string(),
+                price: "student 3,10 € / staff 8,50 €".to_string(),
+                components: vec!["Sweet sour tofu and vegetable wok - Tofu Kung Pao".to_string()],
+                component_recipe_ids: Vec::new(),
+                component_recipe_details: Vec::new(),
+            }],
+        };
+        let mut lines = Vec::new();
+        append_menus(&mut lines, &menu, test_options(display_mode));
+        lines
+    }
+
+    fn test_options(display_mode: LunchItemDisplayMode) -> MenuRenderOptions<'static> {
+        MenuRenderOptions {
+            provider: Provider::Compass,
+            show_prices: true,
+            price_groups: PriceGroups {
+                student: true,
+                staff: false,
+                guest: false,
+                names: false,
+            },
+            restaurant_code: "0437",
+            language: "en",
+            display_mode,
+            show_allergens: true,
+            highlight_gluten_free: false,
+            highlight_veg: false,
+            highlight_lactose_free: false,
+            hide_expensive_student_meals: false,
+        }
+    }
+
+    fn test_group(name: &str, price: &str, component: &str) -> MenuGroup {
+        MenuGroup {
+            name: name.to_string(),
+            price: price.to_string(),
+            components: vec![component.to_string()],
+            component_recipe_ids: Vec::new(),
+            component_recipe_details: Vec::new(),
+        }
     }
 }

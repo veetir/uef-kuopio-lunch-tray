@@ -6,6 +6,7 @@
 use crate::app::AppState;
 use crate::log::log_line;
 use crate::restaurant::available_restaurants;
+use crate::settings::LunchItemDisplayMode;
 use crate::util::to_wstring;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -62,6 +63,9 @@ pub const CMD_WIDGET_SCALE_NORMAL: u16 = 2225;
 pub const CMD_WIDGET_SCALE_125: u16 = 2226;
 pub const CMD_WIDGET_SCALE_150: u16 = 2227;
 pub const CMD_TOGGLE_ANIMATIONS: u16 = 2228;
+pub const CMD_LUNCH_LAYOUT_LEGACY: u16 = 2229;
+pub const CMD_LUNCH_LAYOUT_STANDARD: u16 = 2230;
+pub const CMD_LUNCH_LAYOUT_COMPACT: u16 = 2231;
 pub const CMD_CUSTOM_THEME_BASE: u16 = 2600;
 pub const CMD_CUSTOM_THEME_LAST: u16 = 2615;
 pub const CMD_REFRESH_NOW: u16 = 2301;
@@ -442,6 +446,31 @@ fn build_context_menu(state: &AppState) -> HMENU {
             CMD_TOGGLE_ANIMATIONS,
             "Enable animations",
             state.settings.animations_enabled,
+        );
+        let layout_menu = CreatePopupMenu().expect("CreatePopupMenu");
+        append_menu_item(
+            layout_menu,
+            CMD_LUNCH_LAYOUT_LEGACY,
+            "Legacy",
+            state.settings.lunch_item_display_mode == LunchItemDisplayMode::Legacy,
+        );
+        append_menu_item(
+            layout_menu,
+            CMD_LUNCH_LAYOUT_STANDARD,
+            "Standard",
+            state.settings.lunch_item_display_mode == LunchItemDisplayMode::Standard,
+        );
+        append_menu_item(
+            layout_menu,
+            CMD_LUNCH_LAYOUT_COMPACT,
+            "Compact",
+            state.settings.lunch_item_display_mode == LunchItemDisplayMode::Compact,
+        );
+        let _ = AppendMenuW(
+            theme_menu,
+            MF_POPUP,
+            layout_menu.0 as usize,
+            PCWSTR(to_wstring("Lunch item layout").as_ptr()),
         );
         let _ = AppendMenuW(
             menu,
