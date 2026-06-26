@@ -6,7 +6,7 @@
 use crate::app::AppState;
 use crate::log::log_line;
 use crate::restaurant::available_restaurants;
-use crate::settings::LunchItemDisplayMode;
+use crate::settings::{HighlightTheme, LunchItemDisplayMode};
 use crate::util::to_wstring;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -66,6 +66,9 @@ pub const CMD_TOGGLE_ANIMATIONS: u16 = 2228;
 pub const CMD_LUNCH_LAYOUT_LEGACY: u16 = 2229;
 pub const CMD_LUNCH_LAYOUT_STANDARD: u16 = 2230;
 pub const CMD_LUNCH_LAYOUT_COMPACT: u16 = 2231;
+pub const CMD_HIGHLIGHT_THEME_DEFAULT: u16 = 2232;
+pub const CMD_HIGHLIGHT_THEME_FRAKTUR: u16 = 2233;
+pub const CMD_HIGHLIGHT_THEME_DIPLOMA: u16 = 2234;
 pub const CMD_CUSTOM_THEME_BASE: u16 = 2600;
 pub const CMD_CUSTOM_THEME_LAST: u16 = 2615;
 pub const CMD_REFRESH_NOW: u16 = 2301;
@@ -446,6 +449,31 @@ fn build_context_menu(state: &AppState) -> HMENU {
             CMD_TOGGLE_ANIMATIONS,
             "Enable animations",
             state.settings.animations_enabled,
+        );
+        let highlight_theme_menu = CreatePopupMenu().expect("CreatePopupMenu");
+        append_menu_item(
+            highlight_theme_menu,
+            CMD_HIGHLIGHT_THEME_DEFAULT,
+            "Default",
+            state.settings.highlight_theme == HighlightTheme::Default,
+        );
+        append_menu_item(
+            highlight_theme_menu,
+            CMD_HIGHLIGHT_THEME_FRAKTUR,
+            "Fraktur",
+            state.settings.highlight_theme == HighlightTheme::Fraktur,
+        );
+        append_menu_item(
+            highlight_theme_menu,
+            CMD_HIGHLIGHT_THEME_DIPLOMA,
+            "Diploma",
+            state.settings.highlight_theme == HighlightTheme::Diploma,
+        );
+        let _ = AppendMenuW(
+            theme_menu,
+            MF_POPUP,
+            highlight_theme_menu.0 as usize,
+            PCWSTR(to_wstring("Highlight theme").as_ptr()),
         );
         let layout_menu = CreatePopupMenu().expect("CreatePopupMenu");
         append_menu_item(

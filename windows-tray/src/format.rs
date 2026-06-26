@@ -2,6 +2,7 @@
 
 use crate::model::{MenuGroup, TodayMenu};
 use crate::restaurant::Provider;
+use regex::Regex;
 
 #[derive(Debug, Clone, Copy)]
 /// Price-group visibility filters applied when rendering Compass headings.
@@ -261,8 +262,21 @@ pub fn split_component_suffix(component: &str) -> (String, String) {
         return (normalized_main, String::new());
     }
 
-    let suffix = format!("({})", tokens.join(", "));
+    let suffix = format!(
+        "({})",
+        tokens
+            .iter()
+            .map(|token| token.display.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
     (normalized_main, suffix)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AllergenToken {
+    normalized: String,
+    display: String,
 }
 
 /// Converts a menu group's raw component strings into renderable main/suffix pairs.
@@ -285,13 +299,13 @@ pub fn renderable_menu_components(group: &MenuGroup) -> Vec<(String, String)> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ParenthesizedGroup {
-    Tokens(Vec<String>),
+    Tokens(Vec<AllergenToken>),
     Empty,
     Invalid,
 }
 
-fn extract_trailing_parenthesized_allergens(main: &mut String) -> Vec<String> {
-    let mut groups_rev: Vec<Vec<String>> = Vec::new();
+fn extract_trailing_parenthesized_allergens(main: &mut String) -> Vec<AllergenToken> {
+    let mut groups_rev: Vec<Vec<AllergenToken>> = Vec::new();
 
     loop {
         let trimmed = main.trim_end();
@@ -370,7 +384,7 @@ fn parse_parenthesized_group_tokens(raw_inside: &str) -> ParenthesizedGroup {
     }
 }
 
-fn extract_inline_allergens(text: &str) -> (String, Vec<String>) {
+fn extract_inline_allergens(text: &str) -> (String, Vec<AllergenToken>) {
     let compact = normalize_text(text)
         .trim_end_matches([' ', ',', ';', ':', '.'])
         .to_string();
@@ -384,6 +398,9 @@ fn extract_inline_allergens(text: &str) -> (String, Vec<String>) {
         .filter(|part| !part.is_empty())
         .collect();
     if parts.len() < 2 {
+        if let Some((main, token)) = peel_last_allergen_token(&compact) {
+            return (main, vec![token]);
+        }
         return (compact, Vec::new());
     }
 
@@ -420,12 +437,16 @@ fn extract_inline_allergens(text: &str) -> (String, Vec<String>) {
     }
 }
 
-fn peel_last_allergen_token(text: &str) -> Option<(String, String)> {
+fn peel_last_allergen_token(text: &str) -> Option<(String, AllergenToken)> {
     let trimmed = text.trim_end();
     let split_idx = trimmed.rfind(|ch: char| ch.is_whitespace())?;
-    let prefix = normalize_text(&trimmed[..split_idx]);
+    let raw_prefix = normalize_text(&trimmed[..split_idx]);
     let candidate = normalize_text(&trimmed[split_idx + 1..]);
-    let token = normalize_allergen_token(&candidate)?;
+    let mut token = normalize_allergen_token(&candidate)?;
+    let (prefix, requested) = split_requested_allergen_phrase(&raw_prefix);
+    if requested {
+        token.display = format!("Pyydettäessä {}", token.display);
+    }
     if prefix.is_empty() {
         None
     } else {
@@ -433,7 +454,18 @@ fn peel_last_allergen_token(text: &str) -> Option<(String, String)> {
     }
 }
 
-fn normalize_allergen_token(token: &str) -> Option<String> {
+fn split_requested_allergen_phrase(text: &str) -> (String, bool) {
+    let clean = normalize_text(text);
+    let Some(re) = Regex::new(r"(?i)\bpyydet(?:t)?[äa]ess[äa]\s*$").ok() else {
+        return (clean, false);
+    };
+    if !re.is_match(&clean) {
+        return (clean, false);
+    }
+    (normalize_text(re.replace(&clean, "").as_ref()), true)
+}
+
+fn normalize_allergen_token(token: &str) -> Option<AllergenToken> {
     let clean = normalize_text(token)
         .trim_matches(['(', ')', ',', ';', ':', '.'])
         .to_string();
@@ -441,26 +473,33 @@ fn normalize_allergen_token(token: &str) -> Option<String> {
         return None;
     }
     if clean == "*" {
-        return Some("*".to_string());
+        return Some(allergen_token("*", "*"));
     }
 
     let upper = clean.to_ascii_uppercase();
     if upper.len() == 1 && upper.chars().all(|ch| ch.is_ascii_uppercase()) {
-        return Some(upper);
+        return Some(allergen_token(&upper, &upper));
     }
 
     match upper.as_str() {
-        "ILM" | "VS" | "VL" => Some(upper),
-        "VEG" => Some("Veg".to_string()),
+        "ILM" | "VS" | "VL" => Some(allergen_token(&upper, &upper)),
+        "VEG" => Some(allergen_token("VEG", "Veg")),
         _ => None,
     }
 }
 
-fn dedupe_tokens(tokens: Vec<String>) -> Vec<String> {
+fn allergen_token(normalized: &str, display: &str) -> AllergenToken {
+    AllergenToken {
+        normalized: normalized.to_string(),
+        display: display.to_string(),
+    }
+}
+
+fn dedupe_tokens(tokens: Vec<AllergenToken>) -> Vec<AllergenToken> {
     let mut out = Vec::new();
     let mut seen: Vec<String> = Vec::new();
     for token in tokens {
-        let key = token.to_ascii_uppercase();
+        let key = token.normalized.to_ascii_uppercase();
         if seen.iter().any(|entry| entry == &key) {
             continue;
         }
@@ -843,6 +882,18 @@ mod tests {
             split_component_suffix("Chili and sesame-spiced organic tofu A, ILM, L, M, Veg, VS");
         assert_eq!(main, "Chili and sesame-spiced organic tofu");
         assert_eq!(suffix, "(A, ILM, L, M, Veg, VS)");
+    }
+
+    #[test]
+    fn extracts_requested_gluten_free_suffix() {
+        let (main, suffix) = split_component_suffix(
+            "Pasta Tonnarella (Pastaa Kermaisessa Tonnikalakastikkeessa) Pyydettäessä G",
+        );
+        assert_eq!(
+            main,
+            "Pasta Tonnarella (Pastaa Kermaisessa Tonnikalakastikkeessa)"
+        );
+        assert_eq!(suffix, "(Pyydettäessä G)");
     }
 
     #[test]

@@ -11,7 +11,7 @@ pub(super) struct SegmentColors {
 #[derive(Debug, Clone, Copy)]
 pub(super) struct SegmentFonts {
     pub(super) normal: HFONT,
-    pub(super) bold: HFONT,
+    pub(super) highlight: HFONT,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -56,7 +56,7 @@ pub(super) fn draw_main_segments(
     let mut cursor = placement.x;
     for (text, highlighted) in segments {
         let font = if *highlighted {
-            style.fonts.bold
+            style.fonts.highlight
         } else {
             style.fonts.normal
         };
@@ -80,12 +80,16 @@ pub(super) fn text_segments_width(
     hdc: HDC,
     segments: &[(String, bool)],
     normal_font: HFONT,
-    bold_font: HFONT,
+    highlight_font: HFONT,
 ) -> i32 {
     segments
         .iter()
         .map(|(text, highlighted)| {
-            let font = if *highlighted { bold_font } else { normal_font };
+            let font = if *highlighted {
+                highlight_font
+            } else {
+                normal_font
+            };
             text_width_with_font(hdc, font, text)
         })
         .sum()
@@ -125,6 +129,36 @@ pub(super) fn draw_selection_bg_for_row(
     }
 }
 
+pub(super) fn draw_selection_bg_for_segments(
+    hdc: HDC,
+    row: &WrappedRow,
+    segments: &[(String, bool)],
+    bounds: RowBounds,
+    selection: SelectionOverlay,
+    fonts: SegmentFonts,
+) {
+    let start = max(row.start, selection.start);
+    let end = min(row.end, selection.end);
+    if start >= end {
+        return;
+    }
+    let local_start = start.saturating_sub(row.start);
+    let local_end = end.saturating_sub(row.start);
+    let left_width = segmented_local_width(hdc, segments, fonts, local_start);
+    let right_width = segmented_local_width(hdc, segments, fonts, local_end);
+    let rect = RECT {
+        left: bounds.left + left_width,
+        top: bounds.top,
+        right: bounds.left + right_width,
+        bottom: bounds.top + bounds.line_height - 1,
+    };
+    unsafe {
+        let brush = CreateSolidBrush(selection.bg_color);
+        FillRect(hdc, &rect, brush);
+        DeleteObject(brush);
+    }
+}
+
 pub(super) fn add_selectable_row(
     layout: &mut SelectableLayout,
     item_id: usize,
@@ -142,23 +176,110 @@ pub(super) fn add_selectable_row(
     });
 }
 
+pub(super) fn add_selectable_segmented_row(
+    layout: &mut SelectableLayout,
+    item_id: usize,
+    row: &WrappedRow,
+    context: RowCaptureContext,
+    segments: &[(String, bool)],
+    fonts: SegmentFonts,
+) {
+    layout.rows.push(SelectableRow {
+        item_id,
+        start: row.start,
+        end: row.end,
+        left: context.bounds.left,
+        top: context.bounds.top,
+        bottom: context.bounds.top + context.bounds.line_height,
+        boundaries: row_boundaries_for_segments(context.hdc, segments, fonts),
+    });
+}
+
 fn row_boundaries(hdc: HDC, font: HFONT, text: &str) -> Vec<SelectableBoundary> {
     let mut out = Vec::new();
     out.push(SelectableBoundary {
         byte_index: 0,
         x_offset: 0,
     });
-    let mut x = 0;
     for (idx, ch) in text.char_indices() {
-        let mut single = String::new();
-        single.push(ch);
-        x += text_width_with_font(hdc, font, &single);
+        let boundary = idx + ch.len_utf8();
+        let x = text
+            .get(..boundary)
+            .map(|prefix| text_width_with_font(hdc, font, prefix))
+            .unwrap_or(0);
         out.push(SelectableBoundary {
-            byte_index: idx + ch.len_utf8(),
+            byte_index: boundary,
             x_offset: x,
         });
     }
     out
+}
+
+fn row_boundaries_for_segments(
+    hdc: HDC,
+    segments: &[(String, bool)],
+    fonts: SegmentFonts,
+) -> Vec<SelectableBoundary> {
+    let mut out = Vec::new();
+    out.push(SelectableBoundary {
+        byte_index: 0,
+        x_offset: 0,
+    });
+    let mut byte_index = 0usize;
+    let mut x = 0;
+    for (text, highlighted) in segments {
+        let font = if *highlighted {
+            fonts.highlight
+        } else {
+            fonts.normal
+        };
+        let segment_start_byte = byte_index;
+        let segment_start_x = x;
+        for (idx, ch) in text.char_indices() {
+            let boundary = idx + ch.len_utf8();
+            byte_index = segment_start_byte + boundary;
+            x = segment_start_x
+                + text
+                    .get(..boundary)
+                    .map(|prefix| text_width_with_font(hdc, font, prefix))
+                    .unwrap_or(0);
+            out.push(SelectableBoundary {
+                byte_index,
+                x_offset: x,
+            });
+        }
+    }
+    out
+}
+
+fn segmented_local_width(
+    hdc: HDC,
+    segments: &[(String, bool)],
+    fonts: SegmentFonts,
+    target: usize,
+) -> i32 {
+    let mut seen = 0usize;
+    let mut width = 0;
+    for (text, highlighted) in segments {
+        let font = if *highlighted {
+            fonts.highlight
+        } else {
+            fonts.normal
+        };
+        if seen + text.len() <= target {
+            width += text_width_with_font(hdc, font, text);
+            seen += text.len();
+            continue;
+        }
+        let take = target.saturating_sub(seen);
+        if take > 0 {
+            if let Some(part) = text.get(..take) {
+                width += text_width_with_font(hdc, font, part);
+            }
+        }
+        break;
+    }
+    width
 }
 
 pub(super) fn segments_for_row(
@@ -256,13 +377,13 @@ pub(super) fn draw_text_segments(
     style: SegmentStyle,
 ) {
     let mut cursor = placement.x;
-    for (text, bold) in segments {
-        let font = if *bold {
-            style.fonts.bold
+    for (text, highlighted) in segments {
+        let font = if *highlighted {
+            style.fonts.highlight
         } else {
             style.fonts.normal
         };
-        let color = if *bold {
+        let color = if *highlighted {
             style.colors.highlight
         } else {
             style.colors.normal

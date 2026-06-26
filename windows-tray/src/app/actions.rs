@@ -125,6 +125,13 @@ impl App {
         let _ = save_settings(&state.settings);
     }
 
+    /// Changes the visual style used for highlighted dish-name substrings.
+    pub fn set_highlight_theme(&self, theme: HighlightTheme) {
+        let mut state = self.state.lock().unwrap();
+        state.settings.highlight_theme = theme;
+        let _ = save_settings(&state.settings);
+    }
+
     /// Toggles hiding expensive student meals from rendered menus.
     pub fn toggle_hide_expensive_student_meals(&self) {
         let mut state = self.state.lock().unwrap();

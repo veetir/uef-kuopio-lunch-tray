@@ -16,7 +16,8 @@ use crate::restaurant::{
     restaurant_for_code, restaurant_for_shortcut_index, Provider, Restaurant,
 };
 use crate::settings::{
-    load_settings, normalize_theme, normalize_widget_scale, save_settings, settings_dir, Settings,
+    load_settings, normalize_theme, normalize_widget_scale, save_settings, settings_dir,
+    HighlightTheme, Settings,
 };
 use crate::update;
 use std::collections::HashMap;

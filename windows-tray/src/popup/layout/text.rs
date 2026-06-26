@@ -29,10 +29,12 @@ pub(super) fn measure_lines_layout(
                 text,
                 reserve_prefix,
             } => {
-                let prefix_width = reserve_prefix
-                    .as_deref()
-                    .map(|prefix| text_width_with_font(hdc, normal_font, prefix))
-                    .unwrap_or(0);
+                let prefix_width = shared_prefix_width_for_prefix(
+                    hdc,
+                    lines,
+                    normal_font,
+                    reserve_prefix.as_deref(),
+                );
                 let width = text_width_with_font(hdc, small_font, text);
                 required_content_width =
                     required_content_width.max(width + bullet_width + prefix_width);
@@ -57,11 +59,8 @@ pub(super) fn measure_lines_layout(
                 suffix_segments,
                 ..
             } => {
-                let prefix_width = price_prefix
-                    .as_deref()
-                    .or(reserve_prefix.as_deref())
-                    .map(|prefix| text_width_with_font(hdc, normal_font, prefix))
-                    .unwrap_or(0);
+                let prefix = price_prefix.as_deref().or(reserve_prefix.as_deref());
+                let prefix_width = shared_prefix_width_for_prefix(hdc, lines, normal_font, prefix);
                 let styled_width = text_with_suffix_width(
                     hdc,
                     normal_font,
@@ -144,6 +143,44 @@ pub(super) fn measure_lines_layout(
 fn wrapped_line_count_for_text(hdc: HDC, font: HFONT, text: &str, max_width: i32) -> usize {
     let wrapped = wrap_text_to_width_with_font(hdc, font, text, max_width);
     wrapped.len()
+}
+
+fn shared_prefix_width_for_prefix(
+    hdc: HDC,
+    lines: &[Line],
+    normal_font: HFONT,
+    prefix: Option<&str>,
+) -> i32 {
+    let Some(prefix) = prefix else {
+        return 0;
+    };
+    let bucket = price_prefix_bucket(prefix);
+    if bucket == 0 {
+        return text_width_with_font(hdc, normal_font, prefix);
+    }
+    lines
+        .iter()
+        .filter_map(prefix_for_line)
+        .filter(|candidate| price_prefix_bucket(candidate) == bucket)
+        .map(|candidate| text_width_with_font(hdc, normal_font, candidate))
+        .max()
+        .unwrap_or_else(|| text_width_with_font(hdc, normal_font, prefix))
+}
+
+fn prefix_for_line(line: &Line) -> Option<&str> {
+    match line {
+        Line::Subheading { reserve_prefix, .. } => reserve_prefix.as_deref(),
+        Line::MenuItem {
+            price_prefix,
+            reserve_prefix,
+            ..
+        } => price_prefix.as_deref().or(reserve_prefix.as_deref()),
+        _ => None,
+    }
+}
+
+fn price_prefix_bucket(prefix: &str) -> usize {
+    prefix.chars().filter(|ch| *ch == '€').count()
 }
 
 pub(in crate::popup) fn wrap_text_to_width_with_font_rows(

@@ -416,15 +416,15 @@ fn row_byte_index_from_x(row: &SelectableRow, x: i32) -> usize {
         return 0;
     }
     let rel_x = (x - row.left).max(0);
-    let mut selected = 0usize;
-    for boundary in &row.boundaries {
-        if boundary.x_offset <= rel_x {
-            selected = boundary.byte_index;
-        } else {
-            break;
+    let mut previous = &row.boundaries[0];
+    for boundary in row.boundaries.iter().skip(1) {
+        let midpoint = previous.x_offset + (boundary.x_offset - previous.x_offset) / 2;
+        if rel_x < midpoint {
+            return previous.byte_index.min(row.end.saturating_sub(row.start));
         }
+        previous = boundary;
     }
-    selected.min(row.end.saturating_sub(row.start))
+    previous.byte_index.min(row.end.saturating_sub(row.start))
 }
 
 fn point_in_selectable_row(row: &SelectableRow, x: i32, y: i32) -> bool {

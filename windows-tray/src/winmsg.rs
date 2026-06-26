@@ -7,7 +7,7 @@ use crate::app::{App, FetchApplyOutcome, FetchMessage, UpdateCheckMessage, Updat
 use crate::log::log_line;
 use crate::popup;
 use crate::restaurant::available_restaurants;
-use crate::settings::LunchItemDisplayMode;
+use crate::settings::{HighlightTheme, LunchItemDisplayMode};
 use crate::tray;
 use crate::util::to_wstring;
 use std::sync::{Mutex, OnceLock};
@@ -618,6 +618,30 @@ fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
         tray::CMD_LUNCH_LAYOUT_COMPACT => {
             app.set_lunch_item_display_mode(LunchItemDisplayMode::Compact);
             popup::invalidate_layout_budget_cache();
+        }
+        tray::CMD_HIGHLIGHT_THEME_DEFAULT => {
+            app.set_highlight_theme(HighlightTheme::Default);
+            popup::invalidate_layout_budget_cache();
+            if popup_is_visible(app.hwnd_popup()) {
+                let state = app.snapshot();
+                popup::resize_popup_keep_position(app.hwnd_popup(), &state);
+            }
+        }
+        tray::CMD_HIGHLIGHT_THEME_FRAKTUR => {
+            app.set_highlight_theme(HighlightTheme::Fraktur);
+            popup::invalidate_layout_budget_cache();
+            if popup_is_visible(app.hwnd_popup()) {
+                let state = app.snapshot();
+                popup::resize_popup_keep_position(app.hwnd_popup(), &state);
+            }
+        }
+        tray::CMD_HIGHLIGHT_THEME_DIPLOMA => {
+            app.set_highlight_theme(HighlightTheme::Diploma);
+            popup::invalidate_layout_budget_cache();
+            if popup_is_visible(app.hwnd_popup()) {
+                let state = app.snapshot();
+                popup::resize_popup_keep_position(app.hwnd_popup(), &state);
+            }
         }
         tray::CMD_TOGGLE_HIDE_EXPENSIVE_STUDENT => {
             app.toggle_hide_expensive_student_meals();

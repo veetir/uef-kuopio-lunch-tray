@@ -194,7 +194,7 @@ pub(super) fn parse_huomen_payload(
                 } else {
                     "Lunch".to_string()
                 },
-                price: String::new(),
+                price: huomen_price_text(language),
                 components: lunch_lines,
                 component_recipe_ids: Vec::new(),
                 component_recipe_details: Vec::new(),
@@ -218,6 +218,14 @@ pub(super) fn parse_huomen_payload(
             fallback_payload_date
         },
     })
+}
+
+fn huomen_price_text(language: &str) -> String {
+    if language == "fi" {
+        "Lounas 12,90 € / Keittolounas 10,90 €".to_string()
+    } else {
+        "Lunch 12,90 € / Soup lunch 10,90 €".to_string()
+    }
 }
 
 fn localized_field(value: Option<&Value>, language: &str) -> String {
@@ -320,4 +328,21 @@ fn huomen_lunch_line(lunch: &Value, language: &str) -> String {
     }
 
     normalize_text(&line)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::huomen_price_text;
+
+    #[test]
+    fn huomen_price_text_is_localized() {
+        assert_eq!(
+            huomen_price_text("fi"),
+            "Lounas 12,90 € / Keittolounas 10,90 €"
+        );
+        assert_eq!(
+            huomen_price_text("en"),
+            "Lunch 12,90 € / Soup lunch 10,90 €"
+        );
+    }
 }

@@ -12,6 +12,14 @@ pub enum LunchItemDisplayMode {
     Compact,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HighlightTheme {
+    Default,
+    Fraktur,
+    Diploma,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Persisted settings that drive fetch behavior and popup rendering.
 pub struct Settings {
@@ -26,6 +34,7 @@ pub struct Settings {
     pub lunch_item_display_mode: LunchItemDisplayMode,
     pub hide_expensive_student_meals: bool,
     pub theme: String,
+    pub highlight_theme: HighlightTheme,
     pub widget_scale: String,
     pub show_allergens: bool,
     pub highlight_gluten_free: bool,
@@ -46,11 +55,12 @@ impl Default for Settings {
             show_prices: true,
             show_student_price: true,
             show_staff_price: true,
-            show_guest_price: false,
-            show_price_group_names: true,
+            show_guest_price: true,
+            show_price_group_names: false,
             lunch_item_display_mode: LunchItemDisplayMode::Standard,
             hide_expensive_student_meals: false,
             theme: "dark".to_string(),
+            highlight_theme: HighlightTheme::Default,
             widget_scale: "normal".to_string(),
             show_allergens: true,
             highlight_gluten_free: false,
@@ -106,6 +116,7 @@ struct RawSettings {
     lunch_item_display_mode: Option<String>,
     hide_expensive_student_meals: Option<bool>,
     theme: Option<String>,
+    highlight_theme: Option<String>,
     widget_scale: Option<String>,
     dark_mode: Option<bool>,
     show_allergens: Option<bool>,
@@ -174,6 +185,11 @@ fn decode_settings(data: &str) -> anyhow::Result<Settings> {
             .hide_expensive_student_meals
             .unwrap_or(defaults.hide_expensive_student_meals),
         theme,
+        highlight_theme: raw
+            .highlight_theme
+            .as_deref()
+            .map(normalize_highlight_theme)
+            .unwrap_or(defaults.highlight_theme),
         widget_scale,
         show_allergens,
         highlight_gluten_free: raw
@@ -240,12 +256,22 @@ pub fn normalize_lunch_item_display_mode(value: &str) -> LunchItemDisplayMode {
     }
 }
 
+/// Normalizes user-facing highlight theme values to the supported presets.
+pub fn normalize_highlight_theme(value: &str) -> HighlightTheme {
+    match value.to_ascii_lowercase().as_str() {
+        "fraktur" => HighlightTheme::Fraktur,
+        "diploma" | "gta" | "gta-san-andreas" => HighlightTheme::Diploma,
+        "default" => HighlightTheme::Default,
+        _ => HighlightTheme::Default,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn new_default_uses_standard_lunch_item_display_mode() {
+    fn new_default_uses_price_first_menu_defaults() {
         let settings = Settings::default();
 
         assert_eq!(
@@ -253,6 +279,11 @@ mod tests {
             LunchItemDisplayMode::Standard
         );
         assert!(settings.show_prices);
+        assert!(settings.show_student_price);
+        assert!(settings.show_staff_price);
+        assert!(settings.show_guest_price);
+        assert!(!settings.show_price_group_names);
+        assert!(settings.show_allergens);
     }
 
     #[test]
@@ -276,5 +307,16 @@ mod tests {
             settings.lunch_item_display_mode,
             LunchItemDisplayMode::Compact
         );
+    }
+
+    #[test]
+    fn highlight_theme_decodes_supported_values() {
+        let settings = decode_settings(r#"{"highlight_theme":"fraktur"}"#).unwrap();
+
+        assert_eq!(settings.highlight_theme, HighlightTheme::Fraktur);
+
+        let settings = decode_settings(r#"{"highlight_theme":"diploma"}"#).unwrap();
+
+        assert_eq!(settings.highlight_theme, HighlightTheme::Diploma);
     }
 }

@@ -1,12 +1,98 @@
 //! High-level paint orchestration and line-by-line content rendering.
 
 use super::text::{
-    add_selectable_row, draw_header_button, draw_main_segments, draw_selection_bg_for_row,
-    draw_text_line, draw_text_segments, favorite_match_ranges, fit_text_to_width, segments_for_row,
-    text_segments_width, LinePlacement, RowBounds, RowCaptureContext, SegmentColors, SegmentFonts,
-    SegmentStyle, SelectionOverlay,
+    add_selectable_row, add_selectable_segmented_row, draw_header_button, draw_main_segments,
+    draw_selection_bg_for_row, draw_selection_bg_for_segments, draw_text_line, draw_text_segments,
+    favorite_match_ranges, fit_text_to_width, segments_for_row, text_segments_width, LinePlacement,
+    RowBounds, RowCaptureContext, SegmentColors, SegmentFonts, SegmentStyle, SelectionOverlay,
 };
 use super::*;
+
+const BREITKOPF_FRAKTUR_FONT: &[u8] = include_bytes!("../../../assets/fonts/BreitkopfFraktur.ttf");
+const DIPLOMA_FONT: &[u8] = include_bytes!("../../../assets/fonts/diploma.ttf");
+static BREITKOPF_FRAKTUR_LOADED: OnceLock<bool> = OnceLock::new();
+static DIPLOMA_LOADED: OnceLock<bool> = OnceLock::new();
+
+struct HighlightFontDef {
+    bytes: &'static [u8],
+    loaded: &'static OnceLock<bool>,
+    face: &'static str,
+    point_size: i32,
+}
+
+fn highlight_font_def(
+    highlight_theme: crate::settings::HighlightTheme,
+) -> Option<HighlightFontDef> {
+    match highlight_theme {
+        crate::settings::HighlightTheme::Fraktur => Some(HighlightFontDef {
+            bytes: BREITKOPF_FRAKTUR_FONT,
+            loaded: &BREITKOPF_FRAKTUR_LOADED,
+            face: "Breitkopf Fraktur",
+            point_size: 16,
+        }),
+        crate::settings::HighlightTheme::Diploma => Some(HighlightFontDef {
+            bytes: DIPLOMA_FONT,
+            loaded: &DIPLOMA_LOADED,
+            face: "Diploma",
+            point_size: 16,
+        }),
+        crate::settings::HighlightTheme::Default => None,
+    }
+}
+
+fn ensure_highlight_font_loaded(def: &HighlightFontDef) -> bool {
+    *def.loaded.get_or_init(|| unsafe {
+        let mut font_count = 0u32;
+        let handle = AddFontMemResourceEx(
+            def.bytes.as_ptr() as *const c_void,
+            def.bytes.len() as u32,
+            None,
+            &mut font_count,
+        );
+        handle.0 != 0 && font_count > 0
+    })
+}
+
+fn create_highlight_font(
+    hdc: HDC,
+    scale_factor: f32,
+    fallback_font: HFONT,
+    highlight_theme: crate::settings::HighlightTheme,
+) -> HFONT {
+    let Some(def) = highlight_font_def(highlight_theme) else {
+        return fallback_font;
+    };
+    if !ensure_highlight_font_loaded(&def) {
+        return fallback_font;
+    }
+    unsafe {
+        let dpi_y = GetDeviceCaps(hdc, LOGPIXELSY);
+        let height = -MulDiv(scale_px(def.point_size, scale_factor).max(9), dpi_y, 72);
+        let face = to_wstring(def.face);
+        let font = CreateFontW(
+            height,
+            0,
+            0,
+            0,
+            700,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            PCWSTR(face.as_ptr()),
+        );
+        if font.0 == 0 {
+            fallback_font
+        } else {
+            font
+        }
+    }
+}
+
 pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
     unsafe {
         let mut ps = PAINTSTRUCT::default();
@@ -42,6 +128,8 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
         let scale = popup_scale(&state.settings);
         let (normal_font, bold_font, small_font, small_bold_font) =
             create_fonts(hdc, &state.settings.theme, scale.factor);
+        let highlight_font =
+            create_highlight_font(hdc, scale.factor, bold_font, state.settings.highlight_theme);
         let _old_font = SelectObject(hdc, normal_font);
 
         let metrics = text_metrics(hdc, normal_font);
@@ -148,6 +236,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                             line_height,
                             normal_font,
                             bold_font,
+                            highlight_font,
                             small_font,
                             small_bold_font,
                             favorites: &favorites,
@@ -208,6 +297,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                             line_height,
                             normal_font,
                             bold_font,
+                            highlight_font,
                             small_font,
                             small_bold_font,
                             favorites: &favorites,
@@ -285,6 +375,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                             line_height,
                             normal_font,
                             bold_font,
+                            highlight_font,
                             small_font,
                             small_bold_font,
                             favorites: &favorites,
@@ -320,6 +411,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                             line_height,
                             normal_font,
                             bold_font,
+                            highlight_font,
                             small_font,
                             small_bold_font,
                             favorites: &favorites,
@@ -366,6 +458,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                     line_height,
                     normal_font,
                     bold_font,
+                    highlight_font,
                     small_font,
                     small_bold_font,
                     favorites: &favorites,
@@ -378,6 +471,9 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
         }
 
         SelectObject(hdc, _old_font);
+        if highlight_font.0 != bold_font.0 {
+            DeleteObject(highlight_font);
+        }
         DeleteObject(normal_font);
         DeleteObject(bold_font);
         DeleteObject(small_font);
@@ -413,6 +509,7 @@ struct DrawLayerParams<'a> {
     line_height: i32,
     normal_font: HFONT,
     bold_font: HFONT,
+    highlight_font: HFONT,
     small_font: HFONT,
     small_bold_font: HFONT,
     favorites: &'a FavoritesSnapshot,
@@ -468,10 +565,12 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                     SelectObject(hdc, params.small_font);
                     SetTextColor(hdc, params.suffix_color);
                 }
-                let prefix_width = reserve_prefix
-                    .as_deref()
-                    .map(|prefix| text_width_with_font(hdc, params.normal_font, prefix))
-                    .unwrap_or(0);
+                let prefix_width = shared_prefix_width_for_prefix(
+                    hdc,
+                    lines,
+                    params.normal_font,
+                    reserve_prefix.as_deref(),
+                );
                 let indent = params.scale.padding_x + bullet_width + prefix_width;
                 let wrapped = wrap_text_to_width_with_font(
                     hdc,
@@ -517,11 +616,9 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                     SetTextColor(hdc, params.body_text_color);
                 }
                 let favorite_ranges = favorite_match_ranges(main, params.favorites);
-                let prefix_width = price_prefix
-                    .as_deref()
-                    .or(reserve_prefix.as_deref())
-                    .map(|prefix| text_width_with_font(hdc, params.normal_font, prefix))
-                    .unwrap_or(0);
+                let prefix = price_prefix.as_deref().or(reserve_prefix.as_deref());
+                let prefix_width =
+                    shared_prefix_width_for_prefix(hdc, lines, params.normal_font, prefix);
                 let styled_width = text_with_suffix_width(
                     hdc,
                     params.normal_font,
@@ -551,7 +648,7 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                         bullet_width,
                         InlineSuffixAlignmentParams {
                             normal_font: params.normal_font,
-                            bold_font: params.bold_font,
+                            highlight_font: params.highlight_font,
                             small_font: params.small_font,
                             small_bold_font: params.small_bold_font,
                             content_width: params.content_width,
@@ -587,11 +684,15 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                     };
                     let row_segments =
                         segments_for_row(&clipped_main, row.start, row.end, &favorite_ranges);
+                    let main_segment_fonts = SegmentFonts {
+                        normal: params.normal_font,
+                        highlight: params.highlight_font,
+                    };
                     let main_width = text_segments_width(
                         hdc,
                         &row_segments,
                         params.normal_font,
-                        params.bold_font,
+                        params.highlight_font,
                     );
                     if *show_bullet {
                         draw_text_line(hdc, BULLET_PREFIX, params.scale.padding_x, y);
@@ -612,9 +713,10 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                         );
                     }
                     if let Some(selection) = selected_item_range {
-                        draw_selection_bg_for_row(
+                        draw_selection_bg_for_segments(
                             hdc,
                             &row,
+                            &row_segments,
                             RowBounds {
                                 left: main_x,
                                 top: y,
@@ -625,6 +727,7 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                                 end: selection.end,
                                 bg_color: params.selection_bg_color,
                             },
+                            main_segment_fonts,
                         );
                     }
                     draw_main_segments(
@@ -632,10 +735,7 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                         &row_segments,
                         LinePlacement { x: main_x, y },
                         SegmentStyle {
-                            fonts: SegmentFonts {
-                                normal: params.normal_font,
-                                bold: params.bold_font,
-                            },
+                            fonts: main_segment_fonts,
                             colors: SegmentColors {
                                 normal: params.body_text_color,
                                 highlight: params.favorite_highlight_color,
@@ -643,7 +743,7 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                         },
                     );
                     if let Some(ref mut draw_capture) = capture {
-                        add_selectable_row(
+                        add_selectable_segmented_row(
                             &mut draw_capture.layout,
                             item_id.unwrap_or(0),
                             &row,
@@ -656,6 +756,8 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                                 hdc,
                                 font: params.normal_font,
                             },
+                            &row_segments,
+                            main_segment_fonts,
                         );
                     }
                     if !suffix_segments.is_empty() {
@@ -676,7 +778,7 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                                 SegmentStyle {
                                     fonts: SegmentFonts {
                                         normal: params.small_font,
-                                        bold: params.small_bold_font,
+                                        highlight: params.small_bold_font,
                                     },
                                     colors: SegmentColors {
                                         normal: params.suffix_color,
@@ -722,10 +824,17 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                                 params.recipe_border_color,
                             );
                         }
+                        let row_segments =
+                            segments_for_row(main, row.start, row.end, &favorite_ranges);
+                        let main_segment_fonts = SegmentFonts {
+                            normal: params.normal_font,
+                            highlight: params.highlight_font,
+                        };
                         if let Some(selection) = selected_item_range {
-                            draw_selection_bg_for_row(
+                            draw_selection_bg_for_segments(
                                 hdc,
                                 row,
+                                &row_segments,
                                 RowBounds {
                                     left: main_x,
                                     top: y,
@@ -736,19 +845,15 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                                     end: selection.end,
                                     bg_color: params.selection_bg_color,
                                 },
+                                main_segment_fonts,
                             );
                         }
-                        let row_segments =
-                            segments_for_row(main, row.start, row.end, &favorite_ranges);
                         draw_main_segments(
                             hdc,
                             &row_segments,
                             LinePlacement { x: main_x, y },
                             SegmentStyle {
-                                fonts: SegmentFonts {
-                                    normal: params.normal_font,
-                                    bold: params.bold_font,
-                                },
+                                fonts: main_segment_fonts,
                                 colors: SegmentColors {
                                     normal: params.body_text_color,
                                     highlight: params.favorite_highlight_color,
@@ -756,7 +861,7 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                             },
                         );
                         if let Some(ref mut draw_capture) = capture {
-                            add_selectable_row(
+                            add_selectable_segmented_row(
                                 &mut draw_capture.layout,
                                 item_id.unwrap_or(0),
                                 row,
@@ -769,6 +874,8 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                                     hdc,
                                     font: params.normal_font,
                                 },
+                                &row_segments,
+                                main_segment_fonts,
                             );
                         }
                         y += params.line_height;
@@ -795,7 +902,7 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                                 SegmentStyle {
                                     fonts: SegmentFonts {
                                         normal: params.small_font,
-                                        bold: params.small_bold_font,
+                                        highlight: params.small_bold_font,
                                     },
                                     colors: SegmentColors {
                                         normal: params.suffix_color,
@@ -911,7 +1018,12 @@ fn inline_suffix_alignment_width(
 
         let favorite_ranges = favorite_match_ranges(main, params.favorites);
         let row_segments = segments_for_row(main, 0, main.len(), &favorite_ranges);
-        let width = text_segments_width(hdc, &row_segments, params.normal_font, params.bold_font);
+        let width = text_segments_width(
+            hdc,
+            &row_segments,
+            params.normal_font,
+            params.highlight_font,
+        );
         max_width = Some(max_width.map_or(width, |current| current.max(width)));
         candidates += 1;
     }
@@ -923,10 +1035,48 @@ fn inline_suffix_alignment_width(
     }
 }
 
+fn shared_prefix_width_for_prefix(
+    hdc: HDC,
+    lines: &[Line],
+    normal_font: HFONT,
+    prefix: Option<&str>,
+) -> i32 {
+    let Some(prefix) = prefix else {
+        return 0;
+    };
+    let bucket = price_prefix_bucket(prefix);
+    if bucket == 0 {
+        return text_width_with_font(hdc, normal_font, prefix);
+    }
+    lines
+        .iter()
+        .filter_map(|line| prefix_for_line(line))
+        .filter(|candidate| price_prefix_bucket(candidate) == bucket)
+        .map(|candidate| text_width_with_font(hdc, normal_font, candidate))
+        .max()
+        .unwrap_or_else(|| text_width_with_font(hdc, normal_font, prefix))
+}
+
+fn prefix_for_line(line: &Line) -> Option<&str> {
+    match line {
+        Line::Subheading { reserve_prefix, .. } => reserve_prefix.as_deref(),
+        Line::MenuItem {
+            price_prefix,
+            reserve_prefix,
+            ..
+        } => price_prefix.as_deref().or(reserve_prefix.as_deref()),
+        _ => None,
+    }
+}
+
+fn price_prefix_bucket(prefix: &str) -> usize {
+    prefix.chars().filter(|ch| *ch == '€').count()
+}
+
 #[derive(Debug, Clone, Copy)]
 struct InlineSuffixAlignmentParams<'a> {
     normal_font: HFONT,
-    bold_font: HFONT,
+    highlight_font: HFONT,
     small_font: HFONT,
     small_bold_font: HFONT,
     content_width: i32,

@@ -106,10 +106,20 @@ fn parse_pranzeria_payload_for_date(
     let mut lines_by_date: std::collections::HashMap<String, Vec<String>> =
         std::collections::HashMap::new();
     let mut current_date_iso = String::new();
+    let mut price_parts: Vec<String> = Vec::new();
 
     for captures in block_re.captures_iter(&payload_text) {
         let line = strip_html_text(captures.get(1).map(|m| m.as_str()).unwrap_or_default());
         if line.is_empty() {
+            continue;
+        }
+
+        if let Some(parts) = extract_pranzeria_price_parts(&line) {
+            for part in parts {
+                if !price_parts.iter().any(|existing| existing == &part) {
+                    price_parts.push(part);
+                }
+            }
             continue;
         }
 
@@ -153,7 +163,7 @@ fn parse_pranzeria_payload_for_date(
             } else {
                 vec![MenuGroup {
                     name: "Lounas".to_string(),
-                    price: String::new(),
+                    price: order_pranzeria_price_parts(price_parts).join(" / "),
                     components: lunch_lines,
                     component_recipe_ids: Vec::new(),
                     component_recipe_details: Vec::new(),
@@ -338,6 +348,49 @@ fn is_pranzeria_legend_line(line_text: &str) -> bool {
         || clean.contains("Vegaani")
 }
 
+fn extract_pranzeria_price_parts(line_text: &str) -> Option<Vec<String>> {
+    let clean = normalize_text(line_text);
+    if clean.is_empty() {
+        return None;
+    }
+    let re = Regex::new(
+        r"(?i)\b(?P<label>SALAATTILOUNAS|LOUNASBUFFET|SOPIMUSLOUNAS)\b\s+(?P<price>\d{1,2}[,.]\d{2})\s*€",
+    )
+    .ok()?;
+    let mut parts = Vec::new();
+    for captures in re.captures_iter(&clean) {
+        let label = normalize_pranzeria_price_label(captures.name("label")?.as_str());
+        let price = captures.name("price")?.as_str().replace('.', ",");
+        parts.push(format!("{label} {price} €"));
+    }
+    (!parts.is_empty()).then_some(parts)
+}
+
+fn order_pranzeria_price_parts(parts: Vec<String>) -> Vec<String> {
+    let order = ["Salaattilounas", "Lounasbuffet", "Sopimuslounas"];
+    let mut out = Vec::new();
+    for label in order {
+        if let Some(part) = parts.iter().find(|part| part.starts_with(label)) {
+            out.push(part.clone());
+        }
+    }
+    for part in parts {
+        if !out.iter().any(|existing| existing == &part) {
+            out.push(part);
+        }
+    }
+    out
+}
+
+fn normalize_pranzeria_price_label(label: &str) -> &'static str {
+    match label.to_ascii_uppercase().as_str() {
+        "SALAATTILOUNAS" => "Salaattilounas",
+        "LOUNASBUFFET" => "Lounasbuffet",
+        "SOPIMUSLOUNAS" => "Sopimuslounas",
+        _ => "Lounas",
+    }
+}
+
 fn normalize_pranzeria_lines(raw_lines: Vec<String>) -> Vec<String> {
     let mut lines = Vec::new();
     for raw in raw_lines {
@@ -345,12 +398,52 @@ fn normalize_pranzeria_lines(raw_lines: Vec<String>) -> Vec<String> {
         if clean.is_empty() {
             continue;
         }
-        if lines.last().is_some_and(|existing| existing == &clean) {
-            continue;
+        for line in split_fused_pranzeria_items(&clean) {
+            if lines.last().is_some_and(|existing| existing == &line) {
+                continue;
+            }
+            lines.push(line);
         }
-        lines.push(clean);
     }
     lines
+}
+
+fn split_fused_pranzeria_items(line: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut current = normalize_text(line);
+    if current.is_empty() {
+        return out;
+    }
+
+    while let Some(split_at) = fused_pranzeria_split_index(&current) {
+        let left = normalize_text(&current[..split_at]);
+        if !left.is_empty() {
+            out.push(left);
+        }
+        current = normalize_text(&current[split_at..]);
+    }
+    if !current.is_empty() {
+        out.push(current);
+    }
+    out
+}
+
+fn fused_pranzeria_split_index(line: &str) -> Option<usize> {
+    let dish_start_re = Regex::new(
+        r"\b(?:Pasta|Pollo|Manzo|Maiale|Salmone|Gnocchi|Cotoletta|Porco|Spezzatino|Lasagne|Risotto|Ravioli|Tagliatelle|Spaghetti|Fusilli|Penne|Rigatoni)\b",
+    )
+    .ok()?;
+    let allergen_tail_re =
+        Regex::new(r"(?i)(?:\b(?:G|L|M|V|VG)\b|pyydet(?:t|)äessä\s+G|pyydettäessä\s+G)\s*$")
+            .ok()?;
+
+    for m in dish_start_re.find_iter(line).skip(1) {
+        let before = line[..m.start()].trim_end();
+        if allergen_tail_re.is_match(before) {
+            return Some(m.start());
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -486,6 +579,53 @@ mod tests {
             .components
             .iter()
             .any(|line| line.contains("Polpette Alla Cacciatora")));
+    }
+
+    #[test]
+    fn pranzeria_payload_splits_fused_items_after_allergen_tail() {
+        let today = Date::from_calendar_date(2026, Month::June, 26).expect("valid date");
+        let html = "\
+            <p>Perjantai 26.6.2026</p>\
+            <p>Pollo Aglio &amp; Parmigiano (Kanan Siipiä Valkosipulilla &amp; Parmesaanilla) L Pasta Tonnarella (Pastaa Kermaisessa Tonnikalakastikkeessa) Pyydettäessä G</p>\
+            <p>L = Laktoositon</p>";
+
+        let parsed = parse_pranzeria_payload_for_date(
+            html,
+            restaurant_for_code("pranzeria-html", true),
+            today,
+        );
+        let today_menu = parsed.today_menu.expect("today_menu");
+        assert_eq!(
+            today_menu.menus[0].components,
+            vec![
+                "Pollo Aglio & Parmigiano (Kanan Siipiä Valkosipulilla & Parmesaanilla) L"
+                    .to_string(),
+                "Pasta Tonnarella (Pastaa Kermaisessa Tonnikalakastikkeessa) Pyydettäessä G"
+                    .to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn pranzeria_payload_reads_price_summary() {
+        let today = Date::from_calendar_date(2026, Month::June, 26).expect("valid date");
+        let html = "\
+            <p>SALAATTILOUNAS 10.90 € (SIS. SALAATTI, ANTIPASTOPÖYTÄ, KAHVI &amp; JÄLKIRUOKA)
+            LOUNASBUFFET 14.00 € (SIS. SALAATTI, ANTIPASTOPÖYTÄ, PIZZA, PASTA, PÄÄRUOKA, KAHVI &amp; JÄLKIRUOKA)
+            SOPIMUSLOUNAS 13.80 €</p>\
+            <p>Perjantai 26.6.2026</p>\
+            <p>Salaatti- &amp; AntipastoBuffet</p>";
+
+        let parsed = parse_pranzeria_payload_for_date(
+            html,
+            restaurant_for_code("pranzeria-html", true),
+            today,
+        );
+        let today_menu = parsed.today_menu.expect("today_menu");
+        assert_eq!(
+            today_menu.menus[0].price,
+            "Salaattilounas 10,90 € / Lounasbuffet 14,00 € / Sopimuslounas 13,80 €"
+        );
     }
 
     #[test]

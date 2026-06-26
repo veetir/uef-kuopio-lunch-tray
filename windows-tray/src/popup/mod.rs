@@ -17,16 +17,18 @@ use crate::restaurant::{available_restaurants, is_hard_closed_today, Provider, R
 use crate::settings::Settings;
 use crate::util::to_wstring;
 use std::cmp::{max, min};
+use std::ffi::c_void;
 use std::sync::{Mutex, OnceLock};
 use time::{OffsetDateTime, UtcOffset};
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{COLORREF, HWND, POINT, RECT};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW, CreateSolidBrush,
-    DeleteDC, DeleteObject, EndPaint, FillRect, GetDeviceCaps, GetMonitorInfoW,
-    GetTextExtentPoint32W, GetTextMetricsW, IntersectClipRect, InvalidateRect, MonitorFromPoint,
-    RestoreDC, SaveDC, SelectObject, SetBkMode, SetTextColor, TextOutW, HDC, HFONT, LOGPIXELSY,
-    MONITORINFO, MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, SRCCOPY, TEXTMETRICW, TRANSPARENT,
+    AddFontMemResourceEx, BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC,
+    CreateFontW, CreateSolidBrush, DeleteDC, DeleteObject, EndPaint, FillRect, GetDeviceCaps,
+    GetMonitorInfoW, GetTextExtentPoint32W, GetTextMetricsW, IntersectClipRect, InvalidateRect,
+    MonitorFromPoint, RestoreDC, SaveDC, SelectObject, SetBkMode, SetTextColor, TextOutW, HDC,
+    HFONT, LOGPIXELSY, MONITORINFO, MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, SRCCOPY, TEXTMETRICW,
+    TRANSPARENT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GetClientRect, GetCursorPos, GetWindowRect, KillTimer, SetTimer, SetWindowPos, ShowWindow,
@@ -96,6 +98,7 @@ struct PopupLineBudgetKey {
     today_key: String,
     language: String,
     theme: String,
+    highlight_theme: crate::settings::HighlightTheme,
     widget_scale: String,
     dpi_y: i32,
     enable_antell_restaurants: bool,
@@ -139,6 +142,7 @@ struct PopupDesiredSizeKey {
     enable_antell_restaurants: bool,
     language: String,
     theme: String,
+    highlight_theme: crate::settings::HighlightTheme,
     widget_scale: String,
     dpi_y: i32,
     show_prices: bool,
