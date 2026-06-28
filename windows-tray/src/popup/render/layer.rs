@@ -54,7 +54,7 @@ fn ensure_highlight_font_loaded(def: &HighlightFontDef) -> bool {
 }
 
 fn create_highlight_font(
-    hdc: HDC,
+    _hdc: HDC,
     scale_factor: f32,
     fallback_font: HFONT,
     highlight_theme: crate::settings::HighlightTheme,
@@ -66,8 +66,7 @@ fn create_highlight_font(
         return fallback_font;
     }
     unsafe {
-        let dpi_y = GetDeviceCaps(hdc, LOGPIXELSY);
-        let height = -MulDiv(scale_px(def.point_size, scale_factor).max(9), dpi_y, 72);
+        let height = -MulDiv(scale_px(def.point_size, scale_factor).max(9), BASE_DPI, 72);
         let face = to_wstring(def.face);
         let font = CreateFontW(
             height,
@@ -125,7 +124,8 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
         DeleteObject(brush);
         SetBkMode(hdc, TRANSPARENT);
 
-        let scale = popup_scale(&state.settings);
+        let dpi_y = GetDeviceCaps(hdc, LOGPIXELSY);
+        let scale = popup_scale_for_dpi(&state.settings, dpi_y);
         let (normal_font, bold_font, small_font, small_bold_font) =
             create_fonts(hdc, &state.settings.theme, scale.factor);
         let highlight_font =

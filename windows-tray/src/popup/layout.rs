@@ -33,8 +33,9 @@ fn widget_scale_factor(value: &str) -> f32 {
     }
 }
 
-pub(super) fn popup_scale(settings: &Settings) -> PopupScale {
-    let factor = widget_scale_factor(&settings.widget_scale);
+pub(super) fn popup_scale_for_dpi(settings: &Settings, dpi_y: i32) -> PopupScale {
+    let dpi_factor = (dpi_y.max(1) as f32) / (BASE_DPI as f32);
+    let factor = widget_scale_factor(&settings.widget_scale) * dpi_factor;
     let padding_x = scale_px(PADDING_X, factor).max(8);
     let padding_y = scale_px(PADDING_Y, factor).max(6);
     let min_width = scale_px(POPUP_MIN_WIDTH, factor).max(220);

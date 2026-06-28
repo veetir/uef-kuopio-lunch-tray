@@ -1,5 +1,5 @@
 use super::content::invalidate_favorites_cache;
-use super::layout::{header_layout, popup_scale};
+use super::layout::{header_layout, popup_scale_for_dpi};
 use super::*;
 
 const CLICK_SLOP_PX: i32 = 3;
@@ -16,7 +16,10 @@ pub(super) fn header_button_at(
             return None;
         }
         let width = rect.right - rect.left;
-        let scale = popup_scale(settings);
+        let hdc = windows::Win32::Graphics::Gdi::GetDC(hwnd);
+        let dpi_y = GetDeviceCaps(hdc, LOGPIXELSY);
+        windows::Win32::Graphics::Gdi::ReleaseDC(hwnd, hdc);
+        let scale = popup_scale_for_dpi(settings, dpi_y);
         let layout = header_layout(width, &scale);
         if point_in_rect(&layout.prev, x, y) {
             return Some(HeaderButtonAction::Prev);

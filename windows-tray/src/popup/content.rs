@@ -158,6 +158,12 @@ fn seasonal_closure_for(code: &str) -> Option<SeasonalClosure> {
             "Cafe Snellari",
             "Cafe Snellari",
         ),
+        "0437" => (
+            date(Month::July, 4)?,
+            date(Month::July, 19)?,
+            "Snellmania",
+            "Snellmania",
+        ),
         "0436" => (
             date(Month::June, 18)?,
             date(Month::August, 9)?,
@@ -886,6 +892,27 @@ mod tests {
         assert!(notice.contains("Cafe Snellari on suljettu"));
         assert!(notice.contains("08-05-2026"));
         assert!(notice.contains("30-08-2026"));
+
+        let snellmania = time::Date::from_calendar_date(2026, Month::July, 4).expect("valid date");
+        let notice = seasonal_closure_notice("0437", "fi", snellmania).expect("notice");
+
+        assert!(notice.contains("Snellmania on suljettu"));
+        assert!(notice.contains("04-07-2026"));
+        assert!(notice.contains("19-07-2026"));
+    }
+
+    #[test]
+    fn seasonal_closure_notice_covers_snellmania_summer_2026_in_english() {
+        use time::Month;
+        let inside = time::Date::from_calendar_date(2026, Month::July, 19).expect("valid date");
+        let outside = time::Date::from_calendar_date(2026, Month::July, 20).expect("valid date");
+
+        let notice = seasonal_closure_notice("0437", "en", inside).expect("notice");
+
+        assert!(notice.contains("Snellmania is closed"));
+        assert!(notice.contains("04-07-2026"));
+        assert!(notice.contains("19-07-2026"));
+        assert!(seasonal_closure_notice("0437", "en", outside).is_none());
     }
 
     #[test]

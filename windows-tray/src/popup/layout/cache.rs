@@ -46,6 +46,7 @@ pub(super) fn popup_cached_layout_budget(
         bold_font,
         small_font,
         small_bold_font,
+        dpi_y,
     );
     update_line_budget_cache(key, signatures, budget);
     budget
@@ -208,9 +209,10 @@ fn max_today_cached_layout_budget(
     bold_font: HFONT,
     small_font: HFONT,
     small_bold_font: HFONT,
+    dpi_y: i32,
 ) -> CachedLayoutBudget {
     let settings = &state.settings;
-    let scale = popup_scale(settings);
+    let scale = popup_scale_for_dpi(settings, dpi_y);
     let mut max_wrapped_lines: Option<usize> = None;
     let mut max_content_width_px: Option<i32> = None;
 

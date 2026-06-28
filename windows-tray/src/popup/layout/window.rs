@@ -34,7 +34,10 @@ pub(in crate::popup) fn show_popup_at(hwnd: HWND, state: &AppState, anchor: POIN
 pub(in crate::popup) fn show_popup_for_tray_icon(hwnd: HWND, state: &AppState, tray_rect: RECT) {
     unsafe {
         let (width, height) = desired_size(hwnd, state);
-        let scale = popup_scale(&state.settings);
+        let hdc = windows::Win32::Graphics::Gdi::GetDC(hwnd);
+        let dpi_y = GetDeviceCaps(hdc, LOGPIXELSY);
+        windows::Win32::Graphics::Gdi::ReleaseDC(hwnd, hdc);
+        let scale = popup_scale_for_dpi(&state.settings, dpi_y);
         let (width, height) = constrain_size_to_work_area_near_tray_rect(width, height, tray_rect);
         let (x, y) = position_near_tray_rect(width, height, tray_rect, scale.anchor_gap);
         let _ = SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, SWP_SHOWWINDOW);
@@ -143,7 +146,7 @@ fn desired_size(hwnd: HWND, state: &AppState) -> (i32, i32) {
             }
         }
 
-        let scale = popup_scale(&state.settings);
+        let scale = popup_scale_for_dpi(&state.settings, dpi_y);
         let (normal_font, bold_font, small_font, small_bold_font) =
             create_fonts(hdc, &state.settings.theme, scale.factor);
         let current_lines = build_lines(state);
@@ -220,14 +223,13 @@ fn desired_size(hwnd: HWND, state: &AppState) -> (i32, i32) {
 }
 
 pub(in crate::popup) fn create_fonts(
-    hdc: HDC,
+    _hdc: HDC,
     theme: &str,
     scale_factor: f32,
 ) -> (HFONT, HFONT, HFONT, HFONT) {
     unsafe {
-        let dpi = GetDeviceCaps(hdc, LOGPIXELSY);
-        let height_normal = -MulDiv(scale_px(12, scale_factor).max(8), dpi, 72);
-        let height_small = -MulDiv(scale_px(10, scale_factor).max(7), dpi, 72);
+        let height_normal = -MulDiv(scale_px(12, scale_factor).max(8), BASE_DPI, 72);
+        let height_small = -MulDiv(scale_px(10, scale_factor).max(7), BASE_DPI, 72);
         let face = to_wstring(theme_font_family(theme));
 
         let normal = CreateFontW(

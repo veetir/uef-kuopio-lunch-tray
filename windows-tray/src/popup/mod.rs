@@ -63,6 +63,7 @@ const RECIPE_DETAIL_MARGIN_Y: i32 = 3;
 const RECIPE_DETAIL_MAX_VISIBLE_ROWS: usize = 14;
 const RECIPE_DETAIL_SCROLLBAR_WIDTH: i32 = 5;
 const RECIPE_DETAIL_WHEEL_ROWS: i32 = 3;
+const BASE_DPI: i32 = 96;
 
 static POPUP_LINE_BUDGET_CACHE: OnceLock<Mutex<Option<PopupLineBudgetCache>>> = OnceLock::new();
 static POPUP_LINE_SIGNATURE_CACHE: OnceLock<Mutex<Option<PopupLineSignatureCache>>> =
