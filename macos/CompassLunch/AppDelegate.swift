@@ -4,9 +4,10 @@ import SwiftUI
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let appModel = AppModel.shared
+    private let panelState = PanelState()
+    private let settingsState = SettingsState(appModel: .shared)
     private let panel = LunchPanel()
     private var statusItem: NSStatusItem?
-    private var settingsWindowController: NSWindowController?
     private var refreshTimer: Timer?
     private var localEventMonitor: Any?
     private var globalScrollMonitor: Any?
@@ -17,6 +18,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil,
+           ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] != "1" {
+            appModel.configureLaunchAtLoginIfNeeded()
+        }
 
         let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = statusItem.button {
@@ -68,6 +73,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func hidePanel() {
         panel.orderOut(nil)
         statusItem?.button?.highlight(false)
+        panelState.isShowingSettings = false
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -83,28 +89,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    @objc func openSettings() {
-        hidePanel()
-        NSApp.activate(ignoringOtherApps: true)
-
-        if settingsWindowController == nil {
-            let hostingController = NSHostingController(
-                rootView: SettingsView()
-                    .environmentObject(appModel)
-            )
-            let window = NSWindow(contentViewController: hostingController)
-            window.title = "Lunch Tray"
-            window.styleMask = [.titled, .closable, .miniaturizable]
-            window.isReleasedWhenClosed = false
-            window.collectionBehavior = [.moveToActiveSpace]
-            window.center()
-            settingsWindowController = NSWindowController(window: window)
-        }
-
-        settingsWindowController?.showWindow(nil)
-        settingsWindowController?.window?.makeKeyAndOrderFront(nil)
-    }
-
     @objc private func terminateApp() {
         NSApp.terminate(nil)
     }
@@ -114,16 +98,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let statusItem, let button = statusItem.button else { return }
 
         let menu = NSMenu()
-        let settingsTitle = appModel.language == .fi ? "Asetukset…" : "Settings…"
-        let settingsItem = NSMenuItem(
-            title: settingsTitle,
-            action: #selector(openSettings),
-            keyEquivalent: ","
-        )
-        settingsItem.target = self
-        menu.addItem(settingsItem)
-        menu.addItem(.separator())
-
         let quitTitle = appModel.language == .fi ? "Lopeta" : "Quit"
         let quitItem = NSMenuItem(
             title: quitTitle,
@@ -177,6 +151,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func handleKeyDown(_ event: NSEvent) -> Bool {
         guard panel.isVisible else { return false }
+
+        if panelState.isShowingSettings {
+            if event.keyCode == 53 {
+                panelState.isShowingSettings = false
+                return true
+            }
+            return false
+        }
+
         let blockedModifiers: NSEvent.ModifierFlags = [.command, .control, .option]
         guard event.modifierFlags.intersection(blockedModifiers).isEmpty else {
             return false
@@ -213,6 +196,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func handleRestaurantScroll(_ event: NSEvent) -> Bool {
+        guard !panelState.isShowingSettings else { return false }
         guard cursorIsOverStatusItem() else {
             scrollAccumulator = 0
             return false
@@ -254,6 +238,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.contentViewController = NSHostingController(
             rootView: MenuPopoverView()
                 .environmentObject(appModel)
+                .environmentObject(panelState)
+                .environmentObject(settingsState)
         )
         panel.setContentSize(panelSize)
         panel.styleMask = [.borderless, .nonactivatingPanel]
@@ -264,6 +250,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.hidesOnDeactivate = false
         panel.level = .popUpMenu
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
+        panel.contentViewController?.view.layoutSubtreeIfNeeded()
     }
 
     private func positionPanel(below button: NSStatusBarButton) {

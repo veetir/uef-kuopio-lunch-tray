@@ -6,7 +6,16 @@ struct CacheStore {
     init(fileManager: FileManager = .default) {
         let base = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first
             ?? fileManager.temporaryDirectory
-        directory = base.appendingPathComponent("CompassLunch", isDirectory: true)
+        self.init(
+            directory: base.appendingPathComponent(
+                "CompassLunch",
+                isDirectory: true
+            )
+        )
+    }
+
+    init(directory: URL) {
+        self.directory = directory
     }
 
     func load(restaurantCode: String, language: AppLanguage) -> MenuSnapshot? {

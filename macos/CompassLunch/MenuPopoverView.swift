@@ -1,8 +1,14 @@
 import AppKit
 import SwiftUI
 
+@MainActor
+final class PanelState: ObservableObject {
+    @Published var isShowingSettings = false
+}
+
 struct MenuPopoverView: View {
     @EnvironmentObject private var appModel: AppModel
+    @EnvironmentObject private var panelState: PanelState
     @State private var expandedMealID: String?
 
     var body: some View {
@@ -12,24 +18,30 @@ struct MenuPopoverView: View {
             content
         }
         .frame(width: 440, height: 560)
-        .background(.regularMaterial)
+        .background(.ultraThickMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .lunchTrayAppearance(accent: appModel.accent)
         .onChange(of: appModel.selectedRestaurantCode) { _ in
             expandedMealID = nil
         }
     }
 
     private var header: some View {
-        HStack(spacing: 8) {
-            Button {
-                appModel.selectPreviousRestaurant()
-            } label: {
-                Image(systemName: "chevron.left")
-                    .frame(width: 24, height: 24)
-            }
-            .buttonStyle(.borderless)
-            .help(localized("Previous restaurant (←)", "Edellinen ravintola (←)"))
+        ZStack {
+            settingsHeader
+                .opacity(panelState.isShowingSettings ? 1 : 0)
+                .allowsHitTesting(panelState.isShowingSettings)
+                .accessibilityHidden(!panelState.isShowingSettings)
 
+            menuHeader
+                .opacity(panelState.isShowingSettings ? 0 : 1)
+                .allowsHitTesting(!panelState.isShowingSettings)
+                .accessibilityHidden(panelState.isShowingSettings)
+        }
+    }
+
+    private var menuHeader: some View {
+        ZStack {
             VStack(spacing: 1) {
                 Text(appModel.selectedRestaurant.name)
                     .font(.system(size: 14, weight: .semibold))
@@ -38,95 +50,162 @@ struct MenuPopoverView: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
-            .frame(maxWidth: .infinity)
             .overlay(alignment: .trailing) {
                 if appModel.isLoading {
                     ProgressView()
                         .controlSize(.small)
+                        .offset(x: 18)
                         .accessibilityLabel(localized("Updating", "Päivitetään"))
                 }
             }
 
-            Button {
-                appModel.selectNextRestaurant()
-            } label: {
-                Image(systemName: "chevron.right")
-                    .frame(width: 24, height: 24)
-            }
-            .buttonStyle(.borderless)
-            .help(localized("Next restaurant (→)", "Seuraava ravintola (→)"))
-
-            Button {
-                Task {
-                    await appModel.refresh()
+            HStack(spacing: 8) {
+                Button {
+                    appModel.selectPreviousRestaurant()
+                } label: {
+                    Image(systemName: "chevron.left")
+                        .frame(width: 24, height: 24)
                 }
-            } label: {
-                Image(systemName: "arrow.clockwise")
-            }
-            .buttonStyle(.borderless)
-            .help(localized("Refresh", "Päivitä"))
-            .disabled(appModel.isLoading)
+                .buttonStyle(.borderless)
+                .foregroundStyle(appModel.accent.color)
+                .help(localized("Previous restaurant (←)", "Edellinen ravintola (←)"))
 
-            Button {
-                appModel.openRestaurantPage()
-            } label: {
-                Image(systemName: "arrow.up.right.square")
+                Spacer()
+
+                Button {
+                    appModel.selectNextRestaurant()
+                } label: {
+                    Image(systemName: "chevron.right")
+                        .frame(width: 24, height: 24)
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(appModel.accent.color)
+                .help(localized("Next restaurant (→)", "Seuraava ravintola (→)"))
+
+                Button {
+                    Task {
+                        await appModel.refresh()
+                    }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(appModel.accent.color)
+                .help(localized("Refresh", "Päivitä"))
+                .disabled(appModel.isLoading)
+
+                Button {
+                    appModel.openRestaurantPage()
+                } label: {
+                    Image(systemName: "arrow.up.right.square")
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(appModel.accent.color)
+                .help(localized("Restaurant website", "Ravintolan sivu"))
+                .disabled(
+                    appModel.snapshot?.restaurantURL == nil
+                        && appModel.selectedRestaurant.pageURL == nil
+                )
+
+                Button {
+                    panelState.isShowingSettings = true
+                } label: {
+                    Image(systemName: "gearshape")
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(appModel.accent.color)
+                .help(localized("Settings", "Asetukset"))
             }
-            .buttonStyle(.borderless)
-            .help(localized("Restaurant website", "Ravintolan sivu"))
-            .disabled(
-                appModel.snapshot?.restaurantURL == nil
-                    && appModel.selectedRestaurant.pageURL == nil
-            )
         }
+        .frame(height: 29)
         .padding(.horizontal, 14)
         .padding(.vertical, 11)
     }
 
-    @ViewBuilder
+    private var settingsHeader: some View {
+        ZStack {
+            Text(localized("Settings", "Asetukset"))
+                .font(.system(size: 14, weight: .semibold))
+
+            HStack {
+                Spacer()
+
+                Button {
+                    panelState.isShowingSettings = false
+                } label: {
+                    Image(systemName: "gearshape")
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(appModel.accent.color)
+                .help(localized("Back to lunch menu", "Takaisin ruokalistaan"))
+            }
+        }
+        .frame(height: 29)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+    }
+
     private var content: some View {
+        ZStack {
+            EmbeddedSettingsView()
+                .opacity(panelState.isShowingSettings ? 1 : 0)
+                .allowsHitTesting(panelState.isShowingSettings)
+                .accessibilityHidden(!panelState.isShowingSettings)
+
+            menuContent
+                .opacity(panelState.isShowingSettings ? 0 : 1)
+                .allowsHitTesting(!panelState.isShowingSettings)
+                .accessibilityHidden(panelState.isShowingSettings)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    @ViewBuilder
+    private var menuContent: some View {
         if let snapshot = appModel.snapshot {
             ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
-                    menuMetadata(snapshot)
-
+                LazyVStack(alignment: .leading, spacing: 22) {
                     if let closure = appModel.activeClosure {
                         ClosureNoticeView(
-                            restaurantName: appModel.selectedRestaurant.name,
                             closure: closure,
                             language: appModel.language
                         )
-                    }
+                    } else {
+                        menuMetadata(snapshot)
 
-                    if let message = appModel.errorMessage {
-                        StatusMessage(text: message, systemImage: "wifi.exclamationmark")
-                    }
-
-                    if let menu = snapshot.menu, !menu.groupsWithItems.isEmpty {
-                        ForEach(menu.groupsWithItemsByDescendingPrice { group in
-                            appModel.displayPrice(for: group)
-                        }) { group in
-                            MenuGroupView(
-                                group: group,
-                                priceText: appModel.displayPrice(for: group),
-                                provider: appModel.selectedRestaurant.provider,
-                                showAllergens: appModel.showAllergens,
-                                layout: appModel.lunchLayout,
-                                expandedMealID: $expandedMealID
+                        if let message = appModel.errorMessage {
+                            StatusMessage(
+                                text: message,
+                                systemImage: "wifi.exclamationmark"
                             )
-                            .background(MenuItemScrollAnchor(id: group.id))
                         }
-                    } else if appModel.activeClosure == nil {
-                        EmptyStateView(
-                            title: localized("No lunch today", "Ei lounasta tänään"),
-                            description: localized(
-                                "No menu was published for this restaurant.",
-                                "Ravintolalle ei ole julkaistu ruokalistaa."
-                            ),
-                            systemImage: "fork.knife"
-                        )
-                        .frame(maxWidth: .infinity)
-                        .padding(.top, 45)
+
+                        if let menu = snapshot.menu, !menu.groupsWithItems.isEmpty {
+                            ForEach(menu.groupsWithItemsByDescendingPrice { group in
+                                appModel.displayPrice(for: group)
+                            }) { group in
+                                MenuGroupView(
+                                    group: group,
+                                    priceText: appModel.displayPrice(for: group),
+                                    provider: appModel.selectedRestaurant.provider,
+                                    showAllergens: appModel.showAllergens,
+                                    layout: appModel.lunchLayout,
+                                    expandedMealID: $expandedMealID
+                                )
+                                .background(MenuItemScrollAnchor(id: group.id))
+                            }
+                        } else {
+                            EmptyStateView(
+                                title: localized("No lunch today", "Ei lounasta tänään"),
+                                description: localized(
+                                    "No menu was published for this restaurant.",
+                                    "Ravintolalle ei ole julkaistu ruokalistaa."
+                                ),
+                                systemImage: "fork.knife"
+                            )
+                            .frame(maxWidth: .infinity)
+                            .padding(.top, 45)
+                        }
                     }
                 }
                 .padding(.horizontal, 18)
@@ -141,7 +220,6 @@ struct MenuPopoverView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let closure = appModel.activeClosure {
             ClosureNoticeView(
-                restaurantName: appModel.selectedRestaurant.name,
                 closure: closure,
                 language: appModel.language
             )
@@ -313,7 +391,7 @@ private struct MenuGroupView: View {
                 if mealHighlighted {
                     Image(systemName: "star.fill")
                         .font(.system(size: 10))
-                        .foregroundStyle(.tint)
+                        .foregroundStyle(appModel.accent.color)
                         .help(localized("Highlighted meal", "Korostettu ruoka"))
                 }
 
@@ -343,13 +421,13 @@ private struct MenuGroupView: View {
             .background {
                 if mealHighlighted {
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(Color.accentColor.opacity(0.12))
+                        .fill(appModel.accent.color.opacity(0.12))
                 }
             }
             .overlay {
                 if ingredientHighlighted {
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .stroke(Color.accentColor.opacity(0.55), lineWidth: 1)
+                        .stroke(appModel.accent.color.opacity(0.55), lineWidth: 1)
                 }
             }
             .contentShape(Rectangle())
@@ -539,7 +617,10 @@ private struct RecipeDetailView: View {
             ) else {
                 return nil
             }
-            return "\(formatAmount(value.amount)) \(value.unit) \(label)"
+            return value.displayText(
+                amountText: formatAmount(value.amount),
+                label: label
+            )
         }
         .joined(separator: " · ")
     }
@@ -596,35 +677,35 @@ private struct StatusMessage: View {
 }
 
 private struct ClosureNoticeView: View {
-    let restaurantName: String
     let closure: SeasonalClosure
     let language: AppLanguage
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Label(
-                language == .fi ? "Suljettu" : "Closed",
-                systemImage: "calendar.badge.exclamationmark"
-            )
-            .font(.headline)
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: "calendar.badge.exclamationmark")
+                .foregroundStyle(closureColor)
 
-            Text(message)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+            (
+                Text(language == .fi ? "Suljettu" : "Closed")
+                    .fontWeight(.semibold)
+                + Text(" · \(closure.periodText(language: language))")
+            )
+            .foregroundStyle(.primary)
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.quaternary, in: RoundedRectangle(cornerRadius: 9))
+        .background(
+            closureColor.opacity(0.11),
+            in: RoundedRectangle(cornerRadius: 9)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 9)
+                .stroke(closureColor.opacity(0.2), lineWidth: 1)
+        }
     }
 
-    private var message: String {
-        let period = closure.periodText(language: language)
-        switch language {
-        case .fi:
-            return "\(restaurantName) on suljettu \(period)."
-        case .en:
-            return "\(restaurantName) is closed \(period)."
-        }
+    private var closureColor: Color {
+        Color(nsColor: .systemOrange)
     }
 }
 

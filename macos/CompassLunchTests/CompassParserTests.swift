@@ -1,3 +1,4 @@
+import ServiceManagement
 import XCTest
 @testable import CompassLunch
 
@@ -6,6 +7,152 @@ final class CompassParserTests: XCTestCase {
         XCTAssertEqual(LunchLayout.legacy.title, "Classic")
         XCTAssertEqual(LunchLayout.standard.title, "Standard")
         XCTAssertEqual(LunchLayout.compact.title, "Compact")
+    }
+
+    func testAccentTitles() {
+        XCTAssertEqual(
+            AppAccent.allCases.map(\.title),
+            ["System", "Blue", "Orange", "Graphite"]
+        )
+    }
+
+    func testAppearanceFollowsTheSystemForEveryAccent() {
+        XCTAssertNil(AppAppearance.preferredColorScheme)
+    }
+
+    func testOnlyCustomAccentsOverrideTheSystemAccent() {
+        XCTAssertFalse(AppAccent.system.overridesSystemAccent)
+        XCTAssertTrue(AppAccent.blue.overridesSystemAccent)
+        XCTAssertTrue(AppAccent.orange.overridesSystemAccent)
+        XCTAssertTrue(AppAccent.graphite.overridesSystemAccent)
+    }
+
+    @MainActor
+    func testAccentDefaultsToSystemAndPersistsSelection() {
+        let suiteName = "CompassLunchTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let model = AppModel(
+            defaults: defaults,
+            loginItemService: FakeLoginItemService()
+        )
+        XCTAssertEqual(model.accent, .system)
+
+        model.accent = .orange
+
+        let restoredModel = AppModel(
+            defaults: defaults,
+            loginItemService: FakeLoginItemService()
+        )
+        XCTAssertEqual(restoredModel.accent, .orange)
+    }
+
+    @MainActor
+    func testPanelStartsOnTheLunchMenu() {
+        XCTAssertFalse(PanelState().isShowingSettings)
+    }
+
+    @MainActor
+    func testSettingsBindingsWriteThroughToTheAppModel() {
+        let suiteName = "CompassLunchTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let model = AppModel(
+            defaults: defaults,
+            loginItemService: FakeLoginItemService()
+        )
+        let settings = SettingsState(appModel: model)
+
+        settings.binding(\.showAllergens).wrappedValue = false
+        settings.binding(\.accent).wrappedValue = .graphite
+
+        XCTAssertFalse(model.showAllergens)
+        XCTAssertEqual(model.accent, .graphite)
+    }
+
+    @MainActor
+    func testSwitchingToAFreshCachedMenuDoesNotFetchAgain() async throws {
+        let suiteName = "CompassLunchTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        let cacheDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+            try? FileManager.default.removeItem(at: cacheDirectory)
+        }
+
+        defaults.set("0437", forKey: "restaurantCode")
+        defaults.set(AppLanguage.en.rawValue, forKey: "language")
+        let cache = CacheStore(directory: cacheDirectory)
+        cache.save(snapshot(restaurantCode: "0437"))
+        cache.save(snapshot(restaurantCode: "0439"))
+
+        RequestCountingURLProtocol.reset()
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [RequestCountingURLProtocol.self]
+        let model = AppModel(
+            defaults: defaults,
+            cache: cache,
+            service: MenuService(session: URLSession(configuration: configuration)),
+            loginItemService: FakeLoginItemService()
+        )
+
+        model.selectedRestaurantCode = "0439"
+        for _ in 0..<5 {
+            await Task.yield()
+        }
+
+        XCTAssertEqual(model.snapshot?.restaurantCode, "0439")
+        XCTAssertFalse(model.isLoading)
+        XCTAssertEqual(RequestCountingURLProtocol.requestCount, 0)
+    }
+
+    @MainActor
+    func testCancellingARefreshDoesNotLeaveTheLoadingIndicatorActive() async {
+        let suiteName = "CompassLunchTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        let cacheDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+            try? FileManager.default.removeItem(at: cacheDirectory)
+            RequestCountingURLProtocol.reset()
+        }
+
+        defaults.set("0437", forKey: "restaurantCode")
+        defaults.set(AppLanguage.en.rawValue, forKey: "language")
+        let cache = CacheStore(directory: cacheDirectory)
+        cache.save(snapshot(restaurantCode: "0437"))
+        cache.save(snapshot(restaurantCode: "0439"))
+
+        RequestCountingURLProtocol.reset(suspendRequests: true)
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [RequestCountingURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        let model = AppModel(
+            defaults: defaults,
+            cache: cache,
+            service: MenuService(session: session),
+            loginItemService: FakeLoginItemService()
+        )
+
+        model.selectedRestaurantCode = "0438"
+        for _ in 0..<100 where RequestCountingURLProtocol.requestCount == 0 {
+            await Task.yield()
+        }
+        XCTAssertTrue(model.isLoading)
+        XCTAssertGreaterThan(RequestCountingURLProtocol.requestCount, 0)
+
+        model.selectedRestaurantCode = "0439"
+        for _ in 0..<5 {
+            await Task.yield()
+        }
+
+        XCTAssertEqual(model.snapshot?.restaurantCode, "0439")
+        XCTAssertFalse(model.isLoading)
     }
 
     func testParsesAndSortsTodaysMenu() throws {
@@ -157,6 +304,33 @@ final class CompassParserTests: XCTestCase {
         )
     }
 
+    func testStaffPricesForOtherCompassRestaurants() {
+        let staffOnly = PriceSelection(student: false, staff: true, guest: false)
+        let cases = [
+            (
+                "Opiskelija 5,60 € / Henkilökunta 9,05 € / Vierailija 12,50 €",
+                "9,05 €"
+            ),
+            (
+                "Student 5,60 € Staff 9,05 € Guest 12,50€",
+                "9,05 €"
+            )
+        ]
+
+        for restaurantCode in ["0436", "043601", "3488"] {
+            for (price, expected) in cases {
+                XCTAssertEqual(
+                    PriceFormatter.displayPrice(
+                        price,
+                        restaurantCode: restaurantCode,
+                        selection: staffOnly
+                    ),
+                    expected
+                )
+            }
+        }
+    }
+
     func testTietotekniaInfersStudentPriceFromUnlabelledPair() {
         let price = "13,30€ / 3,100€"
 
@@ -176,6 +350,118 @@ final class CompassParserTests: XCTestCase {
             ),
             "13,30 €"
         )
+    }
+
+    func testTietotekniaSharesUnlabelledPriceBetweenStaffAndGuest() {
+        let price = "13,30€ / opisk.3,100€"
+
+        XCTAssertEqual(
+            PriceFormatter.displayPrice(
+                price,
+                restaurantCode: "0439",
+                selection: PriceSelection(student: true, staff: false, guest: false)
+            ),
+            "3,10 €"
+        )
+
+        for selection in [
+            PriceSelection(student: false, staff: true, guest: false),
+            PriceSelection(student: false, staff: false, guest: true),
+            PriceSelection(student: false, staff: true, guest: true)
+        ] {
+            XCTAssertEqual(
+                PriceFormatter.displayPrice(
+                    price,
+                    restaurantCode: "0439",
+                    selection: selection
+                ),
+                "13,30 €"
+            )
+        }
+    }
+
+    func testTietotekniaShowsSinglePricesForStaff() {
+        let staffOnly = PriceSelection(student: false, staff: true, guest: false)
+        for (price, expected) in [
+            ("11,00€", "11,00 €"),
+            ("Opisk. 1,80€", "1,80 €")
+        ] {
+            XCTAssertEqual(
+                PriceFormatter.displayPrice(
+                    price,
+                    restaurantCode: "0439",
+                    selection: staffOnly
+                ),
+                expected
+            )
+        }
+    }
+
+    @MainActor
+    func testPriceMasterToggleTracksGroupSelection() {
+        let suiteName = "CompassLunchTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let model = AppModel(
+            defaults: defaults,
+            loginItemService: FakeLoginItemService()
+        )
+
+        model.showStudentPrice = false
+        model.showStaffPrice = false
+        model.showGuestPrice = false
+        XCTAssertFalse(model.showPrices)
+
+        model.showPrices = true
+        XCTAssertTrue(model.showStudentPrice)
+        XCTAssertTrue(model.showStaffPrice)
+        XCTAssertTrue(model.showGuestPrice)
+    }
+
+    @MainActor
+    func testLaunchAtLoginIsEnabledOnceByDefault() {
+        let suiteName = "CompassLunchTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let loginItem = FakeLoginItemService()
+        let model = AppModel(
+            defaults: defaults,
+            loginItemService: loginItem
+        )
+
+        model.configureLaunchAtLoginIfNeeded()
+
+        XCTAssertTrue(model.launchAtLogin)
+        XCTAssertEqual(loginItem.registerCount, 1)
+        XCTAssertTrue(defaults.bool(forKey: "launchAtLoginConfigured"))
+
+        model.configureLaunchAtLoginIfNeeded()
+        XCTAssertEqual(loginItem.registerCount, 1)
+    }
+
+    @MainActor
+    func testDisablingLaunchAtLoginPersistsTheChoice() {
+        let suiteName = "CompassLunchTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let loginItem = FakeLoginItemService(status: .enabled)
+        let model = AppModel(
+            defaults: defaults,
+            loginItemService: loginItem
+        )
+
+        model.setLaunchAtLogin(false)
+
+        XCTAssertFalse(model.launchAtLogin)
+        XCTAssertEqual(loginItem.unregisterCount, 1)
+
+        let nextLoginItem = FakeLoginItemService()
+        let nextModel = AppModel(
+            defaults: defaults,
+            loginItemService: nextLoginItem
+        )
+        nextModel.configureLaunchAtLoginIfNeeded()
+        XCTAssertEqual(nextLoginItem.registerCount, 0)
     }
 
     func testSeasonalClosureUsesInclusiveDates() {
@@ -224,6 +510,7 @@ final class CompassParserTests: XCTestCase {
         XCTAssertEqual(result.restaurantName, "Cafe Snellari")
         XCTAssertEqual(result.menu?.groups.first?.components.first, "Juustoista peruna-pinaattisosekeittoa (*, A, G, ILM, L)")
         XCTAssertEqual(result.menu?.groups.first?.components.count, 4)
+        XCTAssertEqual(result.menu?.groups.first?.price, "")
     }
 
     func testRejectsStaleSnellariRSSFixture() throws {
@@ -254,6 +541,10 @@ final class CompassParserTests: XCTestCase {
                 "Kasvispihvejä, tsatsikia (L)"
             ]
         )
+        XCTAssertEqual(
+            result.menu?.groups.first?.normalizedPrice,
+            "Lounas 12,90 € / Keittolounas 10,90 €"
+        )
     }
 
     func testParsesAntellFixtures() throws {
@@ -272,12 +563,14 @@ final class CompassParserTests: XCTestCase {
 
         XCTAssertEqual(round.menu?.groups.count, 3)
         XCTAssertEqual(round.menu?.groups.first?.name, "Kotiruokalounas")
+        XCTAssertEqual(round.menu?.groups.first?.normalizedPrice, "12,50 / 3,10 €")
         XCTAssertEqual(
             round.menu?.groups.first?.components.first,
             "Perinteiset lihapyörykät mummonkastikkeella(G oma)"
         )
         XCTAssertEqual(highway.menu?.groups.count, 3)
         XCTAssertEqual(highway.menu?.groups.first?.name, "Pääruoaksi")
+        XCTAssertEqual(highway.menu?.groups.first?.normalizedPrice, "13,90 €")
         XCTAssertEqual(
             highway.menu?.groups.first?.components.first,
             "Hoisin-kastikkeella maustettuja nyhtöpossuhodareita (A, L, M)"
@@ -454,12 +747,55 @@ final class CompassParserTests: XCTestCase {
         )
     }
 
+    func testNutritionDisplayDoesNotDuplicateUnits() {
+        XCTAssertEqual(
+            NutritionValue(
+                name: "EnergyKcal",
+                amount: 93,
+                unit: "kcal"
+            ).displayText(amountText: "93", label: "kcal"),
+            "93 kcal"
+        )
+        XCTAssertEqual(
+            NutritionValue(
+                name: "EnergyKcal",
+                amount: 93,
+                unit: ""
+            ).displayText(amountText: "93", label: "kcal"),
+            "93 kcal"
+        )
+        XCTAssertEqual(
+            NutritionValue(
+                name: "Protein",
+                amount: 3.9,
+                unit: "g"
+            ).displayText(amountText: "3.9", label: "protein"),
+            "3.9 g protein"
+        )
+    }
+
     private func group(id: String, price: String) -> LunchGroup {
         LunchGroup(
             id: id,
             name: id,
             price: price,
             components: ["Dish"]
+        )
+    }
+
+    private func snapshot(restaurantCode: String) -> MenuSnapshot {
+        MenuSnapshot(
+            restaurantCode: restaurantCode,
+            restaurantName: "Test",
+            restaurantURL: nil,
+            language: .en,
+            fetchedAt: Date(),
+            menu: LunchMenu(
+                date: "2026-07-24",
+                lunchTime: "10:30–14:00",
+                groups: [group(id: "lunch", price: "3,10 €")]
+            ),
+            detailEnrichmentAttempted: true
         )
     }
 
@@ -487,4 +823,63 @@ final class CompassParserTests: XCTestCase {
             )
         )!
     }
+}
+
+private final class FakeLoginItemService: LoginItemService {
+    var status: SMAppService.Status
+    private(set) var registerCount = 0
+    private(set) var unregisterCount = 0
+
+    init(status: SMAppService.Status = .notRegistered) {
+        self.status = status
+    }
+
+    func register() throws {
+        registerCount += 1
+        status = .enabled
+    }
+
+    func unregister() throws {
+        unregisterCount += 1
+        status = .notRegistered
+    }
+
+    func openSystemSettings() {}
+}
+
+private final class RequestCountingURLProtocol: URLProtocol {
+    private static let lock = NSLock()
+    private static var count = 0
+    private static var suspendsRequests = false
+
+    static var requestCount: Int {
+        lock.withLock { count }
+    }
+
+    static func reset(suspendRequests: Bool = false) {
+        lock.withLock {
+            count = 0
+            suspendsRequests = suspendRequests
+        }
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        lock.withLock { count += 1 }
+        return true
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        let shouldSuspend = Self.lock.withLock { Self.suspendsRequests }
+        guard !shouldSuspend else { return }
+        client?.urlProtocol(
+            self,
+            didFailWithError: URLError(.cannotConnectToHost)
+        )
+    }
+
+    override func stopLoading() {}
 }

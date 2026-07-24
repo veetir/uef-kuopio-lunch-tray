@@ -1,50 +1,173 @@
 import SwiftUI
 
-struct SettingsView: View {
-    @EnvironmentObject private var appModel: AppModel
+@MainActor
+final class SettingsState: ObservableObject {
+    private let appModel: AppModel
+
+    init(appModel: AppModel) {
+        self.appModel = appModel
+    }
+
+    var restaurants: [Restaurant] { appModel.restaurants }
+    var language: AppLanguage { appModel.language }
+    var launchAtLogin: Bool { appModel.launchAtLogin }
+    var launchAtLoginRequiresApproval: Bool {
+        appModel.launchAtLoginRequiresApproval
+    }
+    var showPrices: Bool { appModel.showPrices }
+    var highlightedMeals: [String] { appModel.highlightedMeals }
+    var highlightedIngredients: [String] { appModel.highlightedIngredients }
+
+    func binding<Value>(
+        _ keyPath: ReferenceWritableKeyPath<AppModel, Value>
+    ) -> Binding<Value> {
+        Binding(
+            get: { [appModel] in appModel[keyPath: keyPath] },
+            set: { [weak self] value in
+                guard let self else { return }
+                objectWillChange.send()
+                appModel[keyPath: keyPath] = value
+            }
+        )
+    }
+
+    func setLaunchAtLogin(_ enabled: Bool) {
+        objectWillChange.send()
+        appModel.setLaunchAtLogin(enabled)
+    }
+
+    func openLoginItemsSettings() {
+        appModel.openLoginItemsSettings()
+    }
+
+    func addMealHighlight(_ value: String) {
+        objectWillChange.send()
+        appModel.addMealHighlight(value)
+    }
+
+    func removeMealHighlight(_ value: String) {
+        objectWillChange.send()
+        appModel.removeMealHighlight(value)
+    }
+
+    func addIngredientHighlight(_ value: String) {
+        objectWillChange.send()
+        appModel.addIngredientHighlight(value)
+    }
+
+    func removeIngredientHighlight(_ value: String) {
+        objectWillChange.send()
+        appModel.removeIngredientHighlight(value)
+    }
+
+    func refresh() {
+        objectWillChange.send()
+        appModel.refreshLaunchAtLoginStatus()
+    }
+}
+
+struct EmbeddedSettingsView: View {
+    var body: some View {
+        SettingsForm()
+            .formStyle(.grouped)
+            .scrollContentBackground(.hidden)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+private struct SettingsForm: View {
+    @EnvironmentObject private var settings: SettingsState
 
     var body: some View {
         Form {
-            Section("Menu") {
-                Picker("Default restaurant", selection: $appModel.selectedRestaurantCode) {
-                    ForEach(appModel.restaurants) { restaurant in
+            Section("General") {
+                Picker(
+                    "Default restaurant",
+                    selection: settings.binding(\.selectedRestaurantCode)
+                ) {
+                    ForEach(settings.restaurants) { restaurant in
                         Text(restaurant.name).tag(restaurant.id)
                     }
                 }
 
-                Picker("Language", selection: $appModel.language) {
+                Picker(
+                    "Language",
+                    selection: settings.binding(\.language)
+                ) {
                     ForEach(AppLanguage.allCases) { language in
                         Text(language.title).tag(language)
+                    }
+                }
+
+                Toggle(
+                    "Launch at login",
+                    isOn: Binding(
+                        get: { settings.launchAtLogin },
+                        set: settings.setLaunchAtLogin
+                    )
+                )
+
+                if settings.launchAtLoginRequiresApproval {
+                    Button("Open Login Items Settings…") {
+                        settings.openLoginItemsSettings()
                     }
                 }
             }
 
             Section("Display") {
-                Picker("Lunch item layout", selection: $appModel.lunchLayout) {
+                Picker(
+                    "Lunch item layout",
+                    selection: settings.binding(\.lunchLayout)
+                ) {
                     ForEach(LunchLayout.allCases) { layout in
                         Text(layout.title).tag(layout)
                     }
                 }
                 .pickerStyle(.segmented)
 
-                Toggle("Show prices", isOn: $appModel.showPrices)
-                Toggle("Student prices", isOn: $appModel.showStudentPrice)
-                    .disabled(!appModel.showPrices)
-                Toggle("Staff prices", isOn: $appModel.showStaffPrice)
-                    .disabled(!appModel.showPrices)
-                Toggle("Guest prices", isOn: $appModel.showGuestPrice)
-                    .disabled(!appModel.showPrices)
-                Toggle("Show allergens and diets", isOn: $appModel.showAllergens)
-                Toggle("Show CO₂ emissions", isOn: $appModel.showCarbonEmissions)
+                Picker("Accent", selection: settings.binding(\.accent)) {
+                    ForEach(AppAccent.allCases) { accent in
+                        Text(accent.title).tag(accent)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                Toggle(
+                    "Show prices",
+                    isOn: settings.binding(\.showPrices)
+                )
+                Toggle(
+                    "Student prices",
+                    isOn: settings.binding(\.showStudentPrice)
+                )
+                .disabled(!settings.showPrices)
+                Toggle(
+                    "Staff prices",
+                    isOn: settings.binding(\.showStaffPrice)
+                )
+                .disabled(!settings.showPrices)
+                Toggle(
+                    "Guest prices",
+                    isOn: settings.binding(\.showGuestPrice)
+                )
+                .disabled(!settings.showPrices)
+                Toggle(
+                    "Show allergens and diets",
+                    isOn: settings.binding(\.showAllergens)
+                )
+                Toggle(
+                    "Show CO₂ emissions",
+                    isOn: settings.binding(\.showCarbonEmissions)
+                )
             }
 
             Section("Highlights") {
                 HighlightEditor(
                     title: "Meals",
                     placeholder: "Meal name or text",
-                    values: appModel.highlightedMeals,
-                    add: appModel.addMealHighlight,
-                    remove: appModel.removeMealHighlight
+                    values: settings.highlightedMeals,
+                    add: settings.addMealHighlight,
+                    remove: settings.removeMealHighlight
                 )
 
                 Divider()
@@ -52,14 +175,15 @@ struct SettingsView: View {
                 HighlightEditor(
                     title: "Ingredients",
                     placeholder: "Ingredient or text",
-                    values: appModel.highlightedIngredients,
-                    add: appModel.addIngredientHighlight,
-                    remove: appModel.removeIngredientHighlight
+                    values: settings.highlightedIngredients,
+                    add: settings.addIngredientHighlight,
+                    remove: settings.removeIngredientHighlight
                 )
             }
         }
-        .formStyle(.grouped)
-        .frame(width: 480, height: 620)
+        .onAppear {
+            settings.refresh()
+        }
     }
 }
 

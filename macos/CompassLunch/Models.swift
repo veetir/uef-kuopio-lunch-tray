@@ -294,6 +294,20 @@ struct NutritionValue: Codable, Equatable {
     let name: String
     let amount: Double
     let unit: String
+
+    func displayText(amountText: String, label: String) -> String {
+        let cleanUnit = unit.normalizedWhitespace
+        let cleanLabel = label.normalizedWhitespace
+        var parts = [amountText]
+        if !cleanUnit.isEmpty {
+            parts.append(cleanUnit)
+        }
+        if !cleanLabel.isEmpty,
+           cleanLabel.caseInsensitiveCompare(cleanUnit) != .orderedSame {
+            parts.append(cleanLabel)
+        }
+        return parts.joined(separator: " ")
+    }
 }
 
 enum TextHighlight {
@@ -421,22 +435,8 @@ enum PriceFormatter {
         let entries = parseEntries(text)
         guard !entries.isEmpty else { return "" }
 
-        if restaurantCode == "0439",
-           !entries.contains(where: { $0.group == .student }) {
-            if entries.count == 1 {
-                return selection.hasAnySelection
-                    ? removingGroupName(from: entries[0].text)
-                    : ""
-            }
-
-            return entries.enumerated().compactMap { index, entry in
-                let isInferredStudent = index == entries.count - 1
-                let include = isInferredStudent
-                    ? selection.student
-                    : (selection.staff || selection.guest)
-                return include ? removingGroupName(from: entry.text) : nil
-            }
-            .joined(separator: " / ")
+        if restaurantCode == "0439" {
+            return tietotekniaDisplayPrice(entries, selection: selection)
         }
 
         return entries.compactMap { entry in
@@ -552,7 +552,13 @@ enum PriceFormatter {
         ) {
             return .staff
         }
-        return .guest
+        if containsLabel(
+            in: segment,
+            pattern: #"(?i)\b(?:vierailija|vieras|guest)\b"#
+        ) {
+            return .guest
+        }
+        return .unlabelled
     }
 
     private static func containsLabel(in text: String, pattern: String) -> Bool {
@@ -573,13 +579,53 @@ enum PriceFormatter {
         case .student: selection.student
         case .staff: selection.staff
         case .guest: selection.guest
+        case .unlabelled: selection.guest
         }
+    }
+
+    private static func tietotekniaDisplayPrice(
+        _ entries: [PriceEntry],
+        selection: PriceSelection
+    ) -> String {
+        let unlabelledIndices = entries.indices.filter {
+            entries[$0].group == .unlabelled
+        }
+        let hasExplicitStudent = entries.contains { $0.group == .student }
+
+        if entries.count == 1 {
+            return selection.hasAnySelection
+                ? removingGroupName(from: entries[0].text)
+                : ""
+        }
+
+        let inferredStudentIndex = hasExplicitStudent
+            ? nil
+            : unlabelledIndices.last
+
+        return entries.enumerated().compactMap { index, entry in
+            let include: Bool
+            switch entry.group {
+            case .student:
+                include = selection.student
+            case .staff:
+                include = selection.staff
+            case .guest:
+                include = selection.guest
+            case .unlabelled:
+                include = index == inferredStudentIndex
+                    ? selection.student
+                    : (selection.staff || selection.guest)
+            }
+            return include ? removingGroupName(from: entry.text) : nil
+        }
+        .joined(separator: " / ")
     }
 
     private enum PriceGroup {
         case student
         case staff
         case guest
+        case unlabelled
     }
 
     private struct PriceEntry {
@@ -821,20 +867,24 @@ extension LunchMenu {
         priceText: (LunchGroup) -> String
     ) -> [LunchGroup] {
         groups.enumerated()
-            .sorted { left, right in
-                let leftText = priceText(left.element)
-                let rightText = priceText(right.element)
-                let comparison = comparePriceValues(
-                    PriceFormatter.values(
-                        in: leftText.isEmpty ? left.element.price : leftText
-                    ),
-                    PriceFormatter.values(
-                        in: rightText.isEmpty ? right.element.price : rightText
+            .map { offset, group in
+                let displayedPrice = priceText(group)
+                return (
+                    offset: offset,
+                    group: group,
+                    priceValues: PriceFormatter.values(
+                        in: displayedPrice.isEmpty ? group.price : displayedPrice
                     )
+                )
+            }
+            .sorted { left, right in
+                let comparison = comparePriceValues(
+                    left.priceValues,
+                    right.priceValues
                 )
                 return comparison == 0 ? left.offset < right.offset : comparison > 0
             }
-            .map(\.element)
+            .map(\.group)
     }
 
     private func comparePriceValues(_ left: [Double], _ right: [Double]) -> Int {

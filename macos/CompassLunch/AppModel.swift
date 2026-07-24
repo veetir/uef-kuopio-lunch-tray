@@ -1,5 +1,33 @@
 import AppKit
 import Foundation
+import ServiceManagement
+
+protocol LoginItemService: AnyObject {
+    var status: SMAppService.Status { get }
+    func register() throws
+    func unregister() throws
+    func openSystemSettings()
+}
+
+final class SystemLoginItemService: LoginItemService {
+    private let service = SMAppService.mainApp
+
+    var status: SMAppService.Status {
+        service.status
+    }
+
+    func register() throws {
+        try service.register()
+    }
+
+    func unregister() throws {
+        try service.unregister()
+    }
+
+    func openSystemSettings() {
+        SMAppService.openSystemSettingsLoginItems()
+    }
+}
 
 @MainActor
 final class AppModel: ObservableObject {
@@ -24,19 +52,35 @@ final class AppModel: ObservableObject {
     }
 
     @Published var showPrices: Bool {
-        didSet { defaults.set(showPrices, forKey: Keys.showPrices) }
+        didSet {
+            if showPrices && !hasSelectedPriceGroup {
+                showStudentPrice = true
+                showStaffPrice = true
+                showGuestPrice = true
+            }
+            defaults.set(showPrices, forKey: Keys.showPrices)
+        }
     }
 
     @Published var showStudentPrice: Bool {
-        didSet { defaults.set(showStudentPrice, forKey: Keys.showStudentPrice) }
+        didSet {
+            defaults.set(showStudentPrice, forKey: Keys.showStudentPrice)
+            disablePricesIfNoGroupIsSelected()
+        }
     }
 
     @Published var showStaffPrice: Bool {
-        didSet { defaults.set(showStaffPrice, forKey: Keys.showStaffPrice) }
+        didSet {
+            defaults.set(showStaffPrice, forKey: Keys.showStaffPrice)
+            disablePricesIfNoGroupIsSelected()
+        }
     }
 
     @Published var showGuestPrice: Bool {
-        didSet { defaults.set(showGuestPrice, forKey: Keys.showGuestPrice) }
+        didSet {
+            defaults.set(showGuestPrice, forKey: Keys.showGuestPrice)
+            disablePricesIfNoGroupIsSelected()
+        }
     }
 
     @Published var showAllergens: Bool {
@@ -53,6 +97,13 @@ final class AppModel: ObservableObject {
         didSet { defaults.set(lunchLayout.rawValue, forKey: Keys.lunchLayout) }
     }
 
+    @Published var accent: AppAccent {
+        didSet { defaults.set(accent.rawValue, forKey: Keys.accent) }
+    }
+
+    @Published private(set) var launchAtLogin = false
+    @Published private(set) var launchAtLoginRequiresApproval = false
+
     @Published private(set) var highlightedMeals: [String] {
         didSet { defaults.set(highlightedMeals, forKey: Keys.highlightedMeals) }
     }
@@ -68,7 +119,9 @@ final class AppModel: ObservableObject {
     private let defaults: UserDefaults
     private let cache: CacheStore
     private let service: MenuService
+    private let loginItemService: LoginItemService
     private var refreshTask: Task<Void, Never>?
+    private var refreshGeneration = 0
     private let refreshInterval: TimeInterval = 4 * 60 * 60
 
     var selectedRestaurant: Restaurant {
@@ -83,14 +136,16 @@ final class AppModel: ObservableObject {
         selectedRestaurant.closure()
     }
 
-    private init(
+    init(
         defaults: UserDefaults = .standard,
         cache: CacheStore = CacheStore(),
-        service: MenuService = MenuService()
+        service: MenuService = MenuService(),
+        loginItemService: LoginItemService = SystemLoginItemService()
     ) {
         self.defaults = defaults
         self.cache = cache
         self.service = service
+        self.loginItemService = loginItemService
 
         let savedRestaurant = defaults.string(forKey: Keys.restaurant) ?? "0437"
         selectedRestaurantCode = Restaurant.restaurants.contains(where: { $0.id == savedRestaurant })
@@ -107,9 +162,19 @@ final class AppModel: ObservableObject {
         lunchLayout = LunchLayout(
             rawValue: defaults.string(forKey: Keys.lunchLayout) ?? ""
         ) ?? .standard
+        accent = AppAccent(
+            rawValue: defaults.string(forKey: Keys.accent) ?? ""
+        ) ?? .system
         highlightedMeals = defaults.stringArray(forKey: Keys.highlightedMeals) ?? []
         highlightedIngredients =
             defaults.stringArray(forKey: Keys.highlightedIngredients) ?? []
+
+        if showPrices && !hasSelectedPriceGroup {
+            showPrices = false
+            defaults.set(false, forKey: Keys.showPrices)
+        }
+
+        refreshLaunchAtLoginStatus()
 
         snapshot = cache.load(
             restaurantCode: selectedRestaurantCode,
@@ -118,6 +183,10 @@ final class AppModel: ObservableObject {
     }
 
     func refreshIfNeeded() async {
+        await refreshIfNeeded(loadCachedSnapshot: true)
+    }
+
+    private func refreshIfNeeded(loadCachedSnapshot: Bool) async {
         if let snapshot,
            snapshot.restaurantCode == selectedRestaurantCode,
            snapshot.language == language,
@@ -127,23 +196,39 @@ final class AppModel: ObservableObject {
            Date().timeIntervalSince(snapshot.fetchedAt) < refreshInterval {
             return
         }
-        await refresh()
+        await performRefresh(loadCachedSnapshot: loadCachedSnapshot)
     }
 
     func refresh() async {
+        await performRefresh(loadCachedSnapshot: true)
+    }
+
+    private func performRefresh(loadCachedSnapshot: Bool) async {
         refreshTask?.cancel()
+        refreshGeneration &+= 1
+        let generation = refreshGeneration
         let restaurant = selectedRestaurant
         let requestedLanguage = language
 
         isLoading = true
         errorMessage = nil
-        if let cached = cache.load(restaurantCode: restaurant.id, language: requestedLanguage) {
-            snapshot = cached
-        } else {
+        if loadCachedSnapshot {
+            snapshot = cache.load(
+                restaurantCode: restaurant.id,
+                language: requestedLanguage
+            )
+        } else if snapshot?.restaurantCode != restaurant.id
+                    || snapshot?.language != requestedLanguage {
             snapshot = nil
         }
 
         let task = Task { [service, cache] in
+            defer {
+                if generation == refreshGeneration {
+                    isLoading = false
+                }
+            }
+
             do {
                 let result = try await service.fetch(
                     restaurant: restaurant,
@@ -163,11 +248,6 @@ final class AppModel: ObservableObject {
                 else { return }
                 errorMessage = localizedFetchError(error)
             }
-
-            if restaurant.id == selectedRestaurantCode,
-               requestedLanguage == language {
-                isLoading = false
-            }
         }
         refreshTask = task
         await task.value
@@ -176,6 +256,72 @@ final class AppModel: ObservableObject {
     func openRestaurantPage() {
         guard let url = snapshot?.restaurantURL ?? selectedRestaurant.pageURL else { return }
         NSWorkspace.shared.open(url)
+    }
+
+    func configureLaunchAtLoginIfNeeded() {
+        guard !defaults.bool(forKey: Keys.launchAtLoginConfigured) else {
+            refreshLaunchAtLoginStatus()
+            return
+        }
+
+        do {
+            switch loginItemService.status {
+            case .enabled, .requiresApproval:
+                break
+            case .notRegistered, .notFound:
+                try loginItemService.register()
+            @unknown default:
+                try loginItemService.register()
+            }
+            defaults.set(true, forKey: Keys.launchAtLoginConfigured)
+        } catch {
+            NSLog("Could not enable launch at login: %@", error.localizedDescription)
+        }
+        refreshLaunchAtLoginStatus()
+    }
+
+    func setLaunchAtLogin(_ enabled: Bool) {
+        do {
+            if enabled {
+                switch loginItemService.status {
+                case .enabled:
+                    break
+                case .requiresApproval:
+                    loginItemService.openSystemSettings()
+                case .notRegistered, .notFound:
+                    try loginItemService.register()
+                @unknown default:
+                    try loginItemService.register()
+                }
+            } else if loginItemService.status != .notRegistered {
+                try loginItemService.unregister()
+            }
+            defaults.set(true, forKey: Keys.launchAtLoginConfigured)
+        } catch {
+            NSLog("Could not update launch at login: %@", error.localizedDescription)
+        }
+        refreshLaunchAtLoginStatus()
+    }
+
+    func openLoginItemsSettings() {
+        loginItemService.openSystemSettings()
+    }
+
+    func refreshLaunchAtLoginStatus() {
+        switch loginItemService.status {
+        case .enabled:
+            launchAtLogin = true
+            launchAtLoginRequiresApproval = false
+        case .requiresApproval:
+            launchAtLogin = true
+            launchAtLoginRequiresApproval = true
+        case .notRegistered, .notFound:
+            launchAtLogin = false
+            launchAtLoginRequiresApproval = false
+        @unknown default:
+            launchAtLogin = false
+            launchAtLoginRequiresApproval = false
+        }
     }
 
     func displayPrice(for group: LunchGroup) -> String {
@@ -259,13 +405,15 @@ final class AppModel: ObservableObject {
 
     private func selectionDidChange() {
         refreshTask?.cancel()
+        refreshGeneration &+= 1
+        isLoading = false
         errorMessage = nil
         snapshot = cache.load(
             restaurantCode: selectedRestaurantCode,
             language: language
         )
         Task {
-            await refresh()
+            await refreshIfNeeded(loadCachedSnapshot: false)
         }
     }
 
@@ -297,6 +445,16 @@ final class AppModel: ObservableObject {
         return highlights.filter { TextHighlight.normalized($0) != key }
     }
 
+    private var hasSelectedPriceGroup: Bool {
+        showStudentPrice || showStaffPrice || showGuestPrice
+    }
+
+    private func disablePricesIfNoGroupIsSelected() {
+        if showPrices && !hasSelectedPriceGroup {
+            showPrices = false
+        }
+    }
+
     private enum Keys {
         static let restaurant = "restaurantCode"
         static let language = "language"
@@ -307,6 +465,8 @@ final class AppModel: ObservableObject {
         static let showAllergens = "showAllergens"
         static let showCarbonEmissions = "showCarbonEmissions"
         static let lunchLayout = "lunchLayout"
+        static let accent = "accent"
+        static let launchAtLoginConfigured = "launchAtLoginConfigured"
         static let highlightedMeals = "highlightedMeals"
         static let highlightedIngredients = "highlightedIngredients"
     }
