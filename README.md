@@ -22,6 +22,17 @@ exe downloads.
 
 ![Compass Lunch screenshot](windows-tray/assets/windows.png)
 
+## macOS app
+
+Requires macOS 13 or newer. Download `LunchTray.zip` from Releases, unzip it, and move `LunchTray.app` to `/Applications`.
+The app is currently unsigned, so Control-click it and select **Open** on first launch.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="macos/assets/macos-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="macos/assets/macos-light.png">
+  <img src="macos/assets/macos-light.png" alt="Lunch Tray on macOS" width="430">
+</picture>
+
 ## KDE Plasma widget
 
 ### Features
