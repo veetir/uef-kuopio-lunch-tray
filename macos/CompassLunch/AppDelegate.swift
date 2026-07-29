@@ -329,6 +329,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func configurePanel() {
+        panelState.onDismissPanel = { [weak self] in
+            self?.hidePanel()
+        }
         panel.contentViewController = NSHostingController(
             rootView: MenuPopoverView()
                 .environmentObject(appModel)

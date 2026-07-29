@@ -4,6 +4,19 @@ import XCTest
 @testable import CompassLunch
 
 final class CompassParserTests: XCTestCase {
+    @MainActor
+    func testPanelStateRunsConfiguredDismissAction() {
+        let panelState = PanelState()
+        var didDismiss = false
+        panelState.onDismissPanel = {
+            didDismiss = true
+        }
+
+        panelState.dismissPanel()
+
+        XCTAssertTrue(didDismiss)
+    }
+
     func testLunchPanelFindsMenuScrollViewAfterSettingsScrollView() {
         let root = NSView()
 

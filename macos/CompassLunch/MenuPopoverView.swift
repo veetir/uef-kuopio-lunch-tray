@@ -4,12 +4,18 @@ import SwiftUI
 @MainActor
 final class PanelState: ObservableObject {
     @Published var isShowingSettings = false
+    var onDismissPanel: (() -> Void)?
+
+    func dismissPanel() {
+        onDismissPanel?()
+    }
 }
 
 struct MenuPopoverView: View {
     @EnvironmentObject private var appModel: AppModel
     @EnvironmentObject private var panelState: PanelState
     @State private var expandedMealID: String?
+    @State private var isCloseButtonHovered = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -60,6 +66,8 @@ struct MenuPopoverView: View {
             }
 
             HStack(spacing: 8) {
+                closeButton
+
                 Button {
                     appModel.selectPreviousRestaurant()
                 } label: {
@@ -131,6 +139,8 @@ struct MenuPopoverView: View {
                 .font(.system(size: 14, weight: .semibold))
 
             HStack {
+                closeButton
+
                 Spacer()
 
                 Button {
@@ -146,6 +156,28 @@ struct MenuPopoverView: View {
         .frame(height: 29)
         .padding(.horizontal, 14)
         .padding(.vertical, 11)
+    }
+
+    private var closeButton: some View {
+        Button {
+            panelState.dismissPanel()
+        } label: {
+            ZStack {
+                Circle()
+                    .fill(Color(nsColor: .systemRed))
+                    .frame(width: 13, height: 13)
+
+                Image(systemName: "xmark")
+                    .font(.system(size: 7, weight: .bold))
+                    .foregroundStyle(Color.black.opacity(0.55))
+                    .opacity(isCloseButtonHovered ? 1 : 0)
+            }
+            .frame(width: 24, height: 24)
+        }
+        .buttonStyle(.plain)
+        .onHover { isCloseButtonHovered = $0 }
+        .help(localized("Close", "Sulje"))
+        .accessibilityLabel(localized("Close", "Sulje"))
     }
 
     private var content: some View {
