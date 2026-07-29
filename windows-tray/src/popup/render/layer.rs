@@ -150,23 +150,26 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
 
         let layout = header_layout(width, &scale);
         let pressed_button = pressed_header_button(hwnd);
+        let hovered_button = hovered_header_button(hwnd);
         draw_header_button(
             hdc,
             &layout.prev,
-            "<",
+            "‹",
             palette.button_bg_color,
             palette.body_text_color,
             normal_font,
             pressed_button == Some(HeaderButtonAction::Prev),
+            hovered_button == Some(HeaderButtonAction::Prev),
         );
         draw_header_button(
             hdc,
             &layout.next,
-            ">",
+            "›",
             palette.button_bg_color,
             palette.body_text_color,
             normal_font,
             pressed_button == Some(HeaderButtonAction::Next),
+            hovered_button == Some(HeaderButtonAction::Next),
         );
         draw_header_button(
             hdc,
@@ -176,6 +179,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
             palette.body_text_color,
             normal_font,
             false,
+            hovered_button == Some(HeaderButtonAction::Close),
         );
 
         let divider_rect = RECT {
@@ -217,6 +221,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                             scale,
                             width,
                             content_width,
+                            bg_color: palette.bg_color,
                             body_text_color: layer_body_text,
                             heading_color: layer_heading,
                             header_title_color: layer_title,
@@ -278,6 +283,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                             scale,
                             width,
                             content_width,
+                            bg_color: palette.bg_color,
                             body_text_color: layer_body_text,
                             heading_color: layer_heading,
                             header_title_color: layer_title,
@@ -314,29 +320,47 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                     new_title,
                     direction,
                     progress,
+                    interrupted,
                 } => {
                     let dir = if direction >= 0 { 1 } else { -1 };
+                    let old_fade_progress = if interrupted {
+                        (progress * 1.7).min(1.0)
+                    } else {
+                        progress
+                    };
                     let old_offset =
                         -dir * ((progress * scale.switch_offset_px as f32).round() as i32);
                     let new_offset =
                         dir * (((1.0 - progress) * scale.switch_offset_px as f32).round() as i32);
-                    let old_body_text =
-                        lerp_color(palette.bg_color, palette.body_text_color, 1.0 - progress);
-                    let old_heading =
-                        lerp_color(palette.bg_color, palette.heading_color, 1.0 - progress);
-                    let old_title_color =
-                        lerp_color(palette.bg_color, palette.header_title_color, 1.0 - progress);
-                    let old_suffix =
-                        lerp_color(palette.bg_color, palette.suffix_color, 1.0 - progress);
+                    let old_body_text = lerp_color(
+                        palette.bg_color,
+                        palette.body_text_color,
+                        1.0 - old_fade_progress,
+                    );
+                    let old_heading = lerp_color(
+                        palette.bg_color,
+                        palette.heading_color,
+                        1.0 - old_fade_progress,
+                    );
+                    let old_title_color = lerp_color(
+                        palette.bg_color,
+                        palette.header_title_color,
+                        1.0 - old_fade_progress,
+                    );
+                    let old_suffix = lerp_color(
+                        palette.bg_color,
+                        palette.suffix_color,
+                        1.0 - old_fade_progress,
+                    );
                     let old_suffix_highlight = lerp_color(
                         palette.bg_color,
                         palette.suffix_highlight_color,
-                        1.0 - progress,
+                        1.0 - old_fade_progress,
                     );
                     let old_favorites = lerp_color(
                         palette.bg_color,
                         palette.favorite_highlight_color,
-                        1.0 - progress,
+                        1.0 - old_fade_progress,
                     );
                     let new_body_text =
                         lerp_color(palette.bg_color, palette.body_text_color, progress);
@@ -356,6 +380,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                             scale,
                             width,
                             content_width,
+                            bg_color: palette.bg_color,
                             body_text_color: old_body_text,
                             heading_color: old_heading,
                             header_title_color: old_title_color,
@@ -392,6 +417,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                             scale,
                             width,
                             content_width,
+                            bg_color: palette.bg_color,
                             body_text_color: new_body_text,
                             heading_color: new_heading,
                             header_title_color: new_title_color,
@@ -440,6 +466,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                     scale,
                     width,
                     content_width,
+                    bg_color: palette.bg_color,
                     body_text_color: palette.body_text_color,
                     heading_color: palette.heading_color,
                     header_title_color: palette.header_title_color,
@@ -491,6 +518,7 @@ struct DrawLayerParams<'a> {
     scale: PopupScale,
     width: i32,
     content_width: i32,
+    bg_color: COLORREF,
     body_text_color: COLORREF,
     heading_color: COLORREF,
     header_title_color: COLORREF,
@@ -537,15 +565,34 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
 
     let bullet_width = text_width_with_font(hdc, params.normal_font, BULLET_PREFIX);
     let main_wrap_width = (params.content_width - bullet_width).max(24);
+    let stale_mode = lines
+        .iter()
+        .any(|line| matches!(line, Line::DateTime { stale: true, .. }));
+    let stale_dim_color = stale_dim_color(params.bg_color);
+    let stale_warning_color = stale_warning_color(params.bg_color, params.heading_color);
 
     let mut y = params.scale.header_height + params.scale.padding_y + params.y_offset;
     let mut capture = params.capture;
+    let mut after_status_break = false;
     for (line_index, line) in lines.iter().enumerate() {
+        let dim_line = stale_mode
+            && !after_status_break
+            && !matches!(
+                line,
+                Line::DateTime { .. } | Line::StaleNotice(_) | Line::StatusText(_) | Line::Spacer
+            );
         match line {
             Line::Heading(text) => {
                 unsafe {
                     SelectObject(hdc, params.bold_font);
-                    SetTextColor(hdc, params.heading_color);
+                    SetTextColor(
+                        hdc,
+                        if dim_line {
+                            stale_dim_color
+                        } else {
+                            params.heading_color
+                        },
+                    );
                 }
                 let wrapped = wrap_text_to_width(hdc, text, params.content_width);
                 if wrapped.is_empty() {
@@ -557,13 +604,37 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                     }
                 }
             }
+            Line::DateTime { date, hours, stale } => {
+                y = draw_date_time_line(
+                    hdc,
+                    date,
+                    hours,
+                    y,
+                    params.scale,
+                    params.content_width,
+                    params.line_height,
+                    params.bold_font,
+                    if *stale {
+                        stale_warning_color
+                    } else {
+                        params.heading_color
+                    },
+                );
+            }
             Line::Subheading {
                 text,
                 reserve_prefix,
             } => {
                 unsafe {
                     SelectObject(hdc, params.small_font);
-                    SetTextColor(hdc, params.suffix_color);
+                    SetTextColor(
+                        hdc,
+                        if dim_line {
+                            stale_dim_color
+                        } else {
+                            params.suffix_color
+                        },
+                    );
                 }
                 let prefix_width = shared_prefix_width_for_prefix(
                     hdc,
@@ -590,6 +661,28 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
             Line::Text(text) => {
                 unsafe {
                     SelectObject(hdc, params.normal_font);
+                    SetTextColor(
+                        hdc,
+                        if dim_line {
+                            stale_dim_color
+                        } else {
+                            params.body_text_color
+                        },
+                    );
+                }
+                let wrapped = wrap_text_to_width(hdc, text, params.content_width);
+                if wrapped.is_empty() {
+                    y += params.line_height;
+                } else {
+                    for row in wrapped {
+                        draw_text_line(hdc, &row, params.scale.padding_x, y);
+                        y += params.line_height;
+                    }
+                }
+            }
+            Line::StatusText(text) => {
+                unsafe {
+                    SelectObject(hdc, params.normal_font);
                     SetTextColor(hdc, params.body_text_color);
                 }
                 let wrapped = wrap_text_to_width(hdc, text, params.content_width);
@@ -602,6 +695,43 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                     }
                 }
             }
+            Line::StaleNotice(text) => {
+                unsafe {
+                    SelectObject(hdc, params.bold_font);
+                    SetTextColor(hdc, stale_warning_color);
+                }
+                let wrapped = wrap_text_to_width(hdc, text, params.content_width);
+                if wrapped.is_empty() {
+                    y += params.line_height;
+                } else {
+                    for row in wrapped {
+                        draw_text_line(hdc, &row, params.scale.padding_x, y);
+                        y += params.line_height;
+                    }
+                }
+            }
+            Line::ClosureNotice(text) => {
+                y = draw_closure_notice_block(
+                    hdc,
+                    text,
+                    y,
+                    params.scale,
+                    params.content_width,
+                    params.line_height,
+                    params.normal_font,
+                    params.selection_bg_color,
+                    if dim_line {
+                        stale_dim_color
+                    } else {
+                        params.recipe_border_color
+                    },
+                    if dim_line {
+                        stale_dim_color
+                    } else {
+                        params.body_text_color
+                    },
+                );
+            }
             Line::MenuItem {
                 show_bullet,
                 price_prefix,
@@ -611,9 +741,34 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                 recipe_id,
                 ingredient_alert,
             } => {
+                let line_body_color = if dim_line {
+                    stale_dim_color
+                } else {
+                    params.body_text_color
+                };
+                let line_suffix_color = if dim_line {
+                    stale_dim_color
+                } else {
+                    params.suffix_color
+                };
+                let line_suffix_highlight_color = if dim_line {
+                    stale_dim_color
+                } else {
+                    params.suffix_highlight_color
+                };
+                let line_favorite_color = if dim_line {
+                    stale_dim_color
+                } else {
+                    params.favorite_highlight_color
+                };
+                let line_border_color = if dim_line {
+                    stale_dim_color
+                } else {
+                    params.recipe_border_color
+                };
                 unsafe {
                     SelectObject(hdc, params.normal_font);
-                    SetTextColor(hdc, params.body_text_color);
+                    SetTextColor(hdc, line_body_color);
                 }
                 let favorite_ranges = favorite_match_ranges(main, params.favorites);
                 let prefix = price_prefix.as_deref().or(reserve_prefix.as_deref());
@@ -672,7 +827,7 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                             .max(24);
                     unsafe {
                         SelectObject(hdc, params.normal_font);
-                        SetTextColor(hdc, params.body_text_color);
+                        SetTextColor(hdc, line_body_color);
                     }
                     let clipped_main = fit_text_to_width(hdc, main, max_main);
                     let line_x = params.scale.padding_x + bullet_width;
@@ -709,7 +864,7 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                                 right: main_x + main_width + 2,
                                 bottom: y + params.line_height - 1,
                             },
-                            params.recipe_border_color,
+                            line_border_color,
                         );
                     }
                     if let Some(selection) = selected_item_range {
@@ -737,8 +892,8 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                         SegmentStyle {
                             fonts: main_segment_fonts,
                             colors: SegmentColors {
-                                normal: params.body_text_color,
-                                highlight: params.favorite_highlight_color,
+                                normal: line_body_color,
+                                highlight: line_favorite_color,
                             },
                         },
                     );
@@ -781,8 +936,8 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                                         highlight: params.small_bold_font,
                                     },
                                     colors: SegmentColors {
-                                        normal: params.suffix_color,
-                                        highlight: params.suffix_highlight_color,
+                                        normal: line_suffix_color,
+                                        highlight: line_suffix_highlight_color,
                                     },
                                 },
                             );
@@ -821,7 +976,7 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                                     right: main_x + text_width(hdc, &row.text) + 2,
                                     bottom: y + params.line_height - 1,
                                 },
-                                params.recipe_border_color,
+                                line_border_color,
                             );
                         }
                         let row_segments =
@@ -855,8 +1010,8 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                             SegmentStyle {
                                 fonts: main_segment_fonts,
                                 colors: SegmentColors {
-                                    normal: params.body_text_color,
-                                    highlight: params.favorite_highlight_color,
+                                    normal: line_body_color,
+                                    highlight: line_favorite_color,
                                 },
                             },
                         );
@@ -905,8 +1060,8 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                                         highlight: params.small_bold_font,
                                     },
                                     colors: SegmentColors {
-                                        normal: params.suffix_color,
-                                        highlight: params.suffix_highlight_color,
+                                        normal: line_suffix_color,
+                                        highlight: line_suffix_highlight_color,
                                     },
                                 },
                             );
@@ -916,7 +1071,7 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                         } else {
                             unsafe {
                                 SelectObject(hdc, params.small_font);
-                                SetTextColor(hdc, params.suffix_color);
+                                SetTextColor(hdc, line_suffix_color);
                             }
                             for row in wrapped_suffix {
                                 draw_text_line(
@@ -942,10 +1097,26 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                     params.normal_font,
                     params.small_bold_font,
                     params.recipe_bg_color,
-                    params.recipe_border_color,
-                    params.recipe_label_color,
-                    params.recipe_text_color,
-                    params.recipe_ingredient_highlight_color,
+                    if dim_line {
+                        stale_dim_color
+                    } else {
+                        params.recipe_border_color
+                    },
+                    if dim_line {
+                        stale_dim_color
+                    } else {
+                        params.recipe_label_color
+                    },
+                    if dim_line {
+                        stale_dim_color
+                    } else {
+                        params.recipe_text_color
+                    },
+                    if dim_line {
+                        stale_dim_color
+                    } else {
+                        params.recipe_ingredient_highlight_color
+                    },
                     params.recipe_selection_text_color,
                     bullet_width,
                     params.selection,
@@ -955,6 +1126,9 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
             }
             Line::Spacer => {
                 y += params.line_height / 2;
+                if stale_mode {
+                    after_status_break = true;
+                }
             }
         }
     }
@@ -1073,6 +1247,72 @@ fn price_prefix_bucket(prefix: &str) -> usize {
     prefix.chars().filter(|ch| *ch == '€').count()
 }
 
+fn draw_date_time_line(
+    hdc: HDC,
+    date: &str,
+    hours: &str,
+    y: i32,
+    scale: PopupScale,
+    content_width: i32,
+    line_height: i32,
+    font: HFONT,
+    color: COLORREF,
+) -> i32 {
+    unsafe {
+        SelectObject(hdc, font);
+        SetTextColor(hdc, color);
+    }
+
+    let left = scale.padding_x;
+    let date_width = text_width_with_font(hdc, font, date);
+    let hours_width = text_width_with_font(hdc, font, hours);
+    let gap_width = text_width_with_font(hdc, font, " ");
+
+    if date.is_empty() {
+        draw_text_line(hdc, hours, left, y);
+        return y + line_height + METADATA_BOTTOM_GAP_PX;
+    }
+    if hours.is_empty() {
+        draw_text_line(hdc, date, left, y);
+        return y + line_height + METADATA_BOTTOM_GAP_PX;
+    }
+    if date_width + gap_width + hours_width <= content_width {
+        draw_text_line(hdc, date, left, y);
+        draw_text_line(hdc, hours, left + date_width + gap_width, y);
+        y + line_height + METADATA_BOTTOM_GAP_PX
+    } else {
+        draw_text_line(hdc, date, left, y);
+        draw_text_line(hdc, hours, left, y + line_height);
+        y + line_height * 2 + METADATA_BOTTOM_GAP_PX
+    }
+}
+
+fn stale_dim_color(bg_color: COLORREF) -> COLORREF {
+    let dark_bg = color_luma(bg_color) < 128;
+    if dark_bg {
+        rgb(128, 128, 128)
+    } else {
+        rgb(105, 105, 105)
+    }
+}
+
+fn stale_warning_color(bg_color: COLORREF, _fallback: COLORREF) -> COLORREF {
+    let dark_bg = color_luma(bg_color) < 128;
+    if dark_bg {
+        rgb(255, 211, 80)
+    } else {
+        rgb(176, 48, 32)
+    }
+}
+
+fn color_luma(color: COLORREF) -> u32 {
+    let value = color.0;
+    let r = value & 0xFF;
+    let g = (value >> 8) & 0xFF;
+    let b = (value >> 16) & 0xFF;
+    (r * 299 + g * 587 + b * 114) / 1000
+}
+
 #[derive(Debug, Clone, Copy)]
 struct InlineSuffixAlignmentParams<'a> {
     normal_font: HFONT,
@@ -1081,6 +1321,57 @@ struct InlineSuffixAlignmentParams<'a> {
     small_bold_font: HFONT,
     content_width: i32,
     favorites: &'a FavoritesSnapshot,
+}
+
+fn draw_closure_notice_block(
+    hdc: HDC,
+    text: &str,
+    y: i32,
+    scale: PopupScale,
+    content_width: i32,
+    line_height: i32,
+    font: HFONT,
+    bg_color: COLORREF,
+    border_color: COLORREF,
+    text_color: COLORREF,
+) -> i32 {
+    let pad_x = scale_px(NOTICE_PAD_X, scale.factor);
+    let pad_y = scale_px(NOTICE_PAD_Y, scale.factor);
+    let margin_y = scale_px(NOTICE_MARGIN_Y, scale.factor);
+    let block_x = scale.padding_x;
+    let block_top = y + margin_y;
+    let block_width = content_width;
+    let inner_width = (block_width - pad_x * 2).max(40);
+    let wrapped = wrap_text_to_width_with_font(hdc, font, text, inner_width);
+    let row_count = wrapped.len().max(1) as i32;
+    let block_height = pad_y * 2 + row_count * line_height;
+    let block_rect = RECT {
+        left: block_x,
+        top: block_top,
+        right: block_x + block_width,
+        bottom: block_top + block_height,
+    };
+
+    unsafe {
+        let brush = CreateSolidBrush(bg_color);
+        FillRect(hdc, &block_rect, brush);
+        DeleteObject(brush);
+        SelectObject(hdc, font);
+        SetTextColor(hdc, text_color);
+    }
+    draw_outline_rect(hdc, &block_rect, border_color);
+
+    let mut text_y = block_top + pad_y;
+    if wrapped.is_empty() {
+        draw_text_line(hdc, text, block_x + pad_x, text_y);
+    } else {
+        for row in wrapped {
+            draw_text_line(hdc, &row, block_x + pad_x, text_y);
+            text_y += line_height;
+        }
+    }
+
+    block_rect.bottom + margin_y
 }
 
 fn draw_recipe_detail_block(

@@ -2,78 +2,23 @@
 
 const fs = require("fs");
 const path = require("path");
+const vm = require("vm");
 
-function normalizeText(value) {
-  if (value === null || value === undefined) {
-    return "";
-  }
-  return String(value).replace(/\s*\n+\s*/g, " ").replace(/\s+/g, " ").trim();
+function loadQmlLibrary(relativePath) {
+  const filename = path.join(__dirname, relativePath);
+  const source = fs.readFileSync(filename, "utf8").replace(/^\.pragma library\s*/m, "");
+  const context = vm.createContext({ console });
+  vm.runInContext(source, context, { filename });
+  return context;
 }
 
-function dayKey(dateString) {
-  const clean = normalizeText(dateString);
-  if (!clean) {
-    return "";
-  }
-  return clean.split("T")[0] || "";
-}
-
-function localDateIso(dateObj) {
-  const year = dateObj.getFullYear();
-  const month = String(dateObj.getMonth() + 1).padStart(2, "0");
-  const day = String(dateObj.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-function normalizeMenusForDay(day) {
-  const rawMenus = Array.isArray(day.SetMenus) ? [...day.SetMenus] : [];
-  rawMenus.sort((a, b) => (Number(a.SortOrder) || 0) - (Number(b.SortOrder) || 0));
-
-  return rawMenus
-    .map((entry) => {
-      const name = normalizeText(entry.Name) || "Menu";
-      const price = normalizeText(entry.Price);
-      const components = Array.isArray(entry.Components)
-        ? entry.Components.map((item) => normalizeText(item)).filter(Boolean)
-        : [];
-
-      if (!name && components.length === 0) {
-        return null;
-      }
-
-      return {
-        sortOrder: Number(entry.SortOrder) || 0,
-        name,
-        price,
-        components,
-      };
-    })
-    .filter(Boolean);
-}
-
-function normalizeCompassToday(payload, targetDate) {
-  if (!payload || !Array.isArray(payload.MenusForDays)) {
-    return null;
-  }
-
-  const match = payload.MenusForDays.find((day) => dayKey(day.Date) === targetDate);
-  if (!match) {
-    return {
-      todayMenu: null,
-      menuDateIso: "",
-      providerDateValid: false,
-    };
-  }
-
-  return {
-    todayMenu: {
-      dateIso: targetDate,
-      lunchTime: normalizeText(match.LunchTime),
-      menus: normalizeMenusForDay(match),
-    },
-    menuDateIso: targetDate,
-    providerDateValid: true,
-  };
+function fixture() {
+  return JSON.parse(
+    fs.readFileSync(
+      path.join(__dirname, "../../api/test/fixtures/contract-menu.json"),
+      "utf8"
+    )
+  );
 }
 
 function assert(condition, message) {
@@ -82,1063 +27,246 @@ function assert(condition, message) {
   }
 }
 
-function readFixture(name) {
-  const fixturePath = path.join(__dirname, "fixtures", name);
-  const raw = fs.readFileSync(fixturePath, "utf8");
-  return JSON.parse(raw);
+function checkNormalizedMenu(ApiAdapter) {
+  const normalized = ApiAdapter.normalizePayload(
+    fixture(),
+    "tietoteknia",
+    "2026-07-24",
+    "en"
+  );
+  assert(!normalized.error, normalized.error);
+  assert(normalized.restaurantName === "Tietoteknia", "restaurant name");
+  assert(normalized.todayMenu.lunchTime === "10:30–14:00", "lunch hours");
+  assert(normalized.todayMenu.menus.length === 4, "offers and groups");
+
+  const buffet = normalized.todayMenu.menus[1];
+  assert(buffet.audiencePrices, "audience price marker");
+  assert(buffet.price.includes("Staff 13,30 €"), "staff price");
+  assert(buffet.price.includes("Guest 13,30 €"), "guest price");
+  assert(buffet.price.includes("Student 3,10 €"), "student price");
+  assert(
+    buffet.components[0] === "Härkäpapua tikka masala (G, L, M, Veg)",
+    "item tags"
+  );
+
+  const untitled = normalized.todayMenu.menus[3];
+  assert(untitled.name === "", "untitled group stays untitled");
+  assert(untitled.price === "", "unpriced group stays unpriced");
+  assert(untitled.components[0] === "Satokauden kasviksia", "unpriced item");
 }
 
-function readTextFixture(name) {
-  const fixturePath = path.join(__dirname, "fixtures", name);
-  return fs.readFileSync(fixturePath, "utf8");
-}
+function checkGeneralOffers(ApiAdapter, MenuFormatter) {
+  const payload = fixture();
+  payload.restaurant.id = "pranzeria-sorrento";
+  payload.restaurant.name = { fi: "Pranzeria Sorrento", en: "Pranzeria Sorrento" };
+  payload.offers = [{
+    id: "buffet",
+    label: "Lounasbuffet",
+    price: { amount: "14.00", currency: "EUR" },
+    description: "Salaatti, antipasto, pizza ja pääruoka"
+  }];
+  payload.groups = [];
 
-function decodeHtmlEntities(value) {
-  return String(value).replace(
-    /&(#[0-9]+|#x[0-9a-fA-F]+|amp|lt|gt|quot|nbsp|#39);/g,
-    (entity, token) => {
-      if (token === "amp") {
-        return "&";
-      }
-      if (token === "lt") {
-        return "<";
-      }
-      if (token === "gt") {
-        return ">";
-      }
-      if (token === "quot") {
-        return "\"";
-      }
-      if (token === "nbsp") {
-        return " ";
-      }
-      if (token === "#39") {
-        return "'";
-      }
-      if (token.indexOf("#x") === 0) {
-        return String.fromCharCode(parseInt(token.slice(2), 16));
-      }
-      if (token.indexOf("#") === 0) {
-        return String.fromCharCode(parseInt(token.slice(1), 10));
-      }
-      return entity;
-    }
+  const normalized = ApiAdapter.normalizePayload(
+    payload,
+    "pranzeria-sorrento",
+    "2026-07-24",
+    "fi"
+  );
+  const offer = normalized.todayMenu.menus[0];
+  assert(offer.price === "14,00 €", "general offer price");
+  assert(
+    MenuFormatter.menuHeading(offer, false, true, true, true, false)
+      === "Lounasbuffet",
+    "master toggle hides only the price"
+  );
+  assert(
+    offer.components[0] === "Salaatti, antipasto, pizza ja pääruoka",
+    "general offer description"
   );
 }
 
-function stripHtmlText(value) {
-  return normalizeText(decodeHtmlEntities(String(value).replace(/<[^>]*>/g, " ")));
+function checkAudienceFiltering(ApiAdapter, MenuFormatter) {
+  const normalized = ApiAdapter.normalizePayload(
+    fixture(),
+    "tietoteknia",
+    "2026-07-24",
+    "en"
+  );
+  const buffet = normalized.todayMenu.menus[1];
+  const staffOnly = MenuFormatter.menuHeading(
+    buffet,
+    true,
+    false,
+    true,
+    false,
+    false
+  );
+  assert(staffOnly.includes("Staff 13,30 €"), "staff price remains visible");
+  assert(!staffOnly.includes("Student"), "student price is hidden");
+  assert(!staffOnly.includes("Guest"), "guest price is hidden");
+
+  const untitled = normalized.todayMenu.menus[3];
+  assert(
+    MenuFormatter.menuHeading(untitled, true, true, true, true, false) === "",
+    "empty groups do not create a stray Menu heading"
+  );
 }
 
-function stripHtmlTextLines(value) {
-  const withBreaks = String(value || "").replace(/<br\s*\/?>/gi, "\n");
-  const decoded = decodeHtmlEntities(withBreaks);
-  const withoutTags = decoded.replace(/<[^>]*>/g, " ");
-  return withoutTags
-    .split(/\n+/)
-    .map((line) => normalizeText(line))
-    .filter(Boolean);
-}
-
-function parseAntellSections(htmlText) {
-  const sections = [];
-  const sectionRegex = /<section class="menu-section">([\s\S]*?)<\/section>/gi;
-  let sectionMatch;
-
-  while ((sectionMatch = sectionRegex.exec(String(htmlText))) !== null) {
-    const sectionHtml = sectionMatch[1];
-    const titleMatch = sectionHtml.match(/<h2 class="menu-title">([\s\S]*?)<\/h2>/i);
-    const priceMatch = sectionHtml.match(/<h2 class="menu-price">([\s\S]*?)<\/h2>/i);
-    const listMatch = sectionHtml.match(/<ul class="menu-list">([\s\S]*?)<\/ul>/i);
-
-    const title = stripHtmlText(titleMatch ? titleMatch[1] : "");
-    const price = stripHtmlText(priceMatch ? priceMatch[1] : "");
-    const listHtml = listMatch ? listMatch[1] : "";
-
-    const items = [];
-    const itemRegex = /<li[^>]*>([\s\S]*?)<\/li>/gi;
-    let itemMatch;
-    while ((itemMatch = itemRegex.exec(listHtml)) !== null) {
-      const item = stripHtmlText(itemMatch[1]);
-      if (item) {
-        items.push(item);
-      }
-    }
-
-    if (items.length === 0) {
-      continue;
-    }
-
-    sections.push({
-      title: title || "Menu",
-      price,
-      items,
-    });
-  }
-
-  return sections;
-}
-
-function parseAntellMenuDateIso(menuDateText, nowDate) {
-  const clean = normalizeText(menuDateText);
-  if (!clean) {
-    return "";
-  }
-
-  const parts = clean.match(/(\d{1,2})\.(\d{1,2})(?:\.(\d{2,4}))?/);
-  if (!parts) {
-    return "";
-  }
-
-  const day = Number(parts[1]);
-  const month = Number(parts[2]);
-  if (!Number.isFinite(day) || !Number.isFinite(month) || day < 1 || day > 31 || month < 1 || month > 12) {
-    return "";
-  }
-
-  function buildCandidate(yearNumber) {
-    const candidate = new Date(yearNumber, month - 1, day);
-    if (
-      candidate.getFullYear() !== yearNumber ||
-      candidate.getMonth() !== month - 1 ||
-      candidate.getDate() !== day
-    ) {
-      return null;
-    }
-    return candidate;
-  }
-
-  if (parts[3]) {
-    let explicitYear = Number(parts[3]);
-    if (!Number.isFinite(explicitYear)) {
-      return "";
-    }
-    if (explicitYear < 100) {
-      explicitYear += 2000;
-    }
-    const explicit = buildCandidate(explicitYear);
-    return explicit ? localDateIso(explicit) : "";
-  }
-
-  const now = nowDate instanceof Date ? nowDate : new Date();
-  const nowMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const years = [now.getFullYear() - 1, now.getFullYear(), now.getFullYear() + 1];
-  let best = null;
-  let bestDistance = Number.MAX_VALUE;
-
-  for (const year of years) {
-    const candidate = buildCandidate(year);
-    if (!candidate) {
-      continue;
-    }
-    const distance = Math.abs(candidate.getTime() - nowMidnight.getTime());
-    if (distance < bestDistance) {
-      bestDistance = distance;
-      best = candidate;
-    }
-  }
-
-  return best ? localDateIso(best) : "";
-}
-
-function parseAntellMeta(htmlText, nowDate) {
-  const raw = String(htmlText || "");
-  const dateMatch = raw.match(/<div class="menu-date">([\s\S]*?)<\/div>/i);
-  const menuDateText = stripHtmlText(dateMatch ? dateMatch[1] : "");
-  const menuDateIso = parseAntellMenuDateIso(menuDateText, nowDate);
-  const expectedIso = localDateIso(nowDate instanceof Date ? nowDate : new Date());
-  return {
-    menuDateText,
-    menuDateIso,
-    providerDateValid: !!menuDateIso && menuDateIso === expectedIso,
+function checkServiceStates(ApiAdapter) {
+  const closed = fixture();
+  closed.service = { status: "closed" };
+  closed.closure = {
+    kind: "seasonal",
+    startsOn: "2026-06-18",
+    endsOn: "2026-08-09"
   };
-}
-
-function parseRssTagRaw(xmlText, tagName) {
-  const regex = new RegExp(`<${tagName}(?:\\s+[^>]*)?>([\\s\\S]*?)<\\/${tagName}>`, "i");
-  const match = String(xmlText || "").match(regex);
-  return match ? String(match[1] || "") : "";
-}
-
-function parseRssDateIso(dateText) {
-  const clean = normalizeText(dateText);
-  if (!clean) {
-    return "";
-  }
-
-  const parts = clean.match(/(\d{1,2})[-./](\d{1,2})[-./](\d{2,4})/);
-  if (!parts) {
-    return "";
-  }
-
-  const day = Number(parts[1]);
-  const month = Number(parts[2]);
-  let year = Number(parts[3]);
-  if (!Number.isFinite(day) || !Number.isFinite(month) || !Number.isFinite(year)) {
-    return "";
-  }
-  if (year < 100) {
-    year += 2000;
-  }
-  if (day < 1 || day > 31 || month < 1 || month > 12) {
-    return "";
-  }
-
-  const candidate = new Date(year, month - 1, day);
-  if (candidate.getFullYear() !== year || candidate.getMonth() !== month - 1 || candidate.getDate() !== day) {
-    return "";
-  }
-  return localDateIso(candidate);
-}
-
-function isRssAllergenToken(token) {
-  const clean = normalizeText(token).replace(/[.;:]+$/, "");
-  if (!clean) {
-    return false;
-  }
-  if (clean === "*") {
-    return true;
-  }
-  if (/^[A-Z]$/.test(clean)) {
-    return true;
-  }
-  const upper = clean.toUpperCase();
-  if (upper === "VEG" || upper === "VS" || upper === "ILM") {
-    return true;
-  }
-  return false;
-}
-
-function normalizeRssAllergenToken(token) {
-  const clean = normalizeText(token).replace(/[.;:]+$/, "");
-  if (!clean) {
-    return "";
-  }
-  if (clean === "*") {
-    return "*";
-  }
-  const upper = clean.toUpperCase();
-  if (upper === "VEG") {
-    return "Veg";
-  }
-  return upper;
-}
-
-function normalizeRssComponentLine(rawLine) {
-  const line = normalizeText(rawLine);
-  if (!line) {
-    return "";
-  }
-
-  if (/\((?:\*|[A-Za-z]{1,8})(?:\s*,\s*(?:\*|[A-Za-z]{1,8}))*\)\s*$/.test(line)) {
-    return line;
-  }
-
-  const compact = line.replace(/\s*[;,]\s*$/, "");
-  const parts = compact.split(/\s*,\s*/);
-  if (parts.length < 2) {
-    return compact;
-  }
-
-  const suffixTokens = [];
-  for (let i = parts.length - 1; i >= 0; i -= 1) {
-    const candidate = normalizeText(parts[i]);
-    if (!isRssAllergenToken(candidate)) {
-      break;
-    }
-    const normalized = normalizeRssAllergenToken(candidate);
-    if (!normalized) {
-      break;
-    }
-    suffixTokens.unshift(normalized);
-  }
-
-  if (suffixTokens.length === 0) {
-    return compact;
-  }
-
-  const mainParts = parts.slice(0, parts.length - suffixTokens.length);
-  let mainText = normalizeText(mainParts.join(", "));
-  if (!mainText) {
-    return compact;
-  }
-
-  const starMatch = mainText.match(/^(.*\S)\s*\*$/);
-  if (starMatch) {
-    mainText = normalizeText(starMatch[1]);
-    suffixTokens.unshift("*");
-  }
-
-  while (true) {
-    const trailingMatch = mainText.match(/^(.*\S)\s+([A-Za-z*]{1,4})$/);
-    if (!trailingMatch) {
-      break;
-    }
-    const trailingToken = normalizeRssAllergenToken(trailingMatch[2]);
-    if (!isRssAllergenToken(trailingMatch[2]) || !trailingToken) {
-      break;
-    }
-    mainText = normalizeText(trailingMatch[1]);
-    suffixTokens.unshift(trailingToken);
-  }
-
-  return `${mainText} (${suffixTokens.join(", ")})`;
-}
-
-function parseRssComponents(descriptionRaw) {
-  const decoded = decodeHtmlEntities(String(descriptionRaw || ""));
-  const components = [];
-  const paragraphRegex = /<p[^>]*>([\s\S]*?)<\/p>/gi;
-  let paragraphMatch;
-
-  while ((paragraphMatch = paragraphRegex.exec(decoded)) !== null) {
-    const line = normalizeRssComponentLine(stripHtmlText(paragraphMatch[1]));
-    if (line) {
-      components.push(line);
-    }
-  }
-
-  if (components.length === 0) {
-    const fallback = normalizeRssComponentLine(stripHtmlText(decoded));
-    if (fallback) {
-      components.push(fallback);
-    }
-  }
-
-  return components;
-}
-
-function parseRssMeta(rssText, nowDate) {
-  const raw = String(rssText || "");
-  const channelRaw = parseRssTagRaw(raw, "channel");
-  const itemMatch = String(channelRaw || raw).match(/<item\b[^>]*>([\s\S]*?)<\/item>/i);
-  const itemRaw = itemMatch ? String(itemMatch[1] || "") : "";
-
-  const itemTitle = stripHtmlText(parseRssTagRaw(itemRaw, "title"));
-  const itemGuid = stripHtmlText(parseRssTagRaw(itemRaw, "guid"));
-  const itemLink = stripHtmlText(parseRssTagRaw(itemRaw, "link"));
-  const descriptionRaw = parseRssTagRaw(itemRaw, "description");
-  const menuDateIso = parseRssDateIso(itemTitle) || parseRssDateIso(itemGuid);
-  const expectedIso = localDateIso(nowDate instanceof Date ? nowDate : new Date());
-
-  return {
-    itemTitle,
-    itemGuid,
-    itemLink,
-    menuDateIso,
-    providerDateValid: !!menuDateIso && menuDateIso === expectedIso,
-    components: parseRssComponents(descriptionRaw),
-  };
-}
-
-function localizedField(value, language = "fi") {
-  if (value === null || value === undefined) {
-    return "";
-  }
-
-  const primitiveType = typeof value;
-  if (primitiveType === "string" || primitiveType === "number" || primitiveType === "boolean") {
-    return normalizeText(value);
-  }
-
-  if (primitiveType !== "object") {
-    return "";
-  }
-
-  const preferredKeys = [language, "fi", "en"];
-  for (const key of preferredKeys) {
-    if (!Object.prototype.hasOwnProperty.call(value, key)) {
-      continue;
-    }
-    const candidate = normalizeText(value[key]);
-    if (candidate) {
-      return candidate;
-    }
-  }
-
-  for (const dynamicKey of Object.keys(value)) {
-    const fallback = normalizeText(value[dynamicKey]);
-    if (fallback) {
-      return fallback;
-    }
-  }
-
-  return "";
-}
-
-function normalizeHuomenAllergenToken(token) {
-  const clean = normalizeText(token);
-  if (!clean) {
-    return "";
-  }
-  if (clean === "*") {
-    return "*";
-  }
-
-  const upper = clean.toUpperCase();
-  if (upper === "VEG") {
-    return "Veg";
-  }
-  if (/^[A-Z]{1,8}$/.test(upper)) {
-    return upper;
-  }
-
-  return clean;
-}
-
-function huomenLunchLine(lunch, language = "fi") {
-  const title = localizedField(lunch && lunch.title, language);
-  if (!title) {
-    return "";
-  }
-
-  const description = localizedField(lunch && lunch.description, language);
-  let line = title;
-  if (description && description !== title) {
-    line += ` - ${description}`;
-  }
-
-  const allergens = [];
-  const seen = new Set();
-  const rawAllergens = Array.isArray(lunch && lunch.allergens) ? lunch.allergens : [];
-  for (const rawAllergen of rawAllergens) {
-    const token = normalizeHuomenAllergenToken(localizedField(rawAllergen && rawAllergen.abbreviation, language));
-    if (!token) {
-      continue;
-    }
-    const key = token.toUpperCase();
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    allergens.push(token);
-  }
-
-  if (allergens.length > 0) {
-    line += ` (${allergens.join(", ")})`;
-  }
-
-  return normalizeText(line);
-}
-
-function parseHuomenToday(payload, targetDate, language = "fi") {
-  if (!payload || payload.success === false || !payload.data || !payload.data.week || !Array.isArray(payload.data.week.days)) {
-    return null;
-  }
-
-  const days = payload.data.week.days;
-  const dayMatch = days.find((day) => normalizeText(day && day.dateString) === targetDate) || null;
-  const providerDateValid = !!dayMatch;
-  const menuDateIso = providerDateValid ? targetDate : "";
-  const lines = [];
-
-  if (dayMatch && !dayMatch.isClosed) {
-    const lunches = Array.isArray(dayMatch.lunches) ? dayMatch.lunches : [];
-    for (const lunch of lunches) {
-      const line = huomenLunchLine(lunch, language);
-      if (line) {
-        lines.push(line);
-      }
-    }
-  }
-
-  return {
-    providerDateValid,
-    menuDateIso,
-    lines,
-    restaurantName: localizedField(payload.data.location && payload.data.location.name, language),
-  };
-}
-
-function retryDelayMinutes(failureCount) {
-  const count = Math.max(1, Number(failureCount) || 1);
-  if (count <= 1) {
-    return 5;
-  }
-  if (count === 2) {
-    return 10;
-  }
-  return 15;
-}
-
-function shouldAssumeWeekendNoMenu(provider, nowDate) {
-  const date = nowDate instanceof Date ? nowDate : new Date();
-  const day = date.getDay();
-  const isWeekend = day === 0 || day === 6;
-  return isWeekend && (provider === "antell" || provider === "huomen-json");
-}
-
-function isHardWeekendClosedProvider(provider) {
-  return provider === "pranzeria";
-}
-
-function temporaryClosureForEntry(entry, dateIso, language = "fi") {
-  const closure = entry && entry.temporaryClosure ? entry.temporaryClosure : null;
-  if (!closure) {
-    return null;
-  }
-
-  const today = normalizeText(dateIso);
-  const start = normalizeText(closure.startDateIso);
-  const end = normalizeText(closure.endDateIso);
-  if (!today || !start || !end || today < start || today > end) {
-    return null;
-  }
-
-  const message = language === "en" ? normalizeText(closure.messageEn) : normalizeText(closure.messageFi);
-  return {
-    type: "temporary-closure",
-    message: message || (language === "en" ? "This restaurant is not serving lunch today." : "Ravintola ei tarjoile lounasta tänään."),
-  };
-}
-
-function buildPranzeriaDate(yearNumber, month, day) {
-  const candidate = new Date(yearNumber, month - 1, day);
-  if (
-    candidate.getFullYear() !== yearNumber ||
-    candidate.getMonth() !== month - 1 ||
-    candidate.getDate() !== day
-  ) {
-    return null;
-  }
-  return candidate;
-}
-
-function parsePranzeriaDateIso(dateText, nowDate) {
-  const clean = normalizeText(dateText);
-  if (!clean) {
-    return "";
-  }
-
-  const isoMatch = clean.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);
-  if (isoMatch) {
-    const candidate = buildPranzeriaDate(Number(isoMatch[1]), Number(isoMatch[2]), Number(isoMatch[3]));
-    return candidate ? localDateIso(candidate) : "";
-  }
-
-  const parts = clean.match(/^(\d{1,2})[./-](\d{1,2})(?:[./-](\d{2,4}))?\.?$/);
-  if (!parts) {
-    return "";
-  }
-
-  const day = Number(parts[1]);
-  const month = Number(parts[2]);
-  if (!Number.isFinite(day) || !Number.isFinite(month) || day < 1 || day > 31 || month < 1 || month > 12) {
-    return "";
-  }
-
-  if (parts[3]) {
-    let explicitYear = Number(parts[3]);
-    if (!Number.isFinite(explicitYear)) {
-      return "";
-    }
-    if (explicitYear < 100) {
-      explicitYear += 2000;
-    }
-    const explicit = buildPranzeriaDate(explicitYear, month, day);
-    return explicit ? localDateIso(explicit) : "";
-  }
-
-  const now = nowDate instanceof Date ? nowDate : new Date();
-  const nowMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const years = [now.getFullYear() - 1, now.getFullYear(), now.getFullYear() + 1];
-  const maxDistance = 14 * 24 * 60 * 60 * 1000;
-  let best = null;
-  let bestDistance = Number.MAX_VALUE;
-
-  for (const year of years) {
-    const candidate = buildPranzeriaDate(year, month, day);
-    if (!candidate) {
-      continue;
-    }
-    const distance = Math.abs(candidate.getTime() - nowMidnight.getTime());
-    if (distance > maxDistance) {
-      continue;
-    }
-    if (distance < bestDistance) {
-      bestDistance = distance;
-      best = candidate;
-    }
-  }
-
-  return best ? localDateIso(best) : "";
-}
-
-function pranzeriaWeekdayPattern() {
-  return "(?:Maanantai|Tiistai|Keskiviikko|Torstai|Perjantai|Lauantai|Sunnuntai|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)";
-}
-
-function pranzeriaDatePattern() {
-  return "(?:\\d{4}[-/]\\d{1,2}[-/]\\d{1,2}|\\d{1,2}[./-]\\d{1,2}(?:[./-]\\d{2,4})?\\.?)";
-}
-
-function sanitizePranzeriaHeaderRemainder(restText) {
-  let clean = normalizeText(restText);
-  if (!clean) {
-    return "";
-  }
-
-  clean = clean.replace(new RegExp(`\\b${pranzeriaWeekdayPattern()}\\b`, "ig"), " ");
-  clean = clean.replace(/^[\s:,\-|/]+|[\s:,\-|/]+$/g, " ");
-  return normalizeText(clean);
-}
-
-function looksLikePranzeriaTimeRange(dateText, restText) {
-  const cleanDate = normalizeText(dateText);
-  const dotCount = (cleanDate.match(/\./g) || []).length;
-  if (cleanDate.includes("/") || cleanDate.includes("-") || dotCount > 1) {
-    return false;
-  }
-
-  const cleanRest = normalizeText(restText);
-  if (!cleanRest.startsWith("-")) {
-    return false;
-  }
-
-  return /^-\s*\d{1,2}[.:]\d{2}/.test(cleanRest);
-}
-
-function parsePranzeriaDayHeader(lineText, nowDate) {
-  const clean = normalizeText(lineText);
-  if (!clean) {
-    return null;
-  }
-
-  const weekdayFirst = clean.match(new RegExp(`^(?:${pranzeriaWeekdayPattern()})\\s+(${pranzeriaDatePattern()})(.*)$`, "i"));
-  if (weekdayFirst) {
-    const dateIso = parsePranzeriaDateIso(weekdayFirst[1], nowDate);
-    if (!dateIso) {
-      return null;
-    }
-    return {
-      dateIso,
-      trailing: sanitizePranzeriaHeaderRemainder(weekdayFirst[2]),
-    };
-  }
-
-  const dateFirst = clean.match(new RegExp(`^(${pranzeriaDatePattern()})(.*)$`, "i"));
-  if (!dateFirst || looksLikePranzeriaTimeRange(dateFirst[1], dateFirst[2])) {
-    return null;
-  }
-
-  const dateIso = parsePranzeriaDateIso(dateFirst[1], nowDate);
-  if (!dateIso) {
-    return null;
-  }
-  return {
-    dateIso,
-    trailing: sanitizePranzeriaHeaderRemainder(dateFirst[2]),
-  };
-}
-
-function isPranzeriaLegendLine(lineText) {
-  const clean = normalizeText(lineText);
-  if (!clean) {
-    return false;
-  }
-
-  if (/^(?:L|G|M|V|VG)\s*=/.test(clean)) {
-    return true;
-  }
-
-  return (
-    clean.includes("Laktoositon") ||
-    clean.includes("Gluteeniton") ||
-    clean.includes("Maidoton") ||
-    clean.includes("Kasvis") ||
-    clean.includes("Vegaani")
+  closed.offers = [];
+  closed.groups = [];
+  const normalized = ApiAdapter.normalizePayload(
+    closed,
+    "tietoteknia",
+    "2026-07-24",
+    "en"
   );
-}
-
-function normalizePranzeriaAllergenToken(token) {
-  const clean = normalizeText(token).toUpperCase();
-  if (clean === "VEG") {
-    return "VG";
-  }
-  if (["L", "G", "M", "V", "VG"].includes(clean)) {
-    return clean;
-  }
-  return "";
-}
-
-function normalizePranzeriaLunchLine(lineText) {
-  const line = normalizeText(lineText);
-  if (!line || /\((?:\*|[A-Za-z]{1,8})(?:\s*,\s*(?:\*|[A-Za-z]{1,8}))*\)\s*$/.test(line)) {
-    return line;
-  }
-
-  let rest = line;
-  const tags = [];
-  let guard = 0;
-  while (guard < 8) {
-    guard += 1;
-    const requestMatch = rest.match(/^(.*?)(?:[,;\s]+)(?:pyydett[aä]ess[aä]|pyydet[aä]ess[aä])\s+(VG|VEG|L|G|M|V)\s*[.,;:]*$/i);
-    const tokenMatch = requestMatch ? null : rest.match(/^(.*?)(?:[,;\s]+)(VG|VEG|L|G|M|V)\s*[.,;:]*$/i);
-    const match = requestMatch || tokenMatch;
-    if (!match) {
-      break;
-    }
-
-    const tag = normalizePranzeriaAllergenToken(match[2]);
-    if (!tag) {
-      break;
-    }
-    tags.unshift(tag);
-    rest = normalizeText(match[1]).replace(/[,\s;:]+$/g, "");
-  }
-
-  const main = normalizeText(rest);
-  if (!main || tags.length === 0) {
-    return line;
-  }
-
-  const uniqueTags = tags.filter((tag, index) => tags.indexOf(tag) === index);
-  return `${main} (${uniqueTags.join(", ")})`;
-}
-
-function parsePranzeriaDayLines(htmlText, targetDateIso) {
-  const html = String(htmlText || "");
-  const blockRegex = /<(?:p|h[1-6]|li)\b[^>]*>([\s\S]*?)<\/(?:p|h[1-6]|li)>/gi;
-  const linesByDate = {};
-  const targetDate = targetDateIso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  const referenceDate = targetDate
-    ? new Date(Number(targetDate[1]), Number(targetDate[2]) - 1, Number(targetDate[3]))
-    : new Date(2026, 2, 20);
-  let currentDateIso = "";
-  let stopParsing = false;
-  let match;
-
-  while (!stopParsing && (match = blockRegex.exec(html)) !== null) {
-    const blockLines = stripHtmlTextLines(match[1]);
-    for (const line of blockLines) {
-      if (!line) {
-        continue;
-      }
-
-      const header = parsePranzeriaDayHeader(line, referenceDate);
-      if (header) {
-        currentDateIso = header.dateIso;
-        if (!Object.prototype.hasOwnProperty.call(linesByDate, currentDateIso)) {
-          linesByDate[currentDateIso] = [];
-        }
-        if (header.trailing) {
-          linesByDate[currentDateIso].push(header.trailing);
-        }
-        continue;
-      }
-
-      if (!currentDateIso) {
-        continue;
-      }
-
-      if (isPranzeriaLegendLine(line)) {
-        stopParsing = true;
-        break;
-      }
-
-      linesByDate[currentDateIso].push(line);
-    }
-  }
-
-  const providerDateValid = Object.prototype.hasOwnProperty.call(linesByDate, targetDateIso);
-  const rawLines = providerDateValid ? linesByDate[targetDateIso] : [];
-  const lines = [];
-  for (const raw of rawLines) {
-    const clean = normalizePranzeriaLunchLine(raw);
-    if (!clean) {
-      continue;
-    }
-    if (lines.length > 0 && lines[lines.length - 1] === clean) {
-      continue;
-    }
-    lines.push(clean);
-  }
-
-  return {
-    providerDateValid,
-    menuDateIso: providerDateValid ? targetDateIso : "",
-    lines,
-  };
-}
-
-function checkCompassFixture(name, expectedMenuName) {
-  const payload = readFixture(name);
-
-  assert(normalizeText(payload.RestaurantName).length > 0, `${name}: missing RestaurantName`);
-  assert(Array.isArray(payload.MenusForDays), `${name}: MenusForDays is not an array`);
-  assert(payload.MenusForDays.length > 0, `${name}: MenusForDays is empty`);
-
-  const fresh = normalizeCompassToday(payload, "2026-02-19");
-  assert(fresh && fresh.providerDateValid, `${name}: expected providerDateValid on 2026-02-19`);
-  assert(fresh.menuDateIso === "2026-02-19", `${name}: unexpected menuDateIso: ${fresh.menuDateIso}`);
-  assert(fresh.todayMenu, `${name}: expected todayMenu on 2026-02-19`);
-  assert(fresh.todayMenu.lunchTime === "10:30–14:30", `${name}: unexpected lunch time: ${fresh.todayMenu.lunchTime}`);
-  assert(fresh.todayMenu.menus.length > 0, `${name}: no menus on 2026-02-19`);
-  assert(fresh.todayMenu.menus[0].name === expectedMenuName, `${name}: first menu mismatch: ${fresh.todayMenu.menus[0].name}`);
-
-  for (const menu of fresh.todayMenu.menus) {
-    for (const component of menu.components) {
-      assert(!component.includes("\n"), `${name}: newline remained in component: ${component}`);
-    }
-  }
-
-  const closedDay = normalizeCompassToday(payload, "2026-02-22");
-  assert(closedDay && closedDay.providerDateValid, `${name}: 2026-02-22 should still be a valid day`);
-  assert(closedDay.todayMenu, `${name}: expected closed-day todayMenu object`);
-  assert(closedDay.todayMenu.menus.length === 0, `${name}: expected no menus on 2026-02-22`);
-  assert(closedDay.todayMenu.lunchTime === "", `${name}: expected empty lunchTime on 2026-02-22`);
-
-  const staleDay = normalizeCompassToday(payload, "2026-02-23");
-  assert(staleDay && !staleDay.providerDateValid, `${name}: expected stale when day is missing`);
-  assert(staleDay.todayMenu === null, `${name}: expected null todayMenu for missing day`);
-  assert(staleDay.menuDateIso === "", `${name}: expected empty menuDateIso when day missing`);
-}
-
-function checkAntellFixture(name, expectedFirstTitle, expectedFirstItem, expectedSections) {
-  const html = readTextFixture(name);
-  const sections = parseAntellSections(html);
-
-  assert(sections.length === expectedSections, `${name}: expected ${expectedSections} parsed sections, got ${sections.length}`);
-  assert(sections[0].title === expectedFirstTitle, `${name}: unexpected first title: ${sections[0].title}`);
-  assert(sections[0].items[0] === expectedFirstItem, `${name}: unexpected first item: ${sections[0].items[0]}`);
-
-  for (const section of sections) {
-    for (const item of section.items) {
-      assert(item.length > 0, `${name}: empty parsed item`);
-    }
-  }
-
-  const matchingDate = new Date(2026, 1, 20);
-  const validMeta = parseAntellMeta(html, matchingDate);
-  assert(validMeta.menuDateText.length > 0, `${name}: missing parsed menu-date text`);
-  assert(validMeta.menuDateIso === "2026-02-20", `${name}: expected parsed menu date 2026-02-20`);
-  assert(validMeta.providerDateValid, `${name}: expected providerDateValid on matching local date`);
-
-  const mismatchMeta = parseAntellMeta(html, new Date(2026, 1, 21));
-  assert(!mismatchMeta.providerDateValid, `${name}: expected mismatch on non-matching date`);
-
-  const missingDateHtml = html.replace(/<div class="menu-date">[\s\S]*?<\/div>/i, "");
-  const missingMeta = parseAntellMeta(missingDateHtml, matchingDate);
-  assert(missingMeta.menuDateIso === "", `${name}: missing menu-date should produce empty ISO`);
-  assert(!missingMeta.providerDateValid, `${name}: missing menu-date should be invalid`);
-}
-
-function checkRssFixture(name) {
-  const rss = readTextFixture(name);
-  const todayMeta = parseRssMeta(rss, new Date(2026, 1, 23));
-  assert(todayMeta.providerDateValid, `${name}: expected valid date on 2026-02-23`);
-  assert(todayMeta.menuDateIso === "2026-02-23", `${name}: unexpected date: ${todayMeta.menuDateIso}`);
-  assert(todayMeta.itemLink.includes("cafe-snellari"), `${name}: missing restaurant link`);
-  assert(todayMeta.components.length >= 4, `${name}: expected at least 4 menu lines`);
+  assert(normalized.serviceState === "closed", "closed service state");
+  assert(normalized.todayMenu === null, "closure omits redundant current date");
   assert(
-    todayMeta.components[0] === "Juustoista peruna-pinaattisosekeittoa (*, A, G, ILM, L)",
-    `${name}: unexpected first line: ${todayMeta.components[0]}`
+    normalized.serviceMessage === "Closed until 9 August.",
+    "closure end date"
+  );
+
+  const closedFinnish = ApiAdapter.normalizePayload(
+    closed,
+    "tietoteknia",
+    "2026-07-24",
+    "fi"
   );
   assert(
-    todayMeta.components[1] === "Basilikalla ja hunajalla maustettua broileria (G, L, M)",
-    `${name}: unexpected second line: ${todayMeta.components[1]}`
+    closedFinnish.serviceMessage === "Suljettu 9. elokuuta asti.",
+    "Finnish closure end date"
   );
+
+  const unknown = fixture();
+  unknown.service = { status: "unknown" };
+  unknown.offers = [];
+  unknown.groups = [];
   assert(
-    todayMeta.components.some((line) => line.includes("katkarapuja")),
-    `${name}: expected katkarapuja line in components`
+    ApiAdapter.normalizePayload(
+      unknown,
+      "tietoteknia",
+      "2026-07-24",
+      "fi"
+    ).error === "Ruokalistaa ei saatavilla",
+    "unknown status"
   );
 
-  const staleMeta = parseRssMeta(rss, new Date(2026, 1, 24));
-  assert(!staleMeta.providerDateValid, `${name}: expected stale date on 2026-02-24`);
-
-  const noDateRss = rss
-    .replace(/#23-02-2026/i, "#no-date")
-    .replace(/Maanantai,\s*23-02-2026/i, "Maanantai");
-  const missingDateMeta = parseRssMeta(noDateRss, new Date(2026, 1, 23));
-  assert(missingDateMeta.menuDateIso === "", `${name}: expected empty date when RSS has no date`);
-  assert(!missingDateMeta.providerDateValid, `${name}: expected invalid providerDateValid when date is missing`);
+  const future = fixture();
+  future.service = { status: "temporarilyUnavailable" };
+  future.offers = [];
+  future.groups = [];
+  assert(
+    ApiAdapter.normalizePayload(
+      future,
+      "tietoteknia",
+      "2026-07-24",
+      "en"
+    ).error === "Menu unavailable",
+    "future status degrades to unknown"
+  );
 }
 
-function checkHuomenFixture(name) {
-  const payload = readFixture(name);
-  const today = parseHuomenToday(payload, "2026-02-23", "fi");
-  assert(today, `${name}: parseHuomenToday returned null`);
-  assert(today.providerDateValid, `${name}: expected providerDateValid on 2026-02-23`);
-  assert(today.menuDateIso === "2026-02-23", `${name}: unexpected menuDateIso: ${today.menuDateIso}`);
-  assert(today.restaurantName === "Hyvä Huomen Bioteknia", `${name}: unexpected location name: ${today.restaurantName}`);
-  assert(today.lines.length === 3, `${name}: expected 3 lunches for 2026-02-23, got ${today.lines.length}`);
+function checkHelsinkiDate(ApiAdapter) {
   assert(
-    today.lines[0] === "Kermainen juuresosekeitto (G, L)",
-    `${name}: unexpected first lunch line: ${today.lines[0]}`
+    ApiAdapter.helsinkiDateIso(new Date("2026-01-01T22:30:00Z"))
+      === "2026-01-02",
+    "Helsinki winter date"
   );
   assert(
-    today.lines[1].includes("(G, L)"),
-    `${name}: expected allergens in second lunch line: ${today.lines[1]}`
+    ApiAdapter.helsinkiDateIso(new Date("2026-07-24T21:30:00Z"))
+      === "2026-07-25",
+    "Helsinki summer date"
   );
-  assert(
-    today.lines[2] === "Kasvispihvejä, tsatsikia (L)",
-    `${name}: unexpected third lunch line: ${today.lines[2]}`
-  );
-
-  const stale = parseHuomenToday(payload, "2026-03-03", "fi");
-  assert(stale && !stale.providerDateValid, `${name}: expected stale for missing date`);
-  assert(stale.menuDateIso === "", `${name}: expected empty menuDateIso for missing date`);
-  assert(stale.lines.length === 0, `${name}: expected no lines for missing date`);
 }
 
-function checkPranzeriaFixture(name) {
-  const html = readTextFixture(name);
-  const friday = parsePranzeriaDayLines(html, "2026-03-20");
-  assert(friday.providerDateValid, `${name}: expected providerDateValid on 2026-03-20`);
-  assert(friday.menuDateIso === "2026-03-20", `${name}: unexpected menuDateIso: ${friday.menuDateIso}`);
-  assert(friday.lines.length >= 5, `${name}: expected at least 5 lines on Friday, got ${friday.lines.length}`);
+function checkRetryBudget(ApiAdapter) {
+  const date = "2026-07-24";
+  const now = 1000000;
+  const first = ApiAdapter.retrySchedule(0, "", date, now);
+  const second = ApiAdapter.retrySchedule(
+    first.failureCount,
+    first.retryDateIso,
+    date,
+    now
+  );
+  const third = ApiAdapter.retrySchedule(
+    second.failureCount,
+    second.retryDateIso,
+    date,
+    now
+  );
+  const fourth = ApiAdapter.retrySchedule(
+    third.failureCount,
+    third.retryDateIso,
+    date,
+    now
+  );
+  assert(first.nextRetryEpochMs === now + 5 * 60 * 1000, "first retry");
+  assert(second.nextRetryEpochMs === now + 15 * 60 * 1000, "second retry");
+  assert(third.nextRetryEpochMs === now + 60 * 60 * 1000, "third retry");
+  assert(fourth.nextRetryEpochMs === 0, "daily retry cap");
   assert(
-    friday.lines[0] === "Salaatti- &AntipastoBuffet",
-    `${name}: expected trailing day-header line as first entry`
-  );
-  assert(
-    friday.lines.some((line) => line.includes("Spezzatino Di Manzo")),
-    `${name}: expected Spezzatino line for Friday`
-  );
-  assert(
-    friday.lines.some((line) => line.includes("Roomalainen focacciapizzabuffet")),
-    `${name}: expected focacciapizzabuffet line for Friday`
-  );
-  assert(!friday.lines.some((line) => line.includes("Laktoositon")), `${name}: legend lines should be excluded`);
-
-  const stale = parsePranzeriaDayLines(html, "2026-03-22");
-  assert(!stale.providerDateValid, `${name}: expected stale on missing Sunday date`);
-  assert(stale.lines.length === 0, `${name}: expected no Sunday lines`);
-}
-
-function checkPranzeriaVariants() {
-  const yearless = parsePranzeriaDayLines(
-    "<p>30.3.</p><p>Salaatti- &amp; AntipastoBuffet</p><p>Pollo Limone</p><p>31.3.</p><p>Tomorrow</p>",
-    "2026-03-30"
-  );
-  assert(yearless.providerDateValid, "yearless Pranzeria header should parse");
-  assert(yearless.lines.includes("Pollo Limone"), "yearless Pranzeria header should capture today's lines");
-  assert(!yearless.lines.includes("Tomorrow"), "yearless Pranzeria header should stop at the next date");
-
-  const fullYear = parsePranzeriaDayLines(
-    "<p>Maanantai 30.3.2026</p><p>Pasta Al Forno</p><p>L = Laktoositon</p>",
-    "2026-03-30"
-  );
-  assert(fullYear.providerDateValid, "full-year Pranzeria header should still parse");
-  assert(fullYear.lines.includes("Pasta Al Forno"), "full-year Pranzeria header should retain backward compatibility");
-
-  const headingAndList = parsePranzeriaDayLines(
-    "<h6>Maanantai 30.3.2026</h6><li>Polpette Alla Cacciatora</li><li>L = Laktoositon</li>",
-    "2026-03-30"
-  );
-  assert(headingAndList.providerDateValid, "Pranzeria headers should work in heading tags");
-  assert(
-    headingAndList.lines.includes("Polpette Alla Cacciatora"),
-    "Pranzeria lines should work in list tags"
-  );
-
-  const mixed = parsePranzeriaDayLines(
-    "<p>Torstai 02.4.</p><p>Porco Aglio &amp; Zenzero</p><p>Perjantai 27.3.2026</p><p>EI LOUNASTA!</p><p>L = Laktoositon</p>",
-    "2026-04-02"
-  );
-  assert(mixed.providerDateValid, "mixed-format Pranzeria headers should still find today's menu");
-  assert(mixed.lines.includes("Porco Aglio & Zenzero"), "mixed-format Pranzeria should keep today's rows");
-  assert(!mixed.lines.includes("EI LOUNASTA!"), "mixed-format Pranzeria should stop at the next header");
-
-  const brSeparated = parsePranzeriaDayLines(
-    "<p><b>Torstai 28.05.2026</b></p><p>Salaatti- &amp; AntipastoBuffet<br>Pollo Impanato<br>Pasta &amp; Pepperoni<br>Roomalainen FocacciaPizzaBuffet<br>Yrttiperunoita</p><p>Perjantai 29.05.2026</p><p>Tomorrow</p>",
-    "2026-05-28"
-  );
-  assert(brSeparated.providerDateValid, "br-separated Pranzeria block should find today's menu");
-  assert(brSeparated.lines.length === 5, `br-separated Pranzeria block should split into 5 lines, got ${brSeparated.lines.length}`);
-  assert(brSeparated.lines[0] === "Salaatti- & AntipastoBuffet", "br-separated Pranzeria block should keep salad as first item");
-  assert(brSeparated.lines.includes("Pasta & Pepperoni"), "br-separated Pranzeria block should keep pasta row separate");
-  assert(!brSeparated.lines.includes("Tomorrow"), "br-separated Pranzeria block should stop at next date");
-
-  const allergenRows = parsePranzeriaDayLines(
-    "<p>Torstai 28.05.2026</p><p>Pasta Al Salmone (Tuoretta Pennepastaa Savulohikastikkeella) L, Pyydettäessä G</p><p>Pollo Al Pepe (Paistettua Kanaa Pippurikastikkeella) G, L</p><p>Pasta &amp; Pepperoni (Tuoretta Pastaa Paprikalla Ja Valkosipulilla) V, L Pyydetäessä G</p><p>Perjantai 29.05.2026</p><p>Tomorrow</p>",
-    "2026-05-28"
+    ApiAdapter.retrySchedule(4, date, "2026-07-25", now).failureCount === 1,
+    "retry budget resets on a new day"
   );
   assert(
-    allergenRows.lines.includes("Pasta Al Salmone (Tuoretta Pennepastaa Savulohikastikkeella) (L, G)"),
-    "Pranzeria should normalize request-based gluten-free marker"
+    !ApiAdapter.automaticRetryDue(4, date, date, 0, now),
+    "daily retry cap blocks implicit refreshes"
   );
   assert(
-    allergenRows.lines.includes("Pollo Al Pepe (Paistettua Kanaa Pippurikastikkeella) (G, L)"),
-    "Pranzeria should normalize comma-separated allergen markers"
+    ApiAdapter.automaticRefreshDue(true, 4, date, date, 0, now),
+    "configured refresh bypasses the implicit daily cap"
   );
   assert(
-    allergenRows.lines.includes("Pasta & Pepperoni (Tuoretta Pastaa Paprikalla Ja Valkosipulilla) (V, L, G)"),
-    "Pranzeria should normalize vegetarian/lactose/request markers"
+    !ApiAdapter.automaticRefreshDue(false, 4, date, date, 0, now),
+    "implicit refresh remains capped"
   );
-
-  assert(parsePranzeriaDayHeader("10.30-14.00", new Date(2026, 2, 30)) === null, "Pranzeria should not read lunch times as dates");
-}
-
-function checkRetryDelays() {
-  assert(retryDelayMinutes(1) === 5, "retry delay for first failure should be 5");
-  assert(retryDelayMinutes(2) === 10, "retry delay for second failure should be 10");
-  assert(retryDelayMinutes(3) === 15, "retry delay for third failure should be 15");
-  assert(retryDelayMinutes(8) === 15, "retry delay should stay at 15 after third failure");
-}
-
-function checkWeekendNoMenuAssumption() {
-  const saturday = new Date(2026, 2, 14);
-  const monday = new Date(2026, 2, 16);
-
-  assert(shouldAssumeWeekendNoMenu("antell", saturday), "antell should assume no-menu on weekend mismatch");
-  assert(shouldAssumeWeekendNoMenu("huomen-json", saturday), "huomen-json should assume no-menu on weekend mismatch");
-  assert(!shouldAssumeWeekendNoMenu("antell", monday), "antell should use normal retry flow on weekdays");
-  assert(!shouldAssumeWeekendNoMenu("huomen-json", monday), "huomen-json should use normal retry flow on weekdays");
-  assert(!shouldAssumeWeekendNoMenu("pranzeria", saturday), "pranzeria should not use retry-based weekend assumption");
-  assert(isHardWeekendClosedProvider("pranzeria"), "pranzeria should be hard weekend-closed");
-  assert(!shouldAssumeWeekendNoMenu("compass", saturday), "compass should not use weekend no-menu assumption");
-  assert(!shouldAssumeWeekendNoMenu("compass-rss", saturday), "compass-rss should not use weekend no-menu assumption");
-}
-
-function checkTemporaryClosureWindows() {
-  const mediteknia = {
-    temporaryClosure: {
-      startDateIso: "2026-05-04",
-      endDateIso: "2026-08-16",
-      messageFi: "Mediteknia ei tarjoile lounasta 4.5.-16.8.",
-      messageEn: "Mediteknia is not serving lunch from 4 May to 16 August.",
-    },
-  };
-  const snellari = {
-    temporaryClosure: {
-      startDateIso: "2026-05-08",
-      endDateIso: "2026-08-30",
-      messageFi: "Cafe Snellari on suljettu 8.5.-30.8.",
-      messageEn: "Cafe Snellari is closed from 8 May to 30 August.",
-    },
-  };
-
-  assert(temporaryClosureForEntry(mediteknia, "2026-05-04").message.includes("Mediteknia"), "Mediteknia closure should include first day");
-  assert(temporaryClosureForEntry(mediteknia, "2026-08-16"), "Mediteknia closure should include last day");
-  assert(temporaryClosureForEntry(mediteknia, "2026-08-17") === null, "Mediteknia closure should expire after last day");
-  assert(temporaryClosureForEntry(snellari, "2026-05-07") === null, "Snellari closure should not start early");
-  assert(temporaryClosureForEntry(snellari, "2026-08-30", "en").message.includes("closed"), "Snellari closure should support English copy");
+  assert(
+    !ApiAdapter.automaticRetryDue(
+      first.failureCount,
+      date,
+      date,
+      first.nextRetryEpochMs,
+      now
+    ),
+    "retry delay blocks implicit refreshes"
+  );
+  assert(
+    ApiAdapter.automaticRetryDue(
+      first.failureCount,
+      date,
+      date,
+      first.nextRetryEpochMs,
+      first.nextRetryEpochMs
+    ),
+    "retry becomes due at its scheduled time"
+  );
+  assert(
+    ApiAdapter.automaticRetryDue(4, date, "2026-07-25", 0, now),
+    "implicit retry budget resets on a new day"
+  );
 }
 
 function main() {
-  checkCompassFixture("output-en.json", "Lunch");
-  checkCompassFixture("output-fi.json", "Annosruoka");
-  checkAntellFixture(
-    "antell-highway-friday-snippet.html",
-    "Pääruoaksi",
-    "Hoisin-kastikkeella maustettuja nyhtöpossuhodareita (A, L, M)",
-    3
-  );
-  checkAntellFixture(
-    "antell-round-friday-snippet.html",
-    "Kotiruokalounas",
-    "Perinteiset lihapyörykät mummonkastikkeella(G oma)",
-    3
-  );
-  checkRssFixture("snellari.rss");
-  checkHuomenFixture("huomen.json");
-  checkPranzeriaFixture("pranzeria-snippet.html");
-  checkPranzeriaVariants();
-  checkWeekendNoMenuAssumption();
-  checkTemporaryClosureWindows();
-  checkRetryDelays();
-  process.stdout.write("Parser checks passed for Compass, Antell, RSS, Huomen and Pranzeria freshness rules\n");
+  const ApiAdapter = loadQmlLibrary("../contents/ui/ApiAdapter.js");
+  const MenuFormatter = loadQmlLibrary("../contents/ui/MenuFormatter.js");
+  checkNormalizedMenu(ApiAdapter);
+  checkGeneralOffers(ApiAdapter, MenuFormatter);
+  checkAudienceFiltering(ApiAdapter, MenuFormatter);
+  checkServiceStates(ApiAdapter);
+  checkHelsinkiDate(ApiAdapter);
+  checkRetryBudget(ApiAdapter);
+  process.stdout.write("Normalized API checks passed\n");
 }
 
 main();

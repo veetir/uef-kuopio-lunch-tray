@@ -16,6 +16,7 @@ pub(super) fn measure_lines_layout(
     let main_wrap_width = (wrap_width - bullet_width).max(24);
     let mut required_content_width = 0;
     let mut wrapped_line_count = 0usize;
+    let mut extra_height_px = 0;
 
     for line in lines {
         match line {
@@ -24,6 +25,22 @@ pub(super) fn measure_lines_layout(
                 required_content_width = required_content_width.max(width);
                 let rows = wrapped_line_count_for_text(hdc, bold_font, text, wrap_width);
                 wrapped_line_count += rows.max(1);
+            }
+            Line::DateTime { date, hours, .. } => {
+                let date_width = text_width_with_font(hdc, bold_font, date);
+                let hours_width = text_width_with_font(hdc, bold_font, hours);
+                let gap_width = text_width_with_font(hdc, bold_font, " ");
+                required_content_width =
+                    required_content_width.max(date_width + gap_width + hours_width);
+                if date.is_empty()
+                    || hours.is_empty()
+                    || date_width + gap_width + hours_width <= wrap_width
+                {
+                    wrapped_line_count += 1;
+                } else {
+                    wrapped_line_count += 2;
+                }
+                extra_height_px += METADATA_BOTTOM_GAP_PX;
             }
             Line::Subheading {
                 text,
@@ -51,6 +68,26 @@ pub(super) fn measure_lines_layout(
                 required_content_width = required_content_width.max(width);
                 let rows = wrapped_line_count_for_text(hdc, normal_font, text, wrap_width);
                 wrapped_line_count += rows.max(1);
+            }
+            Line::StatusText(text) => {
+                let width = text_width_with_font(hdc, normal_font, text);
+                required_content_width = required_content_width.max(width);
+                let rows = wrapped_line_count_for_text(hdc, normal_font, text, wrap_width);
+                wrapped_line_count += rows.max(1);
+            }
+            Line::StaleNotice(text) => {
+                let width = text_width_with_font(hdc, bold_font, text);
+                required_content_width = required_content_width.max(width);
+                let rows = wrapped_line_count_for_text(hdc, bold_font, text, wrap_width);
+                wrapped_line_count += rows.max(1);
+            }
+            Line::ClosureNotice(text) => {
+                let pad_x = scale_px(NOTICE_PAD_X, 1.0);
+                let inner_width = (wrap_width - pad_x * 2).max(40);
+                let width = text_width_with_font(hdc, normal_font, text) + pad_x * 2;
+                required_content_width = required_content_width.max(width);
+                let rows = wrapped_line_count_for_text(hdc, normal_font, text, inner_width);
+                wrapped_line_count += rows.max(1) + 1;
             }
             Line::MenuItem {
                 price_prefix,
@@ -137,6 +174,7 @@ pub(super) fn measure_lines_layout(
     LineLayoutMetrics {
         required_content_width,
         wrapped_line_count,
+        extra_height_px,
     }
 }
 
@@ -419,6 +457,7 @@ pub(in crate::popup) fn text_metrics(hdc: HDC, font: HFONT) -> TEXTMETRICW {
 }
 
 pub(in crate::popup) fn text_width(hdc: HDC, text: &str) -> i32 {
+    crate::perf::count_text_width_call();
     let wide = to_wstring(text);
     unsafe {
         let mut size = windows::Win32::Foundation::SIZE::default();

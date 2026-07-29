@@ -82,7 +82,7 @@ function textFor(language, key) {
         loading: "Ladataan ruokalistaa...",
         noMenu: "Tälle päivälle ei ole lounaslistaa.",
         noService: "Ravintola ei tarjoile lounasta tänään.",
-        stale: "Ruokalistan päivä ei vastaa tämän päivän päivämäärää",
+        stale: "Näytetään välimuistiin tallennettu ruokalista",
         fetchError: "Päivitysvirhe"
     };
 
@@ -90,7 +90,7 @@ function textFor(language, key) {
         loading: "Loading menu...",
         noMenu: "No lunch menu available for today.",
         noService: "This restaurant is not serving lunch today.",
-        stale: "Menu date does not match today. Waiting for a valid refresh",
+        stale: "Showing a cached menu while refreshing",
         fetchError: "Fetch error"
     };
 
@@ -268,7 +268,8 @@ function compassStudentPriceValue(priceText) {
 }
 
 function shouldHideMenuByStudentPrice(menu, hideExpensiveStudentMeals, isCompassProvider) {
-    if (!hideExpensiveStudentMeals || !isCompassProvider) {
+    var usesAudiencePrices = !!(menu && menu.audiencePrices) || isCompassProvider;
+    if (!hideExpensiveStudentMeals || !usesAudiencePrices) {
         return false;
     }
 
@@ -278,19 +279,15 @@ function shouldHideMenuByStudentPrice(menu, hideExpensiveStudentMeals, isCompass
 
 function menuHeading(menu, showPrices, showStudentPrice, showStaffPrice, showGuestPrice, isCompassProvider) {
     var heading = truncateDisplayText(menu && menu.name, MAX_MENU_HEADING_CHARS);
-    if (!heading) {
-        heading = "Menu";
-    }
-
     var price = truncateDisplayText(menu && menu.price, MAX_MENU_PRICE_CHARS);
     if (showPrices && price) {
-        if (isCompassProvider) {
+        if (!!(menu && menu.audiencePrices) || isCompassProvider) {
             price = formatCompassPrice(price, showStudentPrice, showStaffPrice, showGuestPrice);
             if (!price) {
                 return heading;
             }
         }
-        return heading + " - " + price;
+        return heading ? (heading + " - " + price) : price;
     }
 
     return heading;
@@ -401,7 +398,10 @@ function buildTooltipSubText(language, fetchState, errorMessage, lastUpdatedEpoc
                 continue;
             }
             hasVisibleMenu = true;
-            lines.push(menuHeading(menu, showPrices, showStudentPrice, showStaffPrice, showGuestPrice, isCompassProvider));
+            var heading = menuHeading(menu, showPrices, showStudentPrice, showStaffPrice, showGuestPrice, isCompassProvider);
+            if (heading) {
+                lines.push(heading);
+            }
             var components = menu.components || [];
             for (var j = 0; j < components.length; j++) {
                 var component = plainComponentLine(components[j], showAllergens);
@@ -457,7 +457,10 @@ function buildTooltipSubTextRich(language, fetchState, errorMessage, lastUpdated
                 continue;
             }
             hasVisibleMenu = true;
-            lines.push("<b>" + escapeHtml(menuHeading(menu, showPrices, showStudentPrice, showStaffPrice, showGuestPrice, isCompassProvider)) + "</b>");
+            var heading = menuHeading(menu, showPrices, showStudentPrice, showStaffPrice, showGuestPrice, isCompassProvider);
+            if (heading) {
+                lines.push("<b>" + escapeHtml(heading) + "</b>");
+            }
 
             var components = menu.components || [];
             for (var j = 0; j < components.length; j++) {

@@ -6,33 +6,45 @@ import org.kde.plasma.plasmoid 2.0
 import org.kde.kirigami 2.20 as Kirigami
 
 import "MenuFormatter.js" as MenuFormatter
+import "ApiAdapter.js" as ApiAdapter
 
 PlasmoidItem {
     id: root
 
-    property string apiBaseUrl: "https://www.compass-group.fi/menuapi/feed/json"
-    property string apiRssBaseUrl: "https://www.compass-group.fi/menuapi/feed/rss/current-day"
-    property string meditekniaRestaurantCode: "043601"
-    property string pranzeriaRestaurantCode: "pranzeria-html"
+    property string apiBaseUrl: "https://lunch.veeti.dev/v1"
     property var allRestaurantCatalog: [
-        { code: "0437", fallbackName: "Snellmania", provider: "compass" },
-        { code: "snellari-rss", fallbackName: "Cafe Snellari", provider: "compass-rss", rssCostNumber: "4370", rssUrlBase: "https://www.compass-group.fi/ravintolat-ja-ruokalistat/foodco/kaupungit/kuopio/cafe-snellari/", temporaryClosure: { startDateIso: "2026-05-08", endDateIso: "2026-08-30", messageFi: "Cafe Snellari on suljettu 8.5.-30.8.", messageEn: "Cafe Snellari is closed from 8 May to 30 August." } },
-        { code: "0436", fallbackName: "Canthia", provider: "compass" },
-        { code: "043601", fallbackName: "Mediteknia", provider: "compass", restaurantUrlBase: "https://www.compass-group.fi/ravintolat-ja-ruokalistat/foodco/kaupungit/kuopio/ita-suomen-yliopisto-mediteknia/", temporaryClosure: { startDateIso: "2026-05-04", endDateIso: "2026-08-16", messageFi: "Mediteknia ei tarjoile lounasta 4.5.-16.8.", messageEn: "Mediteknia is not serving lunch from 4 May to 16 August." } },
-        { code: "0439", fallbackName: "Tietoteknia", provider: "compass" },
-        { code: "antell-round", fallbackName: "Antell Round", provider: "antell", antellSlug: "round", antellUrlBase: "https://antell.fi/lounas/kuopio/round/" },
-        { code: "antell-highway", fallbackName: "Antell Highway", provider: "antell", antellSlug: "highway", antellUrlBase: "https://antell.fi/lounas/kuopio/highway/" },
-        { code: "pranzeria-html", fallbackName: "Pranzeria Sorrento", provider: "pranzeria", pranzeriaUrlBase: "https://www.sorrento.fi/pranzeria/" },
-        { code: "huomen-bioteknia", fallbackName: "Hyvä Huomen Bioteknia", provider: "huomen-json", huomenApiBase: "https://europe-west1-luncher-7cf76.cloudfunctions.net/api/v1/week/a96b7ccf-2c3d-432a-8504-971dbb6d55d3/active", huomenUrlBase: "https://hyvahuomen.fi/bioteknia/" }
+        { code: "snellmania", fallbackName: "Snellmania" },
+        { code: "cafe-snellari", fallbackName: "Cafe Snellari" },
+        { code: "canthia", fallbackName: "Canthia" },
+        { code: "tietoteknia", fallbackName: "Tietoteknia" },
+        { code: "hyva-huomen-bioteknia", fallbackName: "Hyvä Huomen Bioteknia" },
+        { code: "antell-round", fallbackName: "Antell Round" },
+        { code: "antell-highway", fallbackName: "Antell Highway" },
+        { code: "mediteknia", fallbackName: "Mediteknia" },
+        { code: "pranzeria-sorrento", fallbackName: "Pranzeria Sorrento" },
+        { code: "caari", fallbackName: "Caari" }
     ]
+    property var legacyRestaurantCodes: ({
+        "0437": "snellmania",
+        "snellari-rss": "cafe-snellari",
+        "0436": "canthia",
+        "0439": "tietoteknia",
+        "huomen-bioteknia": "hyva-huomen-bioteknia",
+        "043601": "mediteknia",
+        "pranzeria-html": "pranzeria-sorrento",
+        "3488": "caari"
+    })
     property var restaurantCatalog: {
         var filtered = filteredRestaurantCatalog(configEnabledRestaurantCodes)
         return Array.isArray(filtered) ? filtered : []
     }
 
     property var restaurantStates: ({})
-    property var requestSerialByCode: ({})
     property var cacheStore: ({})
+    property int snapshotRequestSerial: 0
+    property bool snapshotRequestInFlight: false
+    property double lastSnapshotRequestEpochMs: 0
+    property int minimumSnapshotRequestIntervalMs: 60000
     property int modelVersion: 0
     property bool initialized: false
     property string lastObservedDateIso: ""
@@ -42,7 +54,7 @@ PlasmoidItem {
     property int maxCacheBlobChars: 1048576
     property var allowedExternalHostSuffixes: ["compass-group.fi", "antell.fi", "hyvahuomen.fi", "sorrento.fi", "github.com"]
 
-    property string activeRestaurantCode: "0437"
+    property string activeRestaurantCode: "snellmania"
 
     property string configEnabledRestaurantCodes: {
         var raw = String(Plasmoid.configuration.enabledRestaurantCodes || "").trim()
@@ -59,7 +71,8 @@ PlasmoidItem {
     property string configRestaurantCode: {
         var fallback = defaultRestaurantCode()
         var raw = String(Plasmoid.configuration.restaurantCode || Plasmoid.configuration.costNumber || fallback).trim()
-        return isKnownRestaurant(raw) ? raw : fallback
+        var migrated = migratedRestaurantCode(raw)
+        return isKnownRestaurant(migrated) ? migrated : fallback
     }
     property string configLanguage: {
         var raw = String(Plasmoid.configuration.language || "fi").toLowerCase()
@@ -101,13 +114,18 @@ PlasmoidItem {
         modelVersion += 1
     }
 
+    function migratedRestaurantCode(code) {
+        var normalized = String(code || "").trim()
+        return legacyRestaurantCodes[normalized] || normalized
+    }
+
     function parseConfiguredRestaurantCodes(rawValue) {
         var selectedMap = {}
         var raw = String(rawValue || "")
         if (raw.length > 0) {
             var tokens = raw.split(",")
             for (var i = 0; i < tokens.length; i++) {
-                var token = String(tokens[i] || "").trim()
+                var token = migratedRestaurantCode(tokens[i])
                 if (token) {
                     selectedMap[token] = true
                 }
@@ -177,21 +195,26 @@ PlasmoidItem {
 
     function migrateEnabledRestaurantCodes() {
         var migrationLevel = Number(Plasmoid.configuration.enabledRestaurantCodesMigrationLevel || 0)
-        if (migrationLevel >= 3) {
+        if (migrationLevel >= 4) {
             return
         }
 
         var raw = String(Plasmoid.configuration.enabledRestaurantCodes || "").trim()
         var selectedCodes = parseConfiguredRestaurantCodes(raw)
-        if (migrationLevel < 2 && selectedCodes.indexOf(meditekniaRestaurantCode) < 0) {
-            selectedCodes.push(meditekniaRestaurantCode)
-        }
-        if (selectedCodes.indexOf(pranzeriaRestaurantCode) < 0) {
-            selectedCodes.push(pranzeriaRestaurantCode)
+        if (selectedCodes.indexOf("caari") < 0) {
+            selectedCodes.push("caari")
         }
         writeConfiguredRestaurantCodes(selectedCodes)
 
-        Plasmoid.configuration.enabledRestaurantCodesMigrationLevel = 3
+        var selectedRestaurant = migratedRestaurantCode(
+            Plasmoid.configuration.restaurantCode
+                || Plasmoid.configuration.costNumber
+                || defaultRestaurantCode()
+        )
+        Plasmoid.configuration.restaurantCode = isKnownRestaurant(selectedRestaurant)
+            ? selectedRestaurant
+            : defaultRestaurantCode()
+        Plasmoid.configuration.enabledRestaurantCodesMigrationLevel = 4
     }
 
     function defaultRestaurantCode() {
@@ -199,7 +222,7 @@ PlasmoidItem {
         if (codes.length > 0) {
             return String(codes[0])
         }
-        return allRestaurantCatalog.length > 0 ? String(allRestaurantCatalog[0].code) : "0437"
+        return allRestaurantCatalog.length > 0 ? String(allRestaurantCatalog[0].code) : "snellmania"
     }
 
     function restaurantCodes() {
@@ -253,9 +276,8 @@ PlasmoidItem {
             isTodayFresh: false,
             serviceState: "",
             consecutiveFailures: 0,
+            retryDateIso: "",
             nextRetryEpochMs: 0,
-            assumedNoMenuWeekend: false,
-            assumedNoMenuRetryEpochMs: 0,
             restaurantName: "",
             restaurantUrl: ""
         }
@@ -267,9 +289,6 @@ PlasmoidItem {
             var code = codes[i]
             if (!restaurantStates[code]) {
                 restaurantStates[code] = stateTemplate(code)
-            }
-            if (!requestSerialByCode[code]) {
-                requestSerialByCode[code] = 0
             }
         }
     }
@@ -320,23 +339,8 @@ PlasmoidItem {
         touchModel()
     }
 
-    function localDateIso(dateObj) {
-        var year = dateObj.getFullYear()
-        var month = (dateObj.getMonth() + 1).toString()
-        var day = dateObj.getDate().toString()
-
-        if (month.length < 2) {
-            month = "0" + month
-        }
-        if (day.length < 2) {
-            day = "0" + day
-        }
-
-        return year + "-" + month + "-" + day
-    }
-
     function todayIso() {
-        return localDateIso(new Date())
+        return ApiAdapter.helsinkiDateIso(new Date())
     }
 
     function isStateFreshForToday(state) {
@@ -344,106 +348,6 @@ PlasmoidItem {
             return false
         }
         return !!state.providerDateValid && MenuFormatter.normalizeText(state.menuDateIso) === todayIso()
-    }
-
-    function retryDelayMinutes(failureCount) {
-        var count = Math.max(1, Number(failureCount) || 1)
-        if (count <= 1) {
-            return 5
-        }
-        if (count === 2) {
-            return 10
-        }
-        return 15
-    }
-
-    function isWeekendDate(dateObj) {
-        var day = (dateObj || new Date()).getDay()
-        return day === 0 || day === 6
-    }
-
-    function isWeekendNoMenuProvider(provider) {
-        return provider === "antell" || provider === "huomen-json"
-    }
-
-    function isHardWeekendClosedProvider(provider) {
-        return provider === "pranzeria"
-    }
-
-    function weekendNoMenuRetryDelayMs() {
-        return 6 * 60 * 60 * 1000
-    }
-
-    function emptyTodayMenu() {
-        var today = todayIso()
-        return {
-            dateIso: today,
-            lunchTime: "",
-            menus: []
-        }
-    }
-
-    function temporaryClosureForEntry(entry, dateIso) {
-        var closure = entry && entry.temporaryClosure ? entry.temporaryClosure : null
-        if (!closure) {
-            return null
-        }
-
-        var today = MenuFormatter.normalizeText(dateIso || todayIso())
-        var start = MenuFormatter.normalizeText(closure.startDateIso)
-        var end = MenuFormatter.normalizeText(closure.endDateIso)
-        if (!today || !start || !end || today < start || today > end) {
-            return null
-        }
-
-        var message = configLanguage === "en"
-            ? MenuFormatter.normalizeText(closure.messageEn)
-            : MenuFormatter.normalizeText(closure.messageFi)
-        if (!message) {
-            message = configLanguage === "en"
-                ? "This restaurant is not serving lunch today."
-                : "Ravintola ei tarjoile lounasta tänään."
-        }
-
-        return {
-            type: "temporary-closure",
-            message: message
-        }
-    }
-
-    function applyNoServiceStateForCode(code, entry, noService) {
-        var nowMs = Date.now()
-        var url = sanitizeExternalUrl(
-            entry && entry.restaurantUrlBase ? String(entry.restaurantUrlBase) : "",
-            entry && entry.rssUrlBase ? String(entry.rssUrlBase) : ""
-        )
-        if (!url) {
-            url = sanitizeExternalUrl(
-                entry && entry.pranzeriaUrlBase ? String(entry.pranzeriaUrlBase) : "",
-                entry && entry.huomenUrlBase ? String(entry.huomenUrlBase) : ""
-            )
-        }
-
-        updateState(code, {
-            status: "ok",
-            errorMessage: MenuFormatter.normalizeText(noService && noService.message),
-            lastUpdatedEpochMs: nowMs,
-            rawPayload: noService || null,
-            menuDateIso: todayIso(),
-            providerDateValid: true,
-            isTodayFresh: true,
-            serviceState: noService && noService.type ? String(noService.type) : "no-service",
-            todayMenu: emptyTodayMenu(),
-            consecutiveFailures: 0,
-            nextRetryEpochMs: 0,
-            assumedNoMenuWeekend: false,
-            assumedNoMenuRetryEpochMs: 0,
-            restaurantName: entry ? String(entry.fallbackName || "Compass Lunch") : "Compass Lunch",
-            restaurantUrl: url
-        })
-        if (String(code) === activeRestaurantCode) {
-            syncSettingsLastUpdatedDisplay()
-        }
     }
 
     function isAllowedExternalUrl(rawUrl) {
@@ -489,985 +393,7 @@ PlasmoidItem {
         return ""
     }
 
-    function weekdayToken(dateObj) {
-        var names = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"]
-        return names[dateObj.getDay()] || "monday"
-    }
-
-    function decodeHtmlEntities(text) {
-        return String(text || "")
-            .replace(/&#x([0-9a-fA-F]+);/g, function(_, hex) {
-                return String.fromCharCode(parseInt(hex, 16))
-            })
-            .replace(/&#([0-9]+);/g, function(_, dec) {
-                return String.fromCharCode(parseInt(dec, 10))
-            })
-            .replace(/&amp;/g, "&")
-            .replace(/&lt;/g, "<")
-            .replace(/&gt;/g, ">")
-            .replace(/&quot;/g, "\"")
-            .replace(/&#39;/g, "'")
-            .replace(/&nbsp;/g, " ")
-    }
-
-    function stripHtmlText(rawHtml) {
-        var decoded = decodeHtmlEntities(rawHtml)
-        var withoutTags = String(decoded || "").replace(/<[^>]*>/g, " ")
-        return MenuFormatter.normalizeText(withoutTags)
-    }
-
-    function stripHtmlTextLines(rawHtml) {
-        var withBreaks = String(rawHtml || "").replace(/<br\s*\/?>/gi, "\n")
-        var decoded = decodeHtmlEntities(withBreaks)
-        var withoutTags = String(decoded || "").replace(/<[^>]*>/g, " ")
-        var rawLines = withoutTags.split(/\n+/)
-        var lines = []
-        for (var i = 0; i < rawLines.length; i++) {
-            var line = MenuFormatter.normalizeText(rawLines[i])
-            if (line) {
-                lines.push(line)
-            }
-        }
-        return lines
-    }
-
-    function parseAntellSections(htmlText) {
-        var sections = []
-        var sectionRegex = /<section class="menu-section">([\s\S]*?)<\/section>/gi
-        var sectionMatch
-
-        while ((sectionMatch = sectionRegex.exec(String(htmlText || ""))) !== null) {
-            var sectionHtml = sectionMatch[1]
-            var titleMatch = sectionHtml.match(/<h2 class="menu-title">([\s\S]*?)<\/h2>/i)
-            var priceMatch = sectionHtml.match(/<h2 class="menu-price">([\s\S]*?)<\/h2>/i)
-            var listMatch = sectionHtml.match(/<ul class="menu-list">([\s\S]*?)<\/ul>/i)
-
-            var title = stripHtmlText(titleMatch ? titleMatch[1] : "")
-            var price = stripHtmlText(priceMatch ? priceMatch[1] : "")
-            var listHtml = listMatch ? listMatch[1] : ""
-
-            var items = []
-            var liRegex = /<li[^>]*>([\s\S]*?)<\/li>/gi
-            var liMatch
-            while ((liMatch = liRegex.exec(listHtml)) !== null) {
-                var itemText = stripHtmlText(liMatch[1])
-                if (itemText) {
-                    items.push(itemText)
-                }
-            }
-
-            if (items.length === 0) {
-                continue
-            }
-
-            sections.push({
-                sortOrder: sections.length + 1,
-                name: title || "Menu",
-                price: price,
-                components: items
-            })
-        }
-
-        return sections
-    }
-
-    function parseRssTagRaw(xmlText, tagName) {
-        var regex = new RegExp("<" + tagName + "(?:\\s+[^>]*)?>([\\s\\S]*?)<\\/" + tagName + ">", "i")
-        var match = String(xmlText || "").match(regex)
-        return match ? String(match[1] || "") : ""
-    }
-
-    function parseRssMenuDateIso(dateText) {
-        var clean = MenuFormatter.normalizeText(dateText)
-        if (!clean) {
-            return ""
-        }
-
-        var parts = clean.match(/(\d{1,2})[-.\/](\d{1,2})[-.\/](\d{2,4})/)
-        if (!parts) {
-            return ""
-        }
-
-        var day = Number(parts[1])
-        var month = Number(parts[2])
-        var year = Number(parts[3])
-        if (!isFinite(day) || !isFinite(month) || !isFinite(year)) {
-            return ""
-        }
-        if (year < 100) {
-            year += 2000
-        }
-        if (day < 1 || day > 31 || month < 1 || month > 12) {
-            return ""
-        }
-
-        var candidate = new Date(year, month - 1, day)
-        if (candidate.getFullYear() !== year || candidate.getMonth() !== month - 1 || candidate.getDate() !== day) {
-            return ""
-        }
-        return localDateIso(candidate)
-    }
-
-    function isRssAllergenToken(token) {
-        var clean = MenuFormatter.normalizeText(token).replace(/[.;:]+$/, "")
-        if (!clean) {
-            return false
-        }
-        if (clean === "*") {
-            return true
-        }
-
-        if (/^[A-Z]$/.test(clean)) {
-            return true
-        }
-
-        var upper = clean.toUpperCase()
-        if (upper === "VEG" || upper === "VS" || upper === "ILM") {
-            return true
-        }
-
-        return false
-    }
-
-    function normalizeRssAllergenToken(token) {
-        var clean = MenuFormatter.normalizeText(token).replace(/[.;:]+$/, "")
-        if (!clean) {
-            return ""
-        }
-        if (clean === "*") {
-            return "*"
-        }
-
-        var upper = clean.toUpperCase()
-        if (upper === "VEG") {
-            return "Veg"
-        }
-        return upper
-    }
-
-    function normalizeRssComponentLine(rawLine) {
-        var line = MenuFormatter.normalizeText(rawLine)
-        if (!line) {
-            return ""
-        }
-
-        if (/\((?:\*|[A-Za-z]{1,8})(?:\s*,\s*(?:\*|[A-Za-z]{1,8}))*\)\s*$/.test(line)) {
-            return line
-        }
-
-        var compact = line.replace(/\s*[;,]\s*$/, "")
-        var parts = compact.split(/\s*,\s*/)
-        if (parts.length < 2) {
-            return compact
-        }
-
-        var suffixTokens = []
-        for (var i = parts.length - 1; i >= 0; i--) {
-            var candidate = MenuFormatter.normalizeText(parts[i])
-            if (!isRssAllergenToken(candidate)) {
-                break
-            }
-            var normalizedToken = normalizeRssAllergenToken(candidate)
-            if (!normalizedToken) {
-                break
-            }
-            suffixTokens.unshift(normalizedToken)
-        }
-
-        if (suffixTokens.length === 0) {
-            return compact
-        }
-
-        var mainParts = parts.slice(0, parts.length - suffixTokens.length)
-        var mainText = MenuFormatter.normalizeText(mainParts.join(", "))
-        if (!mainText) {
-            return compact
-        }
-
-        var starMatch = mainText.match(/^(.*\S)\s*\*$/)
-        if (starMatch) {
-            mainText = MenuFormatter.normalizeText(starMatch[1])
-            suffixTokens.unshift("*")
-        }
-
-        while (true) {
-            var trailingMatch = mainText.match(/^(.*\S)\s+([A-Za-z*]{1,4})$/)
-            if (!trailingMatch) {
-                break
-            }
-            var trailingToken = normalizeRssAllergenToken(trailingMatch[2])
-            if (!isRssAllergenToken(trailingMatch[2]) || !trailingToken) {
-                break
-            }
-            mainText = MenuFormatter.normalizeText(trailingMatch[1])
-            suffixTokens.unshift(trailingToken)
-        }
-
-        return mainText + " (" + suffixTokens.join(", ") + ")"
-    }
-
-    function parseRssComponents(descriptionRaw) {
-        var decoded = decodeHtmlEntities(descriptionRaw)
-        var components = []
-        var paragraphRegex = /<p[^>]*>([\s\S]*?)<\/p>/gi
-        var paragraphMatch
-
-        while ((paragraphMatch = paragraphRegex.exec(decoded)) !== null) {
-            var line = normalizeRssComponentLine(stripHtmlText(paragraphMatch[1]))
-            if (line) {
-                components.push(line)
-            }
-        }
-
-        if (components.length === 0) {
-            var fallback = normalizeRssComponentLine(stripHtmlText(decoded))
-            if (fallback) {
-                components.push(fallback)
-            }
-        }
-
-        return components
-    }
-
-    function localizedField(value) {
-        if (value === null || value === undefined) {
-            return ""
-        }
-
-        var primitiveType = typeof value
-        if (primitiveType === "string" || primitiveType === "number" || primitiveType === "boolean") {
-            return MenuFormatter.normalizeText(value)
-        }
-
-        if (primitiveType !== "object") {
-            return ""
-        }
-
-        var preferredKeys = [configLanguage, "fi", "en"]
-        for (var i = 0; i < preferredKeys.length; i++) {
-            var key = preferredKeys[i]
-            if (!Object.prototype.hasOwnProperty.call(value, key)) {
-                continue
-            }
-            var candidate = MenuFormatter.normalizeText(value[key])
-            if (candidate) {
-                return candidate
-            }
-        }
-
-        for (var dynamicKey in value) {
-            if (!Object.prototype.hasOwnProperty.call(value, dynamicKey)) {
-                continue
-            }
-            var fallback = MenuFormatter.normalizeText(value[dynamicKey])
-            if (fallback) {
-                return fallback
-            }
-        }
-
-        return ""
-    }
-
-    function normalizeHuomenAllergenToken(token) {
-        var clean = MenuFormatter.normalizeText(token)
-        if (!clean) {
-            return ""
-        }
-        if (clean === "*") {
-            return "*"
-        }
-
-        var upper = clean.toUpperCase()
-        if (upper === "VEG") {
-            return "Veg"
-        }
-        if (/^[A-Z]{1,8}$/.test(upper)) {
-            return upper
-        }
-
-        return clean
-    }
-
-    function huomenLunchLine(lunch) {
-        var title = localizedField(lunch && lunch.title)
-        if (!title) {
-            return ""
-        }
-
-        var description = localizedField(lunch && lunch.description)
-        var line = title
-        if (description && description !== title) {
-            line += " - " + description
-        }
-
-        var allergens = []
-        var seenAllergens = {}
-        var rawAllergens = Array.isArray(lunch && lunch.allergens) ? lunch.allergens : []
-        for (var i = 0; i < rawAllergens.length; i++) {
-            var rawToken = localizedField(rawAllergens[i] && rawAllergens[i].abbreviation)
-            var token = normalizeHuomenAllergenToken(rawToken)
-            if (!token) {
-                continue
-            }
-            var key = token.toUpperCase()
-            if (seenAllergens[key]) {
-                continue
-            }
-            seenAllergens[key] = true
-            allergens.push(token)
-        }
-
-        if (allergens.length > 0) {
-            line += " (" + allergens.join(", ") + ")"
-        }
-
-        return MenuFormatter.normalizeText(line)
-    }
-
-    function parseAntellMenuDateIso(menuDateText) {
-        var clean = MenuFormatter.normalizeText(menuDateText)
-        if (!clean) {
-            return ""
-        }
-
-        var parts = clean.match(/(\d{1,2})\.(\d{1,2})(?:\.(\d{2,4}))?/)
-        if (!parts) {
-            return ""
-        }
-
-        var day = Number(parts[1])
-        var month = Number(parts[2])
-        if (!isFinite(day) || !isFinite(month) || day < 1 || day > 31 || month < 1 || month > 12) {
-            return ""
-        }
-
-        function buildCandidate(yearNumber) {
-            var candidate = new Date(yearNumber, month - 1, day)
-            if (candidate.getFullYear() !== yearNumber || candidate.getMonth() !== month - 1 || candidate.getDate() !== day) {
-                return null
-            }
-            return candidate
-        }
-
-        if (parts[3]) {
-            var explicitYear = Number(parts[3])
-            if (!isFinite(explicitYear)) {
-                return ""
-            }
-            if (explicitYear < 100) {
-                explicitYear += 2000
-            }
-            var datedCandidate = buildCandidate(explicitYear)
-            return datedCandidate ? localDateIso(datedCandidate) : ""
-        }
-
-        var now = new Date()
-        var nowMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-        var years = [now.getFullYear() - 1, now.getFullYear(), now.getFullYear() + 1]
-        var best = null
-        var bestDistance = Number.MAX_VALUE
-
-        for (var i = 0; i < years.length; i++) {
-            var candidate = buildCandidate(years[i])
-            if (!candidate) {
-                continue
-            }
-            var distance = Math.abs(candidate.getTime() - nowMidnight.getTime())
-            if (distance < bestDistance) {
-                bestDistance = distance
-                best = candidate
-            }
-        }
-
-        return best ? localDateIso(best) : ""
-    }
-
-    function buildPranzeriaDate(yearNumber, month, day) {
-        var candidate = new Date(yearNumber, month - 1, day)
-        if (candidate.getFullYear() !== yearNumber || candidate.getMonth() !== month - 1 || candidate.getDate() !== day) {
-            return null
-        }
-        return candidate
-    }
-
-    function parsePranzeriaDateIso(dateText) {
-        var clean = MenuFormatter.normalizeText(dateText)
-        if (!clean) {
-            return ""
-        }
-
-        var isoMatch = clean.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/)
-        if (isoMatch) {
-            var isoCandidate = buildPranzeriaDate(Number(isoMatch[1]), Number(isoMatch[2]), Number(isoMatch[3]))
-            return isoCandidate ? localDateIso(isoCandidate) : ""
-        }
-
-        var parts = clean.match(/^(\d{1,2})[./-](\d{1,2})(?:[./-](\d{2,4}))?\.?$/)
-        if (!parts) {
-            return ""
-        }
-
-        var day = Number(parts[1])
-        var month = Number(parts[2])
-        if (!isFinite(day) || !isFinite(month) || day < 1 || day > 31 || month < 1 || month > 12) {
-            return ""
-        }
-
-        if (parts[3]) {
-            var explicitYear = Number(parts[3])
-            if (!isFinite(explicitYear)) {
-                return ""
-            }
-            if (explicitYear < 100) {
-                explicitYear += 2000
-            }
-            var explicitCandidate = buildPranzeriaDate(explicitYear, month, day)
-            return explicitCandidate ? localDateIso(explicitCandidate) : ""
-        }
-
-        var now = new Date()
-        var nowMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-        var years = [now.getFullYear() - 1, now.getFullYear(), now.getFullYear() + 1]
-        var best = null
-        var bestDistance = Number.MAX_VALUE
-        var maxDistance = 14 * 24 * 60 * 60 * 1000
-
-        for (var i = 0; i < years.length; i++) {
-            var candidate = buildPranzeriaDate(years[i], month, day)
-            if (!candidate) {
-                continue
-            }
-            var distance = Math.abs(candidate.getTime() - nowMidnight.getTime())
-            if (distance > maxDistance) {
-                continue
-            }
-            if (distance < bestDistance) {
-                bestDistance = distance
-                best = candidate
-            }
-        }
-
-        return best ? localDateIso(best) : ""
-    }
-
-    function pranzeriaWeekdayPattern() {
-        return "(?:Maanantai|Tiistai|Keskiviikko|Torstai|Perjantai|Lauantai|Sunnuntai|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)"
-    }
-
-    function pranzeriaDatePattern() {
-        return "(?:\\d{4}[-/]\\d{1,2}[-/]\\d{1,2}|\\d{1,2}[./-]\\d{1,2}(?:[./-]\\d{2,4})?\\.?)"
-    }
-
-    function sanitizePranzeriaHeaderRemainder(restText) {
-        var clean = MenuFormatter.normalizeText(restText)
-        if (!clean) {
-            return ""
-        }
-
-        clean = clean.replace(new RegExp("\\b" + pranzeriaWeekdayPattern() + "\\b", "ig"), " ")
-        clean = clean.replace(/^[\s:,\-|/]+|[\s:,\-|/]+$/g, " ")
-        return MenuFormatter.normalizeText(clean)
-    }
-
-    function looksLikePranzeriaTimeRange(dateText, restText) {
-        var cleanDate = MenuFormatter.normalizeText(dateText)
-        var dotCount = (cleanDate.match(/\./g) || []).length
-        if (cleanDate.indexOf("/") >= 0 || cleanDate.indexOf("-") >= 0 || dotCount > 1) {
-            return false
-        }
-
-        var cleanRest = MenuFormatter.normalizeText(restText)
-        if (cleanRest.indexOf("-") !== 0) {
-            return false
-        }
-
-        return /^-\s*\d{1,2}[.:]\d{2}/.test(cleanRest)
-    }
-
-    function parsePranzeriaDayHeader(lineText) {
-        var clean = MenuFormatter.normalizeText(lineText)
-        if (!clean) {
-            return null
-        }
-
-        var weekdayFirst = clean.match(new RegExp("^(?:" + pranzeriaWeekdayPattern() + ")\\s+(" + pranzeriaDatePattern() + ")(.*)$", "i"))
-        if (weekdayFirst) {
-            var weekdayFirstIso = parsePranzeriaDateIso(weekdayFirst[1])
-            if (!weekdayFirstIso) {
-                return null
-            }
-            return {
-                dateIso: weekdayFirstIso,
-                trailing: sanitizePranzeriaHeaderRemainder(weekdayFirst[2])
-            }
-        }
-
-        var dateFirst = clean.match(new RegExp("^(" + pranzeriaDatePattern() + ")(.*)$", "i"))
-        if (!dateFirst || looksLikePranzeriaTimeRange(dateFirst[1], dateFirst[2])) {
-            return null
-        }
-
-        var iso = parsePranzeriaDateIso(dateFirst[1])
-        if (!iso) {
-            return null
-        }
-        return {
-            dateIso: iso,
-            trailing: sanitizePranzeriaHeaderRemainder(dateFirst[2])
-        }
-    }
-
-    function isPranzeriaLegendLine(lineText) {
-        var clean = MenuFormatter.normalizeText(lineText)
-        if (!clean) {
-            return false
-        }
-
-        if (/^(?:L|G|M|V|VG)\s*=/.test(clean)) {
-            return true
-        }
-
-        return clean.indexOf("Laktoositon") >= 0
-            || clean.indexOf("Gluteeniton") >= 0
-            || clean.indexOf("Maidoton") >= 0
-            || clean.indexOf("Kasvis") >= 0
-            || clean.indexOf("Vegaani") >= 0
-    }
-
-    function normalizePranzeriaAllergenToken(token) {
-        var clean = MenuFormatter.normalizeText(token).toUpperCase()
-        if (clean === "VEG") {
-            return "VG"
-        }
-        if (clean === "L" || clean === "G" || clean === "M" || clean === "V" || clean === "VG") {
-            return clean
-        }
-        return ""
-    }
-
-    function normalizePranzeriaLunchLine(lineText) {
-        var line = MenuFormatter.normalizeText(lineText)
-        if (!line || /\((?:\*|[A-Za-z]{1,8})(?:\s*,\s*(?:\*|[A-Za-z]{1,8}))*\)\s*$/.test(line)) {
-            return line
-        }
-
-        var rest = line
-        var tags = []
-        var guard = 0
-        while (guard < 8) {
-            guard += 1
-            var requestMatch = rest.match(/^(.*?)(?:[,;\s]+)(?:pyydett[aä]ess[aä]|pyydet[aä]ess[aä])\s+(VG|VEG|L|G|M|V)\s*[.,;:]*$/i)
-            var tokenMatch = requestMatch ? null : rest.match(/^(.*?)(?:[,;\s]+)(VG|VEG|L|G|M|V)\s*[.,;:]*$/i)
-            var match = requestMatch || tokenMatch
-            if (!match) {
-                break
-            }
-
-            var tag = normalizePranzeriaAllergenToken(match[2])
-            if (!tag) {
-                break
-            }
-            tags.unshift(tag)
-            rest = MenuFormatter.normalizeText(match[1]).replace(/[,\s;:]+$/g, "")
-        }
-
-        var main = MenuFormatter.normalizeText(rest)
-        if (!main || tags.length === 0) {
-            return line
-        }
-
-        var uniqueTags = []
-        for (var i = 0; i < tags.length; i++) {
-            if (uniqueTags.indexOf(tags[i]) < 0) {
-                uniqueTags.push(tags[i])
-            }
-        }
-        return main + " (" + uniqueTags.join(", ") + ")"
-    }
-
-    function normalizeCompassRssTodayMenu(rawPayload) {
-        if (!rawPayload || rawPayload.provider !== "compass-rss" || !rawPayload.providerDateValid) {
-            return null
-        }
-
-        var menuDate = MenuFormatter.normalizeText(rawPayload.menuDateIso)
-        if (!menuDate) {
-            return null
-        }
-
-        var components = Array.isArray(rawPayload.components) ? rawPayload.components.slice(0) : []
-        return {
-            dateIso: menuDate,
-            lunchTime: "",
-            menus: components.length > 0
-                ? [{
-                    sortOrder: 1,
-                    name: configLanguage === "en" ? "Lunch" : "Lounas",
-                    price: "",
-                    components: components
-                }]
-                : []
-        }
-    }
-
-    function normalizeHuomenTodayMenu(rawPayload) {
-        if (!rawPayload || rawPayload.provider !== "huomen-json" || !rawPayload.providerDateValid) {
-            return null
-        }
-
-        var menuDate = MenuFormatter.normalizeText(rawPayload.menuDateIso)
-        if (!menuDate) {
-            return null
-        }
-
-        var components = Array.isArray(rawPayload.lunchLines) ? rawPayload.lunchLines.slice(0) : []
-        return {
-            dateIso: menuDate,
-            lunchTime: "",
-            menus: components.length > 0
-                ? [{
-                    sortOrder: 1,
-                    name: configLanguage === "en" ? "Lunch" : "Lounas",
-                    price: "",
-                    components: components
-                }]
-                : []
-        }
-    }
-
-    function normalizeAntellTodayMenu(rawPayload) {
-        if (!rawPayload || rawPayload.provider !== "antell" || !rawPayload.providerDateValid) {
-            return null
-        }
-
-        var menuDate = MenuFormatter.normalizeText(rawPayload.menuDateIso)
-        if (!menuDate) {
-            return null
-        }
-
-        return {
-            dateIso: menuDate,
-            lunchTime: "",
-            menus: parseAntellSections(rawPayload.htmlText)
-        }
-    }
-
-    function normalizePranzeriaTodayMenu(rawPayload) {
-        if (!rawPayload || rawPayload.provider !== "pranzeria" || !rawPayload.providerDateValid) {
-            return null
-        }
-
-        var menuDate = MenuFormatter.normalizeText(rawPayload.menuDateIso)
-        if (!menuDate) {
-            return null
-        }
-
-        var components = Array.isArray(rawPayload.lunchLines) ? rawPayload.lunchLines.slice(0) : []
-        return {
-            dateIso: menuDate,
-            lunchTime: "",
-            menus: components.length > 0
-                ? [{
-                    sortOrder: 1,
-                    name: "Lounas",
-                    price: "",
-                    components: components
-                }]
-                : []
-        }
-    }
-
-    function parseAntellPayload(code, htmlText) {
-        var entry = restaurantEntryForCode(code)
-        var payloadText = String(htmlText || "")
-        var locationMatch = payloadText.match(/<div class="menu-location">([\s\S]*?)<\/div>/i)
-        var menuDateMatch = payloadText.match(/<div class="menu-date">([\s\S]*?)<\/div>/i)
-        var location = stripHtmlText(locationMatch ? locationMatch[1] : "")
-        var menuDateText = stripHtmlText(menuDateMatch ? menuDateMatch[1] : "")
-        var menuDateIso = parseAntellMenuDateIso(menuDateText)
-        var isDateToday = menuDateIso && menuDateIso === todayIso()
-        var fallbackName = entry ? String(entry.fallbackName || "Antell") : "Antell"
-        var name = location
-            ? (location.toLowerCase().indexOf("antell") === 0 ? location : ("Antell " + location))
-            : fallbackName
-        var url = sanitizeExternalUrl(entry && entry.antellUrlBase ? String(entry.antellUrlBase) : "", "")
-        var rawPayload = {
-            provider: "antell",
-            htmlText: payloadText,
-            menuDateText: menuDateText,
-            menuDateIso: menuDateIso,
-            providerDateValid: !!isDateToday,
-            restaurantName: name,
-            restaurantUrl: url
-        }
-
-        return {
-            rawPayload: rawPayload,
-            todayMenu: normalizeAntellTodayMenu(rawPayload),
-            menuDateIso: menuDateIso,
-            providerDateValid: !!isDateToday,
-            restaurantName: name,
-            restaurantUrl: url
-        }
-    }
-
-    function parsePranzeriaPayload(code, htmlText) {
-        var entry = restaurantEntryForCode(code)
-        var payloadText = String(htmlText || "")
-        var blockRegex = /<(?:p|h[1-6]|li)\b[^>]*>([\s\S]*?)<\/(?:p|h[1-6]|li)>/gi
-        var dayLinesByIso = {}
-        var currentDateIso = ""
-        var stopParsing = false
-        var match
-
-        while (!stopParsing && (match = blockRegex.exec(payloadText)) !== null) {
-            var blockLines = stripHtmlTextLines(match[1])
-            for (var blockLineIndex = 0; blockLineIndex < blockLines.length; blockLineIndex++) {
-                var line = blockLines[blockLineIndex]
-                if (!line) {
-                    continue
-                }
-
-                var dayHeader = parsePranzeriaDayHeader(line)
-                if (dayHeader) {
-                    currentDateIso = dayHeader.dateIso
-                    if (!Object.prototype.hasOwnProperty.call(dayLinesByIso, currentDateIso)) {
-                        dayLinesByIso[currentDateIso] = []
-                    }
-                    if (dayHeader.trailing) {
-                        dayLinesByIso[currentDateIso].push(dayHeader.trailing)
-                    }
-                    continue
-                }
-
-                if (!currentDateIso) {
-                    continue
-                }
-
-                if (isPranzeriaLegendLine(line)) {
-                    stopParsing = true
-                    break
-                }
-
-                dayLinesByIso[currentDateIso].push(line)
-            }
-        }
-
-        var today = todayIso()
-        var providerDateValid = Object.prototype.hasOwnProperty.call(dayLinesByIso, today)
-        var menuDateIso = providerDateValid ? today : ""
-        var rawLines = providerDateValid ? dayLinesByIso[today] : []
-        var lines = []
-        for (var i = 0; i < rawLines.length; i++) {
-            var cleanLine = normalizePranzeriaLunchLine(rawLines[i])
-            if (!cleanLine) {
-                continue
-            }
-            if (lines.length > 0 && lines[lines.length - 1] === cleanLine) {
-                continue
-            }
-            lines.push(cleanLine)
-        }
-
-        var fallbackName = entry ? String(entry.fallbackName || "Pranzeria Sorrento") : "Pranzeria Sorrento"
-        var url = sanitizeExternalUrl(entry && entry.pranzeriaUrlBase ? String(entry.pranzeriaUrlBase) : "", "")
-        var rawPayload = {
-            provider: "pranzeria",
-            menuDateIso: menuDateIso,
-            providerDateValid: providerDateValid,
-            lunchLines: lines,
-            restaurantName: fallbackName,
-            restaurantUrl: url
-        }
-
-        return {
-            rawPayload: rawPayload,
-            todayMenu: normalizePranzeriaTodayMenu(rawPayload),
-            menuDateIso: menuDateIso,
-            providerDateValid: providerDateValid,
-            restaurantName: fallbackName,
-            restaurantUrl: url
-        }
-    }
-
-    function parseCompassRssPayload(code, xmlText) {
-        var entry = restaurantEntryForCode(code)
-        var payloadText = String(xmlText || "")
-        var channelRaw = parseRssTagRaw(payloadText, "channel")
-        var itemMatch = String(channelRaw || payloadText).match(/<item\b[^>]*>([\s\S]*?)<\/item>/i)
-        var itemRaw = itemMatch ? String(itemMatch[1] || "") : ""
-
-        var channelTitle = stripHtmlText(parseRssTagRaw(channelRaw || payloadText, "title"))
-        var itemTitle = stripHtmlText(parseRssTagRaw(itemRaw, "title"))
-        var itemGuid = stripHtmlText(parseRssTagRaw(itemRaw, "guid"))
-        var itemLink = stripHtmlText(parseRssTagRaw(itemRaw, "link"))
-        var descriptionRaw = parseRssTagRaw(itemRaw, "description")
-
-        var menuDateIso = parseRssMenuDateIso(itemTitle) || parseRssMenuDateIso(itemGuid)
-        var isDateToday = menuDateIso && menuDateIso === todayIso()
-        var components = parseRssComponents(descriptionRaw)
-        var fallbackName = entry ? String(entry.fallbackName || "Compass Lunch") : "Compass Lunch"
-        var name = channelTitle || fallbackName
-        var fallbackUrl = entry && entry.rssUrlBase ? String(entry.rssUrlBase) : ""
-        var url = sanitizeExternalUrl(itemLink, fallbackUrl)
-
-        var rawPayload = {
-            provider: "compass-rss",
-            xmlText: payloadText,
-            menuDateIso: menuDateIso,
-            providerDateValid: !!isDateToday,
-            components: components,
-            restaurantName: name,
-            restaurantUrl: url
-        }
-
-        return {
-            rawPayload: rawPayload,
-            todayMenu: normalizeCompassRssTodayMenu(rawPayload),
-            menuDateIso: menuDateIso,
-            providerDateValid: !!isDateToday,
-            restaurantName: name,
-            restaurantUrl: url
-        }
-    }
-
-    function parseHuomenPayload(code, jsonText) {
-        var parsed = null
-        try {
-            parsed = JSON.parse(jsonText)
-        } catch (e) {
-            return { error: "Invalid JSON payload" }
-        }
-
-        if (!parsed || parsed.success === false || !parsed.data || !parsed.data.week || !Array.isArray(parsed.data.week.days)) {
-            return { error: MenuFormatter.normalizeText(parsed && parsed.message) || "Missing week.days in Huomen payload" }
-        }
-
-        var entry = restaurantEntryForCode(code)
-        var data = parsed.data
-        var expectedIso = todayIso()
-        var dayMatch = null
-        var days = data.week.days
-
-        for (var i = 0; i < days.length; i++) {
-            var day = days[i]
-            if (MenuFormatter.normalizeText(day && day.dateString) === expectedIso) {
-                dayMatch = day
-                break
-            }
-        }
-
-        var lunchLines = []
-        if (dayMatch && !dayMatch.isClosed) {
-            var lunches = Array.isArray(dayMatch.lunches) ? dayMatch.lunches : []
-            for (var j = 0; j < lunches.length; j++) {
-                var line = huomenLunchLine(lunches[j])
-                if (line) {
-                    lunchLines.push(line)
-                }
-            }
-        }
-
-        var providerDateValid = !!dayMatch
-        var menuDateIso = providerDateValid ? expectedIso : ""
-        var restaurantName = localizedField(data.location && data.location.name)
-            || (entry ? String(entry.fallbackName || "Huomen Lunch") : "Huomen Lunch")
-        var restaurantUrl = sanitizeExternalUrl(entry && entry.huomenUrlBase ? String(entry.huomenUrlBase) : "", "")
-        var rawPayload = {
-            provider: "huomen-json",
-            menuDateIso: menuDateIso,
-            providerDateValid: providerDateValid,
-            lunchLines: lunchLines,
-            restaurantName: restaurantName,
-            restaurantUrl: restaurantUrl
-        }
-
-        return {
-            rawPayload: rawPayload,
-            todayMenu: normalizeHuomenTodayMenu(rawPayload),
-            menuDateIso: menuDateIso,
-            providerDateValid: providerDateValid,
-            restaurantName: restaurantName,
-            restaurantUrl: restaurantUrl
-        }
-    }
-
-    function normalizeMenuEntry(menuEntry) {
-        var name = MenuFormatter.normalizeText(menuEntry && menuEntry.Name)
-        var price = MenuFormatter.normalizeText(menuEntry && menuEntry.Price)
-        var components = []
-
-        var rawComponents = menuEntry && menuEntry.Components
-        if (Array.isArray(rawComponents)) {
-            for (var i = 0; i < rawComponents.length; i++) {
-                var clean = MenuFormatter.normalizeText(rawComponents[i])
-                if (clean) {
-                    components.push(clean)
-                }
-            }
-        }
-
-        if (!name && components.length === 0) {
-            return null
-        }
-
-        return {
-            sortOrder: Number(menuEntry.SortOrder) || 0,
-            name: name || "Menu",
-            price: price,
-            components: components
-        }
-    }
-
-    function normalizeTodayMenu(payload) {
-        if (!payload || !Array.isArray(payload.MenusForDays)) {
-            return null
-        }
-
-        var currentDateIso = todayIso()
-
-        for (var i = 0; i < payload.MenusForDays.length; i++) {
-            var day = payload.MenusForDays[i]
-            if (MenuFormatter.dayKey(day && day.Date) !== currentDateIso) {
-                continue
-            }
-
-            var rawSetMenus = Array.isArray(day.SetMenus) ? day.SetMenus.slice(0) : []
-            rawSetMenus.sort(function(a, b) {
-                return (Number(a.SortOrder) || 0) - (Number(b.SortOrder) || 0)
-            })
-
-            var menus = []
-            for (var j = 0; j < rawSetMenus.length; j++) {
-                var normalized = normalizeMenuEntry(rawSetMenus[j])
-                if (normalized) {
-                    menus.push(normalized)
-                }
-            }
-
-            return {
-                todayMenu: {
-                    dateIso: currentDateIso,
-                    lunchTime: MenuFormatter.normalizeText(day.LunchTime),
-                    menus: menus
-                },
-                menuDateIso: currentDateIso,
-                providerDateValid: true
-            }
-        }
-
-        return {
-            todayMenu: null,
-            menuDateIso: "",
-            providerDateValid: false
-        }
-    }
-
     function cacheKey(code) {
-        var entry = restaurantEntryForCode(code)
-        if (entry && (entry.provider === "antell" || entry.provider === "pranzeria")) {
-            return String(code) + "|" + String(entry.provider)
-        }
         return String(code) + "|" + configLanguage
     }
 
@@ -1527,184 +453,98 @@ PlasmoidItem {
         }
     }
 
-    function dateMismatchMessage() {
-        return "Date mismatch: expected " + todayIso()
-    }
-
     function setErrorStateForCode(code, message) {
         var current = stateFor(code)
-        if (isStateFreshForToday(current)) {
-            var keepWeekendAssumed = !!current.assumedNoMenuWeekend
-            updateState(code, {
-                status: "ok",
-                errorMessage: "",
-                consecutiveFailures: 0,
-                nextRetryEpochMs: 0,
-                assumedNoMenuWeekend: keepWeekendAssumed,
-                assumedNoMenuRetryEpochMs: keepWeekendAssumed ? (Date.now() + weekendNoMenuRetryDelayMs()) : 0
-            })
+        if (current.status === "ok" && isStateFreshForToday(current)) {
             return
         }
 
-        var failureCount = (Number(current.consecutiveFailures) || 0) + 1
+        var retry = ApiAdapter.retrySchedule(
+            current.consecutiveFailures,
+            current.retryDateIso,
+            todayIso(),
+            Date.now()
+        )
         updateState(code, {
             status: current.payloadText ? "stale" : "error",
             errorMessage: message,
             isTodayFresh: false,
             serviceState: "",
-            consecutiveFailures: failureCount,
-            nextRetryEpochMs: Date.now() + retryDelayMinutes(failureCount) * 60 * 1000,
-            assumedNoMenuWeekend: false,
-            assumedNoMenuRetryEpochMs: 0
+            consecutiveFailures: retry.failureCount,
+            retryDateIso: retry.retryDateIso,
+            nextRetryEpochMs: retry.nextRetryEpochMs
         })
-        retryTimer.start()
+        if (retry.nextRetryEpochMs) {
+            retryTimer.start()
+        }
     }
 
     function applyPayloadForCode(code, payloadText, fromCache, cachedTimestamp) {
-        var entry = restaurantEntryForCode(code)
-        var provider = entry && entry.provider ? String(entry.provider) : "compass"
-        var parsed = null
-        var todayMenu = null
-        var menuDateIso = ""
-        var providerDateValid = false
-        var restaurantName = ""
-        var restaurantUrl = ""
-
-        if (provider === "antell") {
-            var antell = parseAntellPayload(code, payloadText)
-            parsed = antell.rawPayload
-            todayMenu = antell.todayMenu
-            menuDateIso = antell.menuDateIso
-            providerDateValid = antell.providerDateValid
-            restaurantName = antell.restaurantName
-            restaurantUrl = antell.restaurantUrl
-        } else if (provider === "pranzeria") {
-            var pranzeria = parsePranzeriaPayload(code, payloadText)
-            parsed = pranzeria.rawPayload
-            todayMenu = pranzeria.todayMenu
-            menuDateIso = pranzeria.menuDateIso
-            providerDateValid = pranzeria.providerDateValid
-            restaurantName = pranzeria.restaurantName
-            restaurantUrl = pranzeria.restaurantUrl
-        } else if (provider === "compass-rss") {
-            var compassRss = parseCompassRssPayload(code, payloadText)
-            parsed = compassRss.rawPayload
-            todayMenu = compassRss.todayMenu
-            menuDateIso = compassRss.menuDateIso
-            providerDateValid = compassRss.providerDateValid
-            restaurantName = compassRss.restaurantName
-            restaurantUrl = compassRss.restaurantUrl
-        } else if (provider === "huomen-json") {
-            var huomen = parseHuomenPayload(code, payloadText)
-            if (!huomen || huomen.error) {
-                setErrorStateForCode(code, huomen && huomen.error ? huomen.error : "Invalid Huomen payload")
-                return false
-            }
-            parsed = huomen.rawPayload
-            todayMenu = huomen.todayMenu
-            menuDateIso = huomen.menuDateIso
-            providerDateValid = huomen.providerDateValid
-            restaurantName = huomen.restaurantName
-            restaurantUrl = huomen.restaurantUrl
-        } else {
-            try {
-                parsed = JSON.parse(payloadText)
-            } catch (e) {
-                setErrorStateForCode(code, "Invalid JSON payload")
-                return false
-            }
-
-            if (!parsed || !Array.isArray(parsed.MenusForDays)) {
-                setErrorStateForCode(code, "Missing MenusForDays in payload")
-                return false
-            }
-
-            if (parsed.ErrorText) {
-                setErrorStateForCode(code, MenuFormatter.normalizeText(parsed.ErrorText))
-                return false
-            }
-
-            var normalizedCompass = normalizeTodayMenu(parsed)
-            if (!normalizedCompass) {
-                setErrorStateForCode(code, "Invalid menu payload")
-                return false
-            }
-
-            todayMenu = normalizedCompass.todayMenu
-            menuDateIso = normalizedCompass.menuDateIso
-            providerDateValid = normalizedCompass.providerDateValid
-            restaurantName = MenuFormatter.normalizeText(parsed.RestaurantName) || "Compass Lunch"
-            restaurantUrl = sanitizeExternalUrl(parsed.RestaurantUrl, "")
+        var apiPayload
+        try {
+            apiPayload = JSON.parse(payloadText)
+        } catch (apiError) {
+            setErrorStateForCode(code, "Invalid JSON payload")
+            return false
         }
 
-        var updatedMs = fromCache ? (Number(cachedTimestamp) || 0) : Date.now()
-        var today = todayIso()
-        var freshToday = !!providerDateValid && menuDateIso === today
-        var assumeWeekendNoMenu = !freshToday && isWeekendNoMenuProvider(provider) && isWeekendDate(new Date())
-        if (assumeWeekendNoMenu) {
-            freshToday = true
-            providerDateValid = true
-            menuDateIso = today
-            todayMenu = emptyTodayMenu()
+        var apiMenu = ApiAdapter.normalizePayload(
+            apiPayload,
+            String(code),
+            todayIso(),
+            configLanguage
+        )
+        if (!apiMenu || apiMenu.error) {
+            setErrorStateForCode(
+                code,
+                apiMenu && apiMenu.error ? apiMenu.error : "Invalid API response"
+            )
+            return false
         }
+
+        var updatedMs = Number(apiMenu.fetchedAtEpochMs)
+            || (fromCache ? (Number(cachedTimestamp) || 0) : Date.now())
         var current = stateFor(code)
-        var failureCount = Number(current.consecutiveFailures) || 0
-
-        if (assumeWeekendNoMenu) {
-            failureCount = 0
-        } else if (!freshToday && !fromCache) {
-            failureCount += 1
-        } else if (freshToday) {
-            failureCount = 0
-        }
-
-        var nextRetryEpochMs = Number(current.nextRetryEpochMs) || 0
-        var assumedNoMenuRetryEpochMs = Number(current.assumedNoMenuRetryEpochMs) || 0
-        if (assumeWeekendNoMenu) {
-            nextRetryEpochMs = 0
-            assumedNoMenuRetryEpochMs = Date.now() + weekendNoMenuRetryDelayMs()
-        } else if (freshToday) {
-            nextRetryEpochMs = 0
-            assumedNoMenuRetryEpochMs = 0
-        } else if (!fromCache) {
-            nextRetryEpochMs = Date.now() + retryDelayMinutes(failureCount) * 60 * 1000
-            assumedNoMenuRetryEpochMs = 0
-        } else if (!isFinite(nextRetryEpochMs) || nextRetryEpochMs < 0) {
-            nextRetryEpochMs = 0
-            assumedNoMenuRetryEpochMs = 0
-        }
-
+        var stale = !!apiMenu.isStale
+        var retry = stale
+            ? ApiAdapter.retrySchedule(
+                current.consecutiveFailures,
+                current.retryDateIso,
+                todayIso(),
+                Date.now()
+            )
+            : {
+                failureCount: 0,
+                retryDateIso: todayIso(),
+                nextRetryEpochMs: 0
+            }
         updateState(code, {
-            status: freshToday ? "ok" : "stale",
-            errorMessage: freshToday ? "" : dateMismatchMessage(),
+            status: stale ? "stale" : "ok",
+            errorMessage: apiMenu.serviceMessage || "",
             lastUpdatedEpochMs: updatedMs,
             payloadText: payloadText,
-            rawPayload: parsed,
-            todayMenu: todayMenu,
-            menuDateIso: menuDateIso,
-            providerDateValid: !!providerDateValid,
-            isTodayFresh: freshToday,
-            serviceState: assumeWeekendNoMenu ? "weekend-no-menu" : "",
-            consecutiveFailures: failureCount,
-            nextRetryEpochMs: nextRetryEpochMs,
-            assumedNoMenuWeekend: assumeWeekendNoMenu,
-            assumedNoMenuRetryEpochMs: assumedNoMenuRetryEpochMs,
-            restaurantName: restaurantName,
-            restaurantUrl: restaurantUrl
+            rawPayload: apiPayload,
+            todayMenu: apiMenu.todayMenu,
+            menuDateIso: apiMenu.menuDateIso,
+            providerDateValid: true,
+            isTodayFresh: true,
+            serviceState: apiMenu.serviceState || "",
+            consecutiveFailures: retry.failureCount,
+            retryDateIso: retry.retryDateIso,
+            nextRetryEpochMs: retry.nextRetryEpochMs,
+            restaurantName: apiMenu.restaurantName || restaurantLabelForCode(code),
+            restaurantUrl: sanitizeExternalUrl(apiMenu.restaurantUrl, "")
         })
 
-        if ((!freshToday && !fromCache) || assumeWeekendNoMenu) {
+        if (retry.nextRetryEpochMs) {
             retryTimer.start()
         }
-
         if (String(code) === activeRestaurantCode) {
             syncSettingsLastUpdatedDisplay()
         }
-
         if (!fromCache) {
             saveCacheEntry(code, payloadText, updatedMs)
         }
-
         return true
     }
 
@@ -1746,164 +586,162 @@ PlasmoidItem {
             return
         }
 
-        if (!isStateFreshForToday(stateFor(activeRestaurantCode))) {
+        var activeState = stateFor(activeRestaurantCode)
+        if (activeState.status === "stale" || !isStateFreshForToday(activeState)) {
             evaluateFreshnessAndRefresh(false, false)
         }
     }
 
-    function buildRequestUrl(code) {
-        var entry = restaurantEntryForCode(code)
-        if (!entry) {
-            return ""
-        }
-
-        if (entry.provider === "antell") {
-            return String(entry.antellUrlBase)
-                + "?print_lunch_day="
-                + encodeURIComponent(weekdayToken(new Date()))
-                + "&print_lunch_list_day=1"
-        }
-
-        if (entry.provider === "pranzeria") {
-            return String(entry.pranzeriaUrlBase || "").trim()
-        }
-
-        if (entry.provider === "compass-rss") {
-            var rssCost = String(entry.rssCostNumber || "").trim()
-            if (!rssCost) {
-                return ""
-            }
-            return apiRssBaseUrl
-                + "?costNumber="
-                + encodeURIComponent(rssCost)
-                + "&language="
-                + encodeURIComponent(configLanguage)
-        }
-
-        if (entry.provider === "huomen-json") {
-            var huomenApi = String(entry.huomenApiBase || "").trim()
-            if (!huomenApi) {
-                return ""
-            }
-            var separator = huomenApi.indexOf("?") >= 0 ? "&" : "?"
-            return huomenApi + separator + "language=" + encodeURIComponent(configLanguage)
-        }
-
-        return apiBaseUrl + "?costNumber=" + encodeURIComponent(String(code)) + "&language=" + encodeURIComponent(configLanguage)
+    function buildSnapshotRequestUrl() {
+        return apiBaseUrl
+            + "/snapshot?language="
+            + encodeURIComponent(configLanguage)
+            + "&date="
+            + encodeURIComponent(todayIso())
     }
 
-    function fetchRestaurant(code, manual) {
-        if (!isKnownRestaurant(code)) {
+    function fetchDailySnapshot(manual) {
+        if (snapshotRequestInFlight) {
             return
         }
-
-        var normalized = String(code)
-        var current = stateFor(normalized)
-        if (!manual && current.status === "loading") {
+        var requestStartedMs = Date.now()
+        if (!manual
+                && requestStartedMs - lastSnapshotRequestEpochMs
+                    < minimumSnapshotRequestIntervalMs) {
             return
         }
+        lastSnapshotRequestEpochMs = requestStartedMs
 
-        var entry = restaurantEntryForCode(normalized)
-        var provider = entry && entry.provider ? String(entry.provider) : "compass"
-        var noService = temporaryClosureForEntry(entry, todayIso())
-        if (noService) {
-            applyNoServiceStateForCode(normalized, entry, noService)
-            return
-        }
-
-        if (isHardWeekendClosedProvider(provider) && isWeekendDate(new Date())) {
-            updateState(normalized, {
-                status: "ok",
-                errorMessage: "",
-                menuDateIso: todayIso(),
-                providerDateValid: true,
-                isTodayFresh: true,
-                serviceState: "weekend-closure",
-                todayMenu: emptyTodayMenu(),
-                consecutiveFailures: 0,
-                nextRetryEpochMs: 0,
-                assumedNoMenuWeekend: false,
-                assumedNoMenuRetryEpochMs: 0,
-                restaurantName: entry ? String(entry.fallbackName || "Pranzeria Sorrento") : "Pranzeria Sorrento",
-                restaurantUrl: sanitizeExternalUrl(entry && entry.pranzeriaUrlBase ? String(entry.pranzeriaUrlBase) : "", "")
-            })
-            if (String(normalized) === activeRestaurantCode) {
-                syncSettingsLastUpdatedDisplay()
+        snapshotRequestSerial += 1
+        var requestSerial = snapshotRequestSerial
+        snapshotRequestInFlight = true
+        var codes = restaurantCodes()
+        for (var i = 0; i < codes.length; i++) {
+            var current = stateFor(codes[i])
+            if (!current.payloadText) {
+                updateState(codes[i], {
+                    status: "loading",
+                    errorMessage: "",
+                    serviceState: ""
+                })
             }
-            return
-        }
-
-        requestSerialByCode[normalized] = (requestSerialByCode[normalized] || 0) + 1
-        var requestSerial = requestSerialByCode[normalized]
-
-        if (!current.payloadText) {
-            updateState(normalized, {
-                status: "loading",
-                errorMessage: "",
-                serviceState: ""
-            })
-        }
-
-        var requestUrl = buildRequestUrl(normalized)
-        if (!requestUrl) {
-            setErrorStateForCode(normalized, "Unsupported restaurant provider")
-            return
         }
 
         var xhr = new XMLHttpRequest()
-        xhr.open("GET", requestUrl)
+        xhr.open("GET", buildSnapshotRequestUrl())
         xhr.timeout = manual ? 15000 : 10000
 
         xhr.onreadystatechange = function() {
             if (xhr.readyState !== XMLHttpRequest.DONE) {
                 return
             }
-            if (requestSerial !== requestSerialByCode[normalized]) {
+            if (requestSerial !== snapshotRequestSerial) {
                 return
             }
+            snapshotRequestInFlight = false
 
             if (xhr.status >= 200 && xhr.status < 300) {
                 var responseText = String(xhr.responseText || "")
                 if (responseText.length > maxPayloadChars) {
-                    setErrorStateForCode(normalized, "Payload too large")
+                    setSnapshotError("Payload too large")
                     return
                 }
-                applyPayloadForCode(normalized, responseText, false, 0)
+                var payload
+                try {
+                    payload = JSON.parse(responseText)
+                } catch (parseError) {
+                    setSnapshotError("Invalid JSON payload")
+                    return
+                }
+                if (!payload
+                        || payload.apiVersion !== "v1"
+                        || Number(payload.schemaVersion) !== 1
+                        || String(payload.requestedLanguage || "") !== configLanguage
+                        || String(payload.date || "") !== todayIso()
+                        || !Array.isArray(payload.menus)) {
+                    setSnapshotError("Invalid API response")
+                    return
+                }
+
+                var applied = {}
+                for (var j = 0; j < payload.menus.length; j++) {
+                    var menu = payload.menus[j]
+                    var code = String(menu && menu.restaurant
+                        ? menu.restaurant.id || ""
+                        : "")
+                    if (!isKnownRestaurant(code)) {
+                        continue
+                    }
+                    var menuText = JSON.stringify(menu)
+                    if (menuText.length > maxPayloadChars) {
+                        setErrorStateForCode(code, "Payload too large")
+                        continue
+                    }
+                    if (applyPayloadForCode(code, menuText, false, 0)) {
+                        applied[code] = true
+                    }
+                }
+                for (var k = 0; k < codes.length; k++) {
+                    if (!applied[codes[k]]) {
+                        setErrorStateForCode(codes[k], "Incomplete API response")
+                    }
+                }
             } else {
-                setErrorStateForCode(normalized, "HTTP " + xhr.status)
+                setSnapshotError("HTTP " + xhr.status)
             }
         }
 
         xhr.onerror = function() {
-            if (requestSerial !== requestSerialByCode[normalized]) {
+            if (requestSerial !== snapshotRequestSerial) {
                 return
             }
-            setErrorStateForCode(normalized, "Network error")
+            snapshotRequestInFlight = false
+            setSnapshotError("Network error")
         }
 
         xhr.ontimeout = function() {
-            if (requestSerial !== requestSerialByCode[normalized]) {
+            if (requestSerial !== snapshotRequestSerial) {
                 return
             }
-            setErrorStateForCode(normalized, "Request timed out")
+            snapshotRequestInFlight = false
+            setSnapshotError("Request timed out")
         }
 
         xhr.send()
     }
 
-    function evaluateFreshnessAndRefresh(forceNetwork, manual) {
+    function setSnapshotError(message) {
         var codes = restaurantCodes()
         for (var i = 0; i < codes.length; i++) {
-            var code = codes[i]
-            if (forceNetwork || manual) {
-                fetchRestaurant(code, !!manual)
-                continue
-            }
+            setErrorStateForCode(codes[i], message)
+        }
+    }
 
-            var state = stateFor(code)
-            if (!isStateFreshForToday(state)) {
-                fetchRestaurant(code, false)
+    function evaluateFreshnessAndRefresh(forceNetwork, manual) {
+        var codes = restaurantCodes()
+        if (manual) {
+            fetchDailySnapshot(true)
+            return
+        }
+        var nowMs = Date.now()
+        var needsRefresh = false
+        for (var i = 0; i < codes.length; i++) {
+            var state = stateFor(codes[i])
+            var needsRestaurant = !!forceNetwork
+                || !isStateFreshForToday(state)
+            if (needsRestaurant && ApiAdapter.automaticRefreshDue(
+                    forceNetwork,
+                    state.consecutiveFailures,
+                    state.retryDateIso,
+                    todayIso(),
+                    state.nextRetryEpochMs,
+                    nowMs)) {
+                needsRefresh = true
+                break
             }
+        }
+        if (needsRefresh) {
+            fetchDailySnapshot(!!manual)
         }
     }
 
@@ -1916,23 +754,15 @@ PlasmoidItem {
             var code = codes[i]
             var state = stateFor(code)
             var dueMs = Number(state.nextRetryEpochMs) || 0
-            var assumedDueMs = Number(state.assumedNoMenuRetryEpochMs) || 0
 
-            if (state.assumedNoMenuWeekend && assumedDueMs > 0) {
-                hasPendingRetry = true
-                if (assumedDueMs <= nowMs) {
-                    fetchRestaurant(code, false)
-                }
-                continue
-            }
-
-            if (!dueMs || isStateFreshForToday(state)) {
+            if (!dueMs || (state.status === "ok" && isStateFreshForToday(state))) {
                 continue
             }
 
             hasPendingRetry = true
             if (dueMs <= nowMs) {
-                fetchRestaurant(code, false)
+                fetchDailySnapshot(false)
+                return
             }
         }
 
@@ -1981,7 +811,7 @@ PlasmoidItem {
 
     function tooltipMainText() {
         var state = stateFor(activeRestaurantCode)
-        var title = MenuFormatter.truncateDisplayText(state.restaurantName || "Compass Lunch", 160)
+        var title = MenuFormatter.truncateDisplayText(state.restaurantName || "Lunch", 160)
         var safeTitle = MenuFormatter.escapeHtml(title)
         if (state.status === "stale" && !state.isTodayFresh) {
             return "[STALE] " + safeTitle
@@ -1991,8 +821,7 @@ PlasmoidItem {
 
     function tooltipSubText() {
         var state = stateFor(activeRestaurantCode)
-        var entry = restaurantEntryForCode(activeRestaurantCode)
-        var isCompassProvider = !!entry && entry.provider === "compass"
+        var isCompassProvider = false
         return MenuFormatter.buildTooltipSubText(
             configLanguage,
             state.status,
@@ -2016,8 +845,7 @@ PlasmoidItem {
 
     function tooltipSubTextRich() {
         var state = stateFor(activeRestaurantCode)
-        var entry = restaurantEntryForCode(activeRestaurantCode)
-        var isCompassProvider = !!entry && entry.provider === "compass"
+        var isCompassProvider = false
         return MenuFormatter.buildTooltipSubTextRich(
             configLanguage,
             state.status,
@@ -2057,7 +885,7 @@ PlasmoidItem {
     onConfigRestaurantCodeChanged: {
         activeRestaurantCode = configRestaurantCode
         if (!isStateFreshForToday(stateFor(activeRestaurantCode))) {
-            fetchRestaurant(activeRestaurantCode, false)
+            fetchDailySnapshot(false)
         }
         syncSettingsLastUpdatedDisplay()
     }

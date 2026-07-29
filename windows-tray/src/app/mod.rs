@@ -12,13 +12,14 @@ use crate::cache;
 use crate::log::{log_line, set_enabled as set_log_enabled};
 use crate::model::TodayMenu;
 use crate::restaurant::{
-    available_restaurants, effective_fetch_language, is_hard_closed_today, provider_key,
-    restaurant_for_code, restaurant_for_shortcut_index, Provider, Restaurant,
+    available_restaurants, effective_fetch_language, provider_key, restaurant_for_code,
+    restaurant_for_shortcut_index, Provider, Restaurant,
 };
 use crate::settings::{
     load_settings, normalize_theme, normalize_widget_scale, save_settings, settings_dir,
     HighlightTheme, Settings,
 };
+use crate::state::{AppState, FetchStatus};
 use crate::update;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -26,33 +27,6 @@ use time::OffsetDateTime;
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-/// High-level fetch status for the currently selected restaurant.
-pub enum FetchStatus {
-    Idle,
-    Loading,
-    Ok,
-    Stale,
-    Error,
-}
-
-#[derive(Debug, Clone)]
-/// Snapshot of UI-visible application state consumed by popup and tray rendering.
-pub struct AppState {
-    pub settings: Settings,
-    pub status: FetchStatus,
-    pub loading_started_epoch_ms: i64,
-    pub error_message: String,
-    pub stale_network_error: bool,
-    pub today_menu: Option<TodayMenu>,
-    pub restaurant_name: String,
-    pub restaurant_url: String,
-    pub raw_payload: String,
-    pub provider: Provider,
-    pub payload_date: String,
-    pub stale_date: bool,
-}
-
 #[derive(Default, Clone, Copy)]
 struct WindowHandles {
     tray: HWND,
@@ -69,6 +43,7 @@ struct MemoryMenuEntry {
     provider: Provider,
     raw_payload: String,
     payload_date: String,
+    api_stale: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -94,6 +69,7 @@ struct FetchTarget {
 enum RefreshNeed {
     MissingCache,
     StaleDate,
+    ApiStale,
     RefreshIntervalElapsed,
 }
 
@@ -118,6 +94,7 @@ pub struct App {
     hwnds: Mutex<WindowHandles>,
     request_states: Mutex<HashMap<String, RequestState>>,
     last_prefetch_ms: Mutex<i64>,
+    snapshot_fetch_in_flight: Arc<Mutex<bool>>,
     memory_menu_cache: Mutex<HashMap<String, MemoryMenuEntry>>,
     update_check_in_flight: Arc<Mutex<bool>>,
 }
@@ -163,6 +140,7 @@ pub enum UpdateCheckOutcome {
 /// Outcome of applying a completed fetch to the current application state.
 pub enum FetchApplyOutcome {
     CurrentSuccess,
+    CurrentStale,
     CurrentFailure,
     BackgroundSuccess,
     BackgroundFailure,
@@ -190,12 +168,14 @@ impl App {
             raw_payload: String::new(),
             payload_date: String::new(),
             stale_date: false,
+            api_stale: false,
         };
         Self {
             state: Arc::new(Mutex::new(state)),
             hwnds: Mutex::new(WindowHandles::default()),
             request_states: Mutex::new(HashMap::new()),
             last_prefetch_ms: Mutex::new(0),
+            snapshot_fetch_in_flight: Arc::new(Mutex::new(false)),
             memory_menu_cache: Mutex::new(HashMap::new()),
             update_check_in_flight: Arc::new(Mutex::new(false)),
         }
@@ -220,8 +200,65 @@ impl App {
 
     /// Returns a cloned snapshot of the current UI-visible state.
     pub fn snapshot(&self) -> AppState {
-        self.state.lock().unwrap().clone()
+        let state = self.state.lock().unwrap();
+        crate::perf::count_snapshot_clone(
+            estimated_app_state_clone_bytes(&state),
+            estimated_app_state_clone_strings(&state),
+        );
+        state.clone()
     }
+
+    /// Returns a cloned settings snapshot without cloning the current menu payload.
+    pub fn settings_snapshot(&self) -> Settings {
+        self.state.lock().unwrap().settings.clone()
+    }
+}
+
+fn estimated_app_state_clone_bytes(state: &AppState) -> usize {
+    let mut total = state.error_message.len()
+        + state.restaurant_name.len()
+        + state.restaurant_url.len()
+        + state.raw_payload.len()
+        + state.payload_date.len()
+        + state.settings.restaurant_code.len()
+        + state.settings.language.len()
+        + state.settings.theme.len()
+        + state.settings.widget_scale.len();
+    if let Some(menu) = &state.today_menu {
+        total += menu.date_iso.len() + menu.lunch_time.len();
+        for group in &menu.menus {
+            total += group.name.len() + group.price.len();
+            total += group.components.iter().map(String::len).sum::<usize>();
+            total += group
+                .prices
+                .iter()
+                .map(|price| price.amount.len())
+                .sum::<usize>();
+            for detail in group.component_recipe_details.iter().flatten() {
+                total += detail.name.len() + detail.ingredients_cleaned.len() + detail.diets.len();
+                total += detail
+                    .nutritional_values
+                    .iter()
+                    .map(|value| value.name.len() + value.unit.len())
+                    .sum::<usize>();
+            }
+        }
+    }
+    total
+}
+
+fn estimated_app_state_clone_strings(state: &AppState) -> usize {
+    let mut total = 9usize;
+    if let Some(menu) = &state.today_menu {
+        total += 2;
+        for group in &menu.menus {
+            total += 2 + group.components.len() + group.prices.len();
+            for detail in group.component_recipe_details.iter().flatten() {
+                total += 3 + detail.nutritional_values.len() * 2;
+            }
+        }
+    }
+    total
 }
 
 /// Returns the current local epoch timestamp in milliseconds.
@@ -272,13 +309,7 @@ fn today_key() -> String {
 }
 
 fn update_stale_date(state: &mut AppState) {
-    let restaurant = restaurant_for_code(
-        &state.settings.restaurant_code,
-        state.settings.enable_antell_restaurants,
-    );
-    if is_hard_closed_today(restaurant) {
-        state.stale_date = false;
-    } else if !state.payload_date.is_empty() {
+    if !state.payload_date.is_empty() {
         state.stale_date = state.payload_date != today_key();
     } else {
         state.stale_date = false;
@@ -332,6 +363,7 @@ fn refresh_need_for_target(
     refresh_minutes: u32,
     payload_date: &str,
     has_payload: bool,
+    api_stale: bool,
     now_ms: i64,
 ) -> Option<RefreshNeed> {
     if !has_payload {
@@ -341,6 +373,9 @@ fn refresh_need_for_target(
     let today = today_key();
     if !payload_date.is_empty() && payload_date != today {
         return Some(RefreshNeed::StaleDate);
+    }
+    if api_stale {
+        return Some(RefreshNeed::ApiStale);
     }
 
     if refresh_minutes == 0 {
@@ -415,17 +450,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn request_state_key_uses_effective_fetch_language() {
-        let target = fetch_target_for_values("3488", "en", true);
-        assert_eq!(target.effective_language, "fi");
-        assert_eq!(target.key, "3488|fi");
+    fn request_state_key_uses_requested_api_language() {
+        let target = fetch_target_for_values("caari", "en", true);
+        assert_eq!(target.effective_language, "en");
+        assert_eq!(target.key, "caari|en");
     }
 
     #[test]
     fn refresh_need_marks_missing_payload_as_missing_cache() {
         let target = fetch_target_for_values("0437", "fi", true);
         assert_eq!(
-            refresh_need_for_target(&target, 1440, "", false, now_epoch_ms()),
+            refresh_need_for_target(&target, 1440, "", false, false, now_epoch_ms()),
             Some(RefreshNeed::MissingCache)
         );
     }
@@ -434,8 +469,17 @@ mod tests {
     fn refresh_need_marks_old_payload_date_as_stale() {
         let target = fetch_target_for_values("0437", "fi", true);
         assert_eq!(
-            refresh_need_for_target(&target, 1440, "2001-01-01", true, now_epoch_ms()),
+            refresh_need_for_target(&target, 1440, "2001-01-01", true, false, now_epoch_ms()),
             Some(RefreshNeed::StaleDate)
+        );
+    }
+
+    #[test]
+    fn refresh_need_marks_old_api_generation_as_stale() {
+        let target = fetch_target_for_values("0437", "fi", true);
+        assert_eq!(
+            refresh_need_for_target(&target, 1440, &today_key(), true, true, now_epoch_ms()),
+            Some(RefreshNeed::ApiStale)
         );
     }
 
@@ -446,5 +490,26 @@ mod tests {
         assert_eq!(retry_delay_ms_for_failures(3), 60_000);
         assert_eq!(retry_delay_ms_for_failures(4), 300_000);
         assert_eq!(retry_delay_ms_for_failures(10), 300_000);
+    }
+
+    #[cfg(feature = "perf-counters")]
+    #[test]
+    fn settings_snapshot_does_not_count_full_state_clone() {
+        let app = App::new();
+        {
+            let mut state = app.state.lock().unwrap();
+            state.raw_payload = "x".repeat(16_384);
+        }
+
+        crate::perf::reset();
+        let _ = app.settings_snapshot();
+        let counters = crate::perf::snapshot();
+        assert_eq!(counters.snapshot_cloned_bytes, 0);
+        assert_eq!(counters.snapshot_cloned_strings, 0);
+
+        let _ = app.snapshot();
+        let counters = crate::perf::snapshot();
+        assert!(counters.snapshot_cloned_bytes >= 16_384);
+        assert!(counters.snapshot_cloned_strings > 0);
     }
 }

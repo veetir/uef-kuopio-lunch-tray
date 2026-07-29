@@ -11,9 +11,9 @@ Small system tray app for viewing UEF Kuopio campus lunch menus on Windows.
 ## Download and start
 
 1. Open the project's **GitHub Releases** page:  
-   `https://github.com/veetir/compass-lunch-plasmoid/releases`
-2. Download the latest Windows `.exe` asset.
-3. Place the `.exe` in any folder (for example `Downloads` or `Apps`).
+   `https://github.com/veetir/uef-kuopio-lunch-tray/releases`
+2. Download and extract the latest `compass-lunch-windows-x64` ZIP.
+3. Place `compass-lunch.exe` in any folder (for example `Downloads` or `Apps`).
 4. Double-click the `.exe` to start the app.
 
 After launch, the app runs in the system tray (notification area), usually near the clock.
@@ -33,7 +33,7 @@ Only do this for binaries downloaded from the official GitHub Releases page of t
 - Mouse wheel on tray icon: switch restaurant
 - Drag-select text on a dish row: toggle it as a favorite highlight
 - Right-click tray icon: open settings, refresh, and quit
-- Right-click tray icon > Theme > Lunch item layout: choose Legacy, Standard, or Compact menu rows
+- Right-click tray icon > Theme > Lunch item layout: choose Classic, Standard, or Compact menu rows
 
 ## First-time setup
 
@@ -51,9 +51,9 @@ Open settings from the tray menu and set:
 - Favorites: `%LOCALAPPDATA%\compass-lunch\favorites.json`
 
 The `settings.json` key for the menu row layout is `lunch_item_display_mode`.
-Supported values are `"legacy"`, `"standard"`, and `"compact"`. New installs
-default to `"standard"` with prices shown; upgraded installs without this key
-keep the legacy layout until changed from the tray menu.
+Supported values are `"classic"`, `"standard"`, and `"compact"`. New installs
+default to `"classic"` with prices shown; upgraded installs without this key keep
+the classic layout until changed from the tray menu.
 
 To reset the app:
 
@@ -69,7 +69,7 @@ To reset the app:
 
 ## Privacy and network
 
-- The app fetches menu data from restaurant provider endpoints.
+- The app fetches menu data from `lunch.veeti.dev`.
 - No login or account is required.
 
 ## Uninstall

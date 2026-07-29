@@ -3,206 +3,188 @@ import Foundation
 enum MenuServiceError: LocalizedError {
     case invalidResponse
     case serverStatus(Int)
-    case provider(String)
 
     var errorDescription: String? {
         switch self {
         case .invalidResponse:
-            "The menu service returned an invalid response."
+            "The lunch API returned an invalid response."
         case let .serverStatus(status):
-            "The menu service returned HTTP \(status)."
-        case let .provider(message):
-            message
+            "The lunch API returned HTTP \(status)."
         }
     }
 }
 
 struct MenuService {
     private let session: URLSession
+    private let baseURL: URL
 
-    init(session: URLSession = .shared) {
+    init(
+        session: URLSession = .shared,
+        baseURL: URL = URL(string: "https://lunch.veeti.dev")!
+    ) {
         self.session = session
+        self.baseURL = baseURL
     }
 
-    func fetch(restaurant: Restaurant, language: AppLanguage, now: Date = Date()) async throws -> MenuSnapshot {
-        switch restaurant.provider {
-        case .compass:
-            return try await fetchCompass(restaurant: restaurant, language: language, now: now)
-        case let .compassRSS(costNumber):
-            var components = URLComponents(string: "https://www.compass-group.fi/menuapi/feed/rss/current-day")
-            components?.queryItems = [
-                URLQueryItem(name: "costNumber", value: costNumber),
-                URLQueryItem(name: "language", value: language.rawValue)
-            ]
-            guard let url = components?.url else {
-                throw MenuServiceError.invalidResponse
-            }
-            let data = try await load(url)
-            return try RSSMenuParser.parse(
-                data: data,
-                restaurant: restaurant,
-                requestedLanguage: language,
-                now: now
-            )
-        case let .huomen(apiURL):
-            var components = URLComponents(url: apiURL, resolvingAgainstBaseURL: false)
-            var queryItems = components?.queryItems ?? []
-            queryItems.append(URLQueryItem(name: "language", value: language.rawValue))
-            components?.queryItems = queryItems
-            guard let url = components?.url else {
-                throw MenuServiceError.invalidResponse
-            }
-            let data = try await load(url)
-            return try HuomenMenuParser.parse(
-                data: data,
-                restaurant: restaurant,
-                requestedLanguage: language,
-                now: now
-            )
-        case let .antell(slug):
-            let weekday = ProviderParsing.weekdayToken(now)
-            let urlString: String
-            if language == .en, restaurant.id == "antell-round" {
-                urlString = "https://antell.fi/en/lunch/kuopio/\(slug)/?print_lunch_list_day=1&print_lunch_day=panel-\(weekday)"
-            } else {
-                urlString = "https://antell.fi/lounas/kuopio/\(slug)/?print_lunch_day=\(weekday)&print_lunch_list_day=1"
-            }
-            guard let url = URL(string: urlString) else {
-                throw MenuServiceError.invalidResponse
-            }
-            let data = try await load(url)
-            let snapshot = try AntellMenuParser.parse(
-                data: data,
-                restaurant: restaurant,
-                requestedLanguage: language,
-                now: now
-            )
-            let detailURLString = language == .en && restaurant.id == "antell-round"
-                ? "https://antell.fi/en/lunch/kuopio/\(slug)/"
-                : "https://antell.fi/lounas/kuopio/\(slug)/"
-            guard let detailURL = URL(string: detailURLString),
-                  let detailData = try? await load(detailURL),
-                  let detailHTML = String(data: detailData, encoding: .utf8)
-            else {
-                return snapshot.markingDetailEnrichmentAttempted()
-            }
-            return RecipeDetailEnrichment.applying(
-                AntellRecipeDetailParser.details(
-                    from: detailHTML,
-                    weekday: weekday
-                ),
-                to: snapshot
-            )
-        case .pranzeria:
-            guard let url = restaurant.pageURL else {
-                throw MenuServiceError.invalidResponse
-            }
-            let data = try await load(url)
-            return try PranzeriaMenuParser.parse(
-                data: data,
-                restaurant: restaurant,
-                requestedLanguage: language,
-                now: now
-            )
-        }
-    }
-
-    private func fetchCompass(
+    func fetch(
         restaurant: Restaurant,
         language: AppLanguage,
-        now: Date
+        now: Date = Date(),
+        cachePolicy: URLRequest.CachePolicy = .useProtocolCachePolicy
     ) async throws -> MenuSnapshot {
-        let fetchLanguage = restaurant.englishMenuAvailable
-            ? language.rawValue
-            : AppLanguage.fi.rawValue
-        var components = URLComponents(string: "https://www.compass-group.fi/menuapi/feed/json")
+        var components = URLComponents(
+            url: endpoint(path: "v1/restaurants/\(restaurant.id)/menu"),
+            resolvingAgainstBaseURL: false
+        )
         components?.queryItems = [
-            URLQueryItem(name: "costNumber", value: restaurant.id),
-            URLQueryItem(name: "language", value: fetchLanguage)
+            URLQueryItem(name: "language", value: language.rawValue),
+            URLQueryItem(name: "date", value: Self.localDateString(now))
         ]
         guard let url = components?.url else {
             throw MenuServiceError.invalidResponse
         }
 
-        let data = try await load(url)
-        let snapshot = try CompassParser.parse(
-            data: data,
+        let data = try await load(url, cachePolicy: cachePolicy)
+        let response = try JSONDecoder().decode(APIMenuResponse.self, from: data)
+        return try menuSnapshot(
+            response: response,
             restaurant: restaurant,
-            requestedLanguage: language,
+            language: language,
             now: now
         )
-        guard let pageURL = snapshot.restaurantURL ?? restaurant.pageURL,
-              let pageData = try? await load(pageURL),
-              let pageHTML = String(data: pageData, encoding: .utf8)
+    }
+
+    func fetchDailySnapshot(
+        language: AppLanguage,
+        now: Date = Date(),
+        cachePolicy: URLRequest.CachePolicy = .useProtocolCachePolicy
+    ) async throws -> DailyMenuSnapshot {
+        var components = URLComponents(
+            url: endpoint(path: "v1/snapshot"),
+            resolvingAgainstBaseURL: false
+        )
+        components?.queryItems = [
+            URLQueryItem(name: "language", value: language.rawValue),
+            URLQueryItem(name: "date", value: Self.localDateString(now))
+        ]
+        guard let url = components?.url else {
+            throw MenuServiceError.invalidResponse
+        }
+
+        let data = try await load(url, cachePolicy: cachePolicy)
+        let response = try JSONDecoder().decode(APISnapshotResponse.self, from: data)
+        guard response.apiVersion == "v1",
+              response.schemaVersion == 1,
+              response.requestedLanguage == language.rawValue,
+              response.date == Self.localDateString(now),
+              !response.restaurants.isEmpty,
+              Set(response.restaurants.map(\.id)).count == response.restaurants.count
         else {
-            return snapshot.markingDetailEnrichmentAttempted()
+            throw MenuServiceError.invalidResponse
         }
 
-        let references = CompassRecipeDetailParser.references(
-            fromRestaurantHTML: pageHTML
+        let restaurants = response.restaurants
+            .sorted { $0.order < $1.order }
+            .map { $0.model(language: language) }
+        let restaurantsByID = Dictionary(
+            uniqueKeysWithValues: restaurants.map { ($0.id, $0) }
         )
-        guard !references.isEmpty else {
-            return snapshot.markingDetailEnrichmentAttempted()
-        }
-        let detailsByID = await compassRecipeDetails(
-            recipeIDs: Set(references.values),
-            language: fetchLanguage
-        )
-        let detailsByMealName = references.reduce(
-            into: [String: RecipeDetail]()
-        ) { result, entry in
-            if let detail = detailsByID[entry.value] {
-                result[entry.key] = detail
+        var seenMenuIDs = Set<String>()
+        let menus = response.menus.elements.compactMap { apiMenu -> MenuSnapshot? in
+            guard seenMenuIDs.insert(apiMenu.restaurant.id).inserted,
+                  let restaurant = restaurantsByID[apiMenu.restaurant.id]
+            else {
+                return nil
             }
+            return try? menuSnapshot(
+                response: apiMenu,
+                restaurant: restaurant,
+                language: language,
+                now: now
+            )
         }
-        return RecipeDetailEnrichment.applying(detailsByMealName, to: snapshot)
+        return DailyMenuSnapshot(restaurants: restaurants, menus: menus)
     }
 
-    private func compassRecipeDetails(
-        recipeIDs: Set<Int>,
-        language: String
-    ) async -> [Int: RecipeDetail] {
-        await withTaskGroup(of: (Int, RecipeDetail?).self) { group in
-            for recipeID in recipeIDs {
-                group.addTask {
-                    guard var components = URLComponents(
-                        string: "https://www.compass-group.fi/menuapi/recipes/\(recipeID)"
-                    ) else {
-                        return (recipeID, nil)
-                    }
-                    components.queryItems = [
-                        URLQueryItem(name: "language", value: language)
-                    ]
-                    guard let url = components.url,
-                          let data = try? await self.load(url)
-                    else {
-                        return (recipeID, nil)
-                    }
-                    return (
-                        recipeID,
-                        CompassRecipeDetailParser.parse(
-                            data: data,
-                            fallbackRecipeID: recipeID
-                        )
-                    )
-                }
-            }
+    private func menuSnapshot(
+        response: APIMenuResponse,
+        restaurant: Restaurant,
+        language: AppLanguage,
+        now: Date
+    ) throws -> MenuSnapshot {
+        guard response.apiVersion == "v1",
+              response.schemaVersion == 1,
+              response.restaurant.id == restaurant.id
+        else {
+            throw MenuServiceError.invalidResponse
+        }
+        let serviceStatus = MenuSnapshot.ServiceStatus(
+            rawValue: response.service.status
+        ) ?? .unknown
 
-            var details: [Int: RecipeDetail] = [:]
-            for await (recipeID, detail) in group {
-                if let detail {
-                    details[recipeID] = detail
+        let groups = response.groups.compactMap { group -> LunchGroup? in
+            let components = group.items.map { item in
+                var text = item.name.normalizedWhitespace
+                if let description = item.description?.normalizedWhitespace,
+                   !description.isEmpty,
+                   description != text {
+                    text += " – \(description)"
                 }
-            }
-            return details
+                if let tags = item.tags?.filter({ !$0.normalizedWhitespace.isEmpty }),
+                   !tags.isEmpty {
+                    text += " (\(tags.joined(separator: ", ")))"
+                }
+                return text
+            }.filter { !$0.isEmpty }
+            guard !components.isEmpty else { return nil }
+            let details = group.items.map { $0.recipe?.model }
+            return LunchGroup(
+                id: group.id,
+                name: group.title?.normalizedWhitespace ?? "",
+                price: "",
+                prices: group.prices.map(\.model),
+                components: components,
+                componentDetails: details
+            )
+        }
+
+        let menu = LunchMenu(
+            date: response.date,
+            lunchTime: response.service.hours?.normalizedWhitespace ?? "",
+            offers: response.offers.map(\.model),
+            groups: groups
+        )
+        return MenuSnapshot(
+            restaurantCode: response.restaurant.id,
+            restaurantName: language == .fi
+                ? response.restaurant.name.fi
+                : response.restaurant.name.en,
+            restaurantURL: response.restaurant.websiteURL.flatMap(URL.init(string:))
+                ?? restaurant.pageURL,
+            language: language,
+            fetchedAt: now,
+            menu: menu,
+            closure: response.closure?.model,
+            serviceStatus: serviceStatus,
+            isStale: response.freshness?.isStale ?? false
+        )
+    }
+
+    private func endpoint(path: String) -> URL {
+        path.split(separator: "/").reduce(baseURL) {
+            $0.appendingPathComponent(String($1))
         }
     }
 
-    private func load(_ url: URL) async throws -> Data {
+    private func load(
+        _ url: URL,
+        cachePolicy: URLRequest.CachePolicy
+    ) async throws -> Data {
         var request = URLRequest(url: url)
         request.timeoutInterval = 10
-        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.cachePolicy = cachePolicy
         request.setValue("LunchTray/1.0", forHTTPHeaderField: "User-Agent")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
 
         let (data, response) = try await session.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
@@ -213,113 +195,187 @@ struct MenuService {
         }
         return data
     }
-}
-
-enum CompassParser {
-    static func parse(
-        data: Data,
-        restaurant: Restaurant,
-        requestedLanguage: AppLanguage,
-        now: Date
-    ) throws -> MenuSnapshot {
-        let response = try JSONDecoder().decode(APIResponse.self, from: data)
-        if let error = response.errorText?.normalizedWhitespace, !error.isEmpty {
-            throw MenuServiceError.provider(error)
-        }
-
-        let today = localDateString(now)
-        let days = response.menusForDays ?? []
-        let day = days.first { apiDay in
-            guard let date = apiDay.date else { return false }
-            return String(date.prefix(10)) == today
-        }
-
-        let indexedGroups = Array((day?.setMenus ?? []).enumerated())
-        let sortedGroups = indexedGroups.sorted { left, right in
-            let leftOrder = left.element.sortOrder ?? left.offset
-            let rightOrder = right.element.sortOrder ?? right.offset
-            return leftOrder < rightOrder
-        }
-        let groups: [LunchGroup] = sortedGroups.compactMap { item in
-            let index = item.offset
-            let group = item.element
-            let components = (group.components ?? [])
-                .map { $0.normalizedWhitespace }
-                .filter { !$0.isEmpty }
-            guard !components.isEmpty else { return nil }
-            return LunchGroup(
-                id: "\(group.sortOrder ?? index)-\(index)",
-                name: group.name?.normalizedWhitespace ?? "",
-                price: group.price?.normalizedWhitespace ?? "",
-                components: components
-            )
-        }
-
-        let menu = day.map {
-            LunchMenu(
-                date: today,
-                lunchTime: $0.lunchTime?.normalizedWhitespace ?? "",
-                groups: groups
-            )
-        }
-
-        return MenuSnapshot(
-            restaurantCode: restaurant.id,
-            restaurantName: response.restaurantName?.normalizedWhitespace.nonEmpty ?? restaurant.name,
-            restaurantURL: URL(string: response.restaurantURL ?? "") ?? restaurant.pageURL,
-            language: requestedLanguage,
-            fetchedAt: now,
-            menu: menu
-        )
-    }
 
     private static func localDateString(_ date: Date) -> String {
-        ProviderParsing.localDateString(date)
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "Europe/Helsinki")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
     }
 }
 
-private struct APIResponse: Decodable {
-    let restaurantName: String?
-    let restaurantURL: String?
-    let menusForDays: [APIMenuDay]?
-    let errorText: String?
+struct DailyMenuSnapshot {
+    let restaurants: [Restaurant]
+    let menus: [MenuSnapshot]
+}
+
+private struct APIRestaurant: Decodable {
+    let id: String
+    let order: Int
+    let name: APILocalizedText
+    let websiteURL: String?
+    let languages: [String]
 
     enum CodingKeys: String, CodingKey {
-        case restaurantName = "RestaurantName"
-        case restaurantURL = "RestaurantUrl"
-        case menusForDays = "MenusForDays"
-        case errorText = "ErrorText"
+        case id
+        case order
+        case name
+        case websiteURL = "websiteUrl"
+        case languages
+    }
+
+    func model(language: AppLanguage) -> Restaurant {
+        Restaurant(
+            id: id,
+            name: language == .fi ? name.fi : name.en,
+            pageURL: websiteURL.flatMap(URL.init(string:)),
+            languages: languages.compactMap(AppLanguage.init(rawValue:))
+        )
     }
 }
 
-private struct APIMenuDay: Decodable {
-    let date: String?
-    let lunchTime: String?
-    let setMenus: [APISetMenu]?
+private struct APILocalizedText: Decodable {
+    let fi: String
+    let en: String
+}
 
-    enum CodingKeys: String, CodingKey {
-        case date = "Date"
-        case lunchTime = "LunchTime"
-        case setMenus = "SetMenus"
+private struct APIMenuResponse: Decodable {
+    let apiVersion: String
+    let schemaVersion: Int
+    let restaurant: APIRestaurant
+    let date: String
+    let service: APIService
+    let closure: APIClosure?
+    let offers: [APIOffer]
+    let groups: [APIGroup]
+    let freshness: APIFreshness?
+}
+
+private struct APISnapshotResponse: Decodable {
+    let apiVersion: String
+    let schemaVersion: Int
+    let requestedLanguage: String
+    let date: String
+    let restaurants: [APIRestaurant]
+    let menus: LossyDecodableArray<APIMenuResponse>
+}
+
+private struct LossyDecodableArray<Element: Decodable>: Decodable {
+    let elements: [Element]
+
+    init(from decoder: Decoder) throws {
+        var container = try decoder.unkeyedContainer()
+        var elements: [Element] = []
+        while !container.isAtEnd {
+            let elementDecoder = try container.superDecoder()
+            if let element = try? Element(from: elementDecoder) {
+                elements.append(element)
+            }
+        }
+        self.elements = elements
     }
 }
 
-private struct APISetMenu: Decodable {
-    let sortOrder: Int?
+private struct APIService: Decodable {
+    let status: String
+    let hours: String?
+}
+
+private struct APIFreshness: Decodable {
+    let isStale: Bool
+}
+
+private struct APIClosure: Decodable {
+    let startsOn: String
+    let endsOn: String
+    let reason: String?
+
+    var model: SeasonalClosure? {
+        guard let start = Self.localDate(startsOn),
+              let end = Self.localDate(endsOn)
+        else {
+            return nil
+        }
+        return SeasonalClosure(start: start, end: end, reason: reason)
+    }
+
+    private static func localDate(_ value: String) -> LocalDate? {
+        let parts = value.split(separator: "-").compactMap { Int($0) }
+        guard parts.count == 3 else { return nil }
+        return LocalDate(year: parts[0], month: parts[1], day: parts[2])
+    }
+}
+
+private struct APIPrice: Decodable {
+    let amount: String
+    let audiences: [String]?
+
+    var model: LunchPrice {
+        LunchPrice(
+            amount: amount,
+            audiences: audiences?.compactMap(PriceAudience.init(rawValue:))
+        )
+    }
+}
+
+private struct APIOffer: Decodable {
+    let id: String
+    let label: String
+    let price: APIPrice
+    let description: String?
+
+    var model: LunchOffer {
+        LunchOffer(
+            id: id,
+            label: label,
+            price: price.model,
+            description: description
+        )
+    }
+}
+
+private struct APIGroup: Decodable {
+    let id: String
+    let title: String?
+    let prices: [APIPrice]
+    let items: [APIItem]
+}
+
+private struct APIItem: Decodable {
+    let name: String
+    let description: String?
+    let tags: [String]?
+    let recipe: APIRecipe?
+}
+
+private struct APIRecipe: Decodable {
+    let id: String
     let name: String?
-    let price: String?
-    let components: [String]?
+    let ingredients: String?
+    let nutritionPer100g: [APINutrition]?
+    let co2eKilogramsPer100Grams: Double?
+    let diets: [String]?
 
-    enum CodingKeys: String, CodingKey {
-        case sortOrder = "SortOrder"
-        case name = "Name"
-        case price = "Price"
-        case components = "Components"
+    var model: RecipeDetail {
+        RecipeDetail(
+            id: id,
+            name: name ?? "",
+            ingredients: ingredients ?? "",
+            nutrition: nutritionPer100g?.map(\.model) ?? [],
+            co2KilogramsPer100Grams: co2eKilogramsPer100Grams,
+            diets: diets?.joined(separator: ", ") ?? ""
+        )
     }
 }
 
-private extension String {
-    var nonEmpty: String? {
-        isEmpty ? nil : self
+private struct APINutrition: Decodable {
+    let name: String
+    let amount: Double
+    let unit: String
+
+    var model: NutritionValue {
+        NutritionValue(name: name, amount: amount, unit: unit)
     }
 }

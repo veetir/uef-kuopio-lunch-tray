@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss xmlns:a10="http://www.w3.org/2005/Atom" version="2.0">
+  <channel>
+    <title>Cafe Snellari</title>
+    <item>
+      <guid isPermaLink="false">https://example.test/cafe-snellari/#23-02-2026</guid>
+      <title>Maanantai, 23-02-2026</title>
+      <description>&lt;p&gt;Juustoista peruna-pinaattisosekeittoa&amp;nbsp; *, A, G, ILM, L&lt;/p&gt;
+&lt;p&gt;Basilikalla ja hunajalla maustettua broileria&amp;nbsp; G, L, M&lt;/p&gt;</description>
+    </item>
+  </channel>
+</rss>

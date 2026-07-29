@@ -1,39 +1,39 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
-mod antell;
-mod api;
-mod app;
-mod cache;
-mod custom_themes;
-mod favorites;
-mod format;
-mod log;
-mod model;
-mod popup;
-mod restaurant;
-mod settings;
-mod startup;
-mod tray;
-mod update;
-mod util;
-mod winmsg;
-
-use crate::api::{FetchContext, FetchMode, FetchReason};
-use crate::app::App;
-use crate::format::{
+#[cfg(not(all(feature = "bench", not(windows))))]
+use compass_lunch::api::{self, FetchContext, FetchMode, FetchReason};
+#[cfg(not(all(feature = "bench", not(windows))))]
+use compass_lunch::app::App;
+#[cfg(not(all(feature = "bench", not(windows))))]
+use compass_lunch::format::{
     date_and_time_line, menu_heading_for_restaurant, normalize_text, split_component_suffix,
-    student_price_eur, text_for, PriceGroups,
+    student_price_for_group, text_for, PriceGroups,
 };
-use crate::restaurant::{restaurant_for_code, Provider};
-use crate::settings::load_settings;
-use crate::util::to_wstring;
+#[cfg(not(all(feature = "bench", not(windows))))]
+use compass_lunch::log;
+#[cfg(not(all(feature = "bench", not(windows))))]
+use compass_lunch::popup;
+#[cfg(not(all(feature = "bench", not(windows))))]
+use compass_lunch::restaurant::restaurant_for_code;
+#[cfg(not(all(feature = "bench", not(windows))))]
+use compass_lunch::settings::{load_settings, Settings};
+#[cfg(not(all(feature = "bench", not(windows))))]
+use compass_lunch::tray;
+#[cfg(not(all(feature = "bench", not(windows))))]
+use compass_lunch::util::to_wstring;
+#[cfg(not(all(feature = "bench", not(windows))))]
+use compass_lunch::winmsg;
+#[cfg(not(all(feature = "bench", not(windows))))]
 use windows::core::PCWSTR;
+#[cfg(not(all(feature = "bench", not(windows))))]
 use windows::Win32::Foundation::HWND;
 #[cfg(target_os = "windows")]
 use windows::Win32::Foundation::{LPARAM, WPARAM};
+#[cfg(not(all(feature = "bench", not(windows))))]
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 #[cfg(target_os = "windows")]
 use windows::Win32::System::Threading::{CreateMutexW, OpenMutexW, MUTEX_ALL_ACCESS};
+#[cfg(not(all(feature = "bench", not(windows))))]
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DispatchMessageW, GetMessageW, TranslateMessage, MSG, SW_HIDE,
     WS_EX_TOOLWINDOW, WS_OVERLAPPEDWINDOW, WS_POPUP,
@@ -41,6 +41,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, PostMessageW};
 
+#[cfg(all(feature = "bench", not(windows)))]
+fn main() {}
+
+#[cfg(not(all(feature = "bench", not(windows))))]
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let print_today = args.iter().any(|a| a == "--print-today");
@@ -209,13 +213,13 @@ fn enable_dpi_awareness() {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(all(not(target_os = "windows"), not(feature = "bench")))]
 fn enable_dpi_awareness() {}
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(all(not(target_os = "windows"), not(feature = "bench")))]
 struct SingleInstanceGuard;
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(all(not(target_os = "windows"), not(feature = "bench")))]
 fn acquire_single_instance_guard() -> anyhow::Result<Option<SingleInstanceGuard>> {
     Ok(Some(SingleInstanceGuard))
 }
@@ -230,10 +234,11 @@ fn ensure_console() {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(all(not(target_os = "windows"), not(feature = "bench")))]
 fn ensure_console() {}
 
-fn print_today_menu_with_settings(settings: &crate::settings::Settings) -> anyhow::Result<()> {
+#[cfg(not(all(feature = "bench", not(windows))))]
+fn print_today_menu_with_settings(settings: &Settings) -> anyhow::Result<()> {
     let result = api::fetch_today(
         settings,
         &FetchContext::new(FetchMode::Direct, FetchReason::PrintTodayCli),
@@ -268,23 +273,23 @@ fn print_today_menu_with_settings(settings: &crate::settings::Settings) -> anyho
         Some(menu) => {
             if !menu.menus.is_empty() {
                 for group in &menu.menus {
-                    if provider == Provider::Compass && settings.hide_expensive_student_meals {
-                        if let Some(price) = student_price_eur(&group.price) {
+                    if settings.hide_expensive_student_meals {
+                        if let Some(price) = student_price_for_group(group) {
                             if price > 4.0 {
                                 continue;
                             }
                         }
                     }
-                    println!(
-                        "{}",
-                        menu_heading_for_restaurant(
-                            group,
-                            &settings.restaurant_code,
-                            provider,
-                            settings.show_prices,
-                            price_groups
-                        )
+                    let heading = menu_heading_for_restaurant(
+                        group,
+                        &settings.restaurant_code,
+                        provider,
+                        settings.show_prices,
+                        price_groups,
                     );
+                    if !heading.is_empty() {
+                        println!("{}", heading);
+                    }
                     for component in &group.components {
                         let component = normalize_text(component);
                         if component.is_empty() {

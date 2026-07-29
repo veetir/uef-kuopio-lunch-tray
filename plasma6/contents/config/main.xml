@@ -5,7 +5,7 @@
       http://www.kde.org/standards/kcfg/1.0/kcfg.xsd">
   <group name="General">
     <entry name="restaurantCode" type="String">
-      <default>0437</default>
+      <default>snellmania</default>
     </entry>
     <entry name="language" type="String">
       <default>fi</default>
@@ -38,7 +38,7 @@
       <default>food</default>
     </entry>
     <entry name="enabledRestaurantCodes" type="String">
-      <default>0437,snellari-rss,0436,043601,0439,antell-round,antell-highway,pranzeria-html,huomen-bioteknia</default>
+      <default>snellmania,cafe-snellari,canthia,tietoteknia,hyva-huomen-bioteknia,antell-round,antell-highway,mediteknia,pranzeria-sorrento,caari</default>
     </entry>
     <entry name="enabledRestaurantCodesMigrationLevel" type="Int">
       <default>0</default>

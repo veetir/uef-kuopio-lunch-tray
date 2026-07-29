@@ -3,10 +3,10 @@
 //! This module owns tray icon lifecycle, theme-aware icon selection, and the
 //! hierarchical context menu command IDs used by the window procedure.
 
-use crate::app::AppState;
 use crate::log::log_line;
 use crate::restaurant::available_restaurants;
 use crate::settings::{HighlightTheme, LunchItemDisplayMode};
+use crate::state::AppState;
 use crate::util::to_wstring;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -63,7 +63,7 @@ pub const CMD_WIDGET_SCALE_NORMAL: u16 = 2225;
 pub const CMD_WIDGET_SCALE_125: u16 = 2226;
 pub const CMD_WIDGET_SCALE_150: u16 = 2227;
 pub const CMD_TOGGLE_ANIMATIONS: u16 = 2228;
-pub const CMD_LUNCH_LAYOUT_LEGACY: u16 = 2229;
+pub const CMD_LUNCH_LAYOUT_CLASSIC: u16 = 2229;
 pub const CMD_LUNCH_LAYOUT_STANDARD: u16 = 2230;
 pub const CMD_LUNCH_LAYOUT_COMPACT: u16 = 2231;
 pub const CMD_HIGHLIGHT_THEME_DEFAULT: u16 = 2232;
@@ -96,16 +96,16 @@ static TRAY_ICONS: OnceLock<TrayIconSet> = OnceLock::new();
 /// Maps a restaurant code to its context-menu command identifier.
 pub fn restaurant_command_id(code: &str) -> Option<u16> {
     match code {
-        "0437" => Some(CMD_RESTAURANT_0437),
-        "snellari-rss" => Some(CMD_RESTAURANT_SNELLARI_RSS),
-        "0436" => Some(CMD_RESTAURANT_0436),
-        "0439" => Some(CMD_RESTAURANT_0439),
-        "huomen-bioteknia" => Some(CMD_RESTAURANT_HUOMEN_BIOTEKNIA),
+        "snellmania" => Some(CMD_RESTAURANT_0437),
+        "cafe-snellari" => Some(CMD_RESTAURANT_SNELLARI_RSS),
+        "canthia" => Some(CMD_RESTAURANT_0436),
+        "tietoteknia" => Some(CMD_RESTAURANT_0439),
+        "hyva-huomen-bioteknia" => Some(CMD_RESTAURANT_HUOMEN_BIOTEKNIA),
         "antell-round" => Some(CMD_RESTAURANT_ANTELL_ROUND),
         "antell-highway" => Some(CMD_RESTAURANT_ANTELL_HIGHWAY),
-        "043601" => Some(CMD_RESTAURANT_MEDITEKNIA),
-        "pranzeria-html" => Some(CMD_RESTAURANT_PRANZERIA),
-        "3488" => Some(CMD_RESTAURANT_CAARI),
+        "mediteknia" => Some(CMD_RESTAURANT_MEDITEKNIA),
+        "pranzeria-sorrento" => Some(CMD_RESTAURANT_PRANZERIA),
+        "caari" => Some(CMD_RESTAURANT_CAARI),
         _ => None,
     }
 }
@@ -113,16 +113,16 @@ pub fn restaurant_command_id(code: &str) -> Option<u16> {
 /// Maps a restaurant command identifier back to its stable restaurant code.
 pub fn restaurant_code_for_command(cmd: u16) -> Option<&'static str> {
     match cmd {
-        CMD_RESTAURANT_0437 => Some("0437"),
-        CMD_RESTAURANT_SNELLARI_RSS => Some("snellari-rss"),
-        CMD_RESTAURANT_0436 => Some("0436"),
-        CMD_RESTAURANT_0439 => Some("0439"),
-        CMD_RESTAURANT_HUOMEN_BIOTEKNIA => Some("huomen-bioteknia"),
+        CMD_RESTAURANT_0437 => Some("snellmania"),
+        CMD_RESTAURANT_SNELLARI_RSS => Some("cafe-snellari"),
+        CMD_RESTAURANT_0436 => Some("canthia"),
+        CMD_RESTAURANT_0439 => Some("tietoteknia"),
+        CMD_RESTAURANT_HUOMEN_BIOTEKNIA => Some("hyva-huomen-bioteknia"),
         CMD_RESTAURANT_ANTELL_ROUND => Some("antell-round"),
         CMD_RESTAURANT_ANTELL_HIGHWAY => Some("antell-highway"),
-        CMD_RESTAURANT_MEDITEKNIA => Some("043601"),
-        CMD_RESTAURANT_PRANZERIA => Some("pranzeria-html"),
-        CMD_RESTAURANT_CAARI => Some("3488"),
+        CMD_RESTAURANT_MEDITEKNIA => Some("mediteknia"),
+        CMD_RESTAURANT_PRANZERIA => Some("pranzeria-sorrento"),
+        CMD_RESTAURANT_CAARI => Some("caari"),
         _ => None,
     }
 }
@@ -478,9 +478,9 @@ fn build_context_menu(state: &AppState) -> HMENU {
         let layout_menu = CreatePopupMenu().expect("CreatePopupMenu");
         append_menu_item(
             layout_menu,
-            CMD_LUNCH_LAYOUT_LEGACY,
-            "Legacy",
-            state.settings.lunch_item_display_mode == LunchItemDisplayMode::Legacy,
+            CMD_LUNCH_LAYOUT_CLASSIC,
+            "Classic",
+            state.settings.lunch_item_display_mode == LunchItemDisplayMode::Classic,
         );
         append_menu_item(
             layout_menu,

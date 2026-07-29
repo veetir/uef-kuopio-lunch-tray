@@ -7,8 +7,8 @@ use serde::Deserialize;
 use std::cmp::Ordering;
 use std::fmt;
 
-const GITHUB_LATEST_RELEASE_URL: &str =
-    "https://api.github.com/repos/veetir/uef-kuopio-lunch-tray/releases/latest";
+const GITHUB_RELEASES_API_URL: &str =
+    "https://api.github.com/repos/veetir/uef-kuopio-lunch-tray/releases?per_page=100";
 const GITHUB_RELEASES_URL: &str = "https://github.com/veetir/uef-kuopio-lunch-tray/releases";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,9 +31,13 @@ pub enum UpdateCheckResult {
 }
 
 #[derive(Debug, Deserialize)]
-struct GithubLatestRelease {
+struct GithubRelease {
     tag_name: String,
     html_url: String,
+    #[serde(default)]
+    draft: bool,
+    #[serde(default)]
+    prerelease: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -53,7 +57,7 @@ pub fn check_for_updates() -> anyhow::Result<UpdateCheckResult> {
     let current_version = current_app_version().to_string();
     let current = parse_version(current_app_version())
         .ok_or_else(|| anyhow!("Invalid current app version: {}", current_app_version()))?;
-    let release = fetch_latest_release()?;
+    let release = fetch_latest_windows_release()?;
     let latest_version = normalize_release_version(&release.tag_name)
         .ok_or_else(|| anyhow!("Unsupported release tag format: {}", release.tag_name))?;
     let latest = parse_version(&latest_version)
@@ -68,13 +72,13 @@ pub fn check_for_updates() -> anyhow::Result<UpdateCheckResult> {
     ))
 }
 
-fn fetch_latest_release() -> anyhow::Result<GithubLatestRelease> {
+fn fetch_latest_windows_release() -> anyhow::Result<GithubRelease> {
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
         .context("build GitHub client")?;
     let response = client
-        .get(GITHUB_LATEST_RELEASE_URL)
+        .get(GITHUB_RELEASES_API_URL)
         .header(ACCEPT, "application/vnd.github+json")
         .header(
             USER_AGENT,
@@ -83,24 +87,35 @@ fn fetch_latest_release() -> anyhow::Result<GithubLatestRelease> {
         .send()
         .context("request latest GitHub release")?
         .error_for_status()
-        .context("GitHub latest release request failed")?;
+        .context("GitHub releases request failed")?;
     let body = response.text().context("read GitHub release payload")?;
-    parse_latest_release(&body)
+    select_latest_windows_release(&body)
 }
 
-fn parse_latest_release(json: &str) -> anyhow::Result<GithubLatestRelease> {
-    serde_json::from_str(json).context("parse latest GitHub release JSON")
+fn select_latest_windows_release(json: &str) -> anyhow::Result<GithubRelease> {
+    let releases: Vec<GithubRelease> =
+        serde_json::from_str(json).context("parse GitHub releases JSON")?;
+    releases
+        .into_iter()
+        .filter(|release| !release.draft && !release.prerelease)
+        .filter_map(|release| {
+            parse_windows_release_version(&release.tag_name).map(|version| (release, version))
+        })
+        .max_by_key(|(_, version)| *version)
+        .map(|(release, _)| release)
+        .ok_or_else(|| anyhow!("No published Windows release found"))
 }
 
 fn normalize_release_version(raw_tag: &str) -> Option<String> {
-    let trimmed = raw_tag.trim();
-    let trimmed = trimmed
-        .strip_prefix("windows-")
-        .or_else(|| trimmed.strip_prefix("Windows-"))
-        .unwrap_or(trimmed);
-    let trimmed = trimmed.strip_prefix('v').unwrap_or(trimmed);
-    let parsed = parse_version(trimmed)?;
-    Some(parsed.to_string())
+    Some(parse_windows_release_version(raw_tag)?.to_string())
+}
+
+fn parse_windows_release_version(raw_tag: &str) -> Option<AppVersion> {
+    let version = raw_tag
+        .trim()
+        .strip_prefix("windows-v")
+        .or_else(|| raw_tag.trim().strip_prefix("Windows-v"))?;
+    parse_version(version)
 }
 
 fn parse_version(raw: &str) -> Option<AppVersion> {
@@ -162,11 +177,9 @@ mod tests {
     }
 
     #[test]
-    fn normalize_plain_v_release_tag() {
-        assert_eq!(
-            normalize_release_version("v1.3.2"),
-            Some("1.3.2".to_string())
-        );
+    fn reject_non_windows_release_tag() {
+        assert_eq!(normalize_release_version("v1.3.2"), None);
+        assert_eq!(normalize_release_version("macos-v0.2.0"), None);
     }
 
     #[test]
@@ -195,17 +208,55 @@ mod tests {
     }
 
     #[test]
-    fn parse_latest_release_payload() {
-        let payload = r#"{
-          "tag_name": "windows-v1.3.2",
-          "html_url": "https://github.com/veetir/uef-kuopio-lunch-tray/releases/tag/windows-v1.3.2"
-        }"#;
-        let release = parse_latest_release(payload).expect("release payload");
-        assert_eq!(release.tag_name, "windows-v1.3.2");
-        assert_eq!(
-            release.html_url,
-            "https://github.com/veetir/uef-kuopio-lunch-tray/releases/tag/windows-v1.3.2"
-        );
+    fn selects_latest_stable_windows_release() {
+        let payload = r#"[
+          {
+            "tag_name": "macos-v9.0.0",
+            "html_url": "https://example.test/macos",
+            "draft": false,
+            "prerelease": false
+          },
+          {
+            "tag_name": "windows-v1.5.0",
+            "html_url": "https://example.test/windows-prerelease",
+            "draft": false,
+            "prerelease": true
+          },
+          {
+            "tag_name": "windows-v1.3.11",
+            "html_url": "https://example.test/windows-1.3.11",
+            "draft": false,
+            "prerelease": false
+          },
+          {
+            "tag_name": "windows-v1.4.0",
+            "html_url": "https://example.test/windows-1.4.0",
+            "draft": false,
+            "prerelease": false
+          },
+          {
+            "tag_name": "windows-v2.0.0",
+            "html_url": "https://example.test/windows-draft",
+            "draft": true,
+            "prerelease": false
+          }
+        ]"#;
+        let release = select_latest_windows_release(payload).expect("release payload");
+        assert_eq!(release.tag_name, "windows-v1.4.0");
+        assert_eq!(release.html_url, "https://example.test/windows-1.4.0");
+    }
+
+    #[test]
+    fn reports_missing_windows_release() {
+        let payload = r#"[
+          {
+            "tag_name": "macos-v0.2.0",
+            "html_url": "https://example.test/macos",
+            "draft": false,
+            "prerelease": true
+          }
+        ]"#;
+        assert!(select_latest_windows_release(payload).is_err());
     }
 
     #[test]

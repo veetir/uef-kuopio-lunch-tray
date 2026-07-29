@@ -5,21 +5,21 @@
 //! in smaller submodules behind this facade.
 
 use crate::api;
-use crate::app::{AppState, FetchStatus};
 use crate::favorites;
 use crate::format::{
-    date_and_time_line, menu_group_title_for_restaurant, menu_heading_for_restaurant,
+    date_and_time_parts, menu_group_title_for_restaurant, menu_heading_for_restaurant,
     menu_price_for_restaurant_display, normalize_text, price_values_for_sort,
-    split_component_suffix, student_price_eur, text_for, PriceGroups,
+    split_component_suffix, student_price_for_group, text_for, PriceGroups,
 };
-use crate::model::{MenuGroup, RecipeInfo, TodayMenu};
-use crate::restaurant::{available_restaurants, is_hard_closed_today, Provider, Restaurant};
+use crate::model::{MenuGroup, MenuGroupPresentation, RecipeInfo, TodayMenu};
+use crate::restaurant::{available_restaurants, Provider, Restaurant};
 use crate::settings::Settings;
+use crate::state::{AppState, FetchStatus};
 use crate::util::to_wstring;
 use std::cmp::{max, min};
 use std::ffi::c_void;
-use std::sync::{Mutex, OnceLock};
-use time::{OffsetDateTime, UtcOffset};
+use std::sync::{Arc, Mutex, OnceLock};
+use time::OffsetDateTime;
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{COLORREF, HWND, POINT, RECT};
 use windows::Win32::Graphics::Gdi::{
@@ -46,11 +46,12 @@ const HEADER_BUTTON_SIZE: i32 = 30;
 const HEADER_BUTTON_GAP: i32 = 8;
 const LOADING_HINT_DELAY_MS: i64 = 250;
 const MAX_DYNAMIC_LINES: usize = 35;
-const POPUP_ANIM_INTERVAL_MS: u32 = 33;
+const POPUP_ANIM_INTERVAL_MS: u32 = 8;
 const POPUP_HEADER_PRESS_MS: i64 = 90;
 const POPUP_OPEN_ANIM_MS: i64 = 120;
 const POPUP_CLOSE_ANIM_MS: i64 = 90;
 const POPUP_SWITCH_ANIM_MS: i64 = 120;
+const POPUP_INTERRUPTED_SWITCH_ANIM_MS: i64 = 80;
 const POPUP_SWITCH_OFFSET_PX: i32 = 6;
 const FAVORITES_RELOAD_INTERVAL_MS: i64 = 1000;
 const POPUP_DESIRED_SIZE_CACHE_LIMIT: usize = 32;
@@ -63,6 +64,9 @@ const RECIPE_DETAIL_MARGIN_Y: i32 = 3;
 const RECIPE_DETAIL_MAX_VISIBLE_ROWS: usize = 14;
 const RECIPE_DETAIL_SCROLLBAR_WIDTH: i32 = 5;
 const RECIPE_DETAIL_WHEEL_ROWS: i32 = 3;
+const NOTICE_PAD_X: i32 = 8;
+const NOTICE_PAD_Y: i32 = 5;
+const NOTICE_MARGIN_Y: i32 = 3;
 const BASE_DPI: i32 = 96;
 
 static POPUP_LINE_BUDGET_CACHE: OnceLock<Mutex<Option<PopupLineBudgetCache>>> = OnceLock::new();
@@ -73,6 +77,7 @@ static POPUP_ANIMATION: OnceLock<Mutex<Option<PopupAnimation>>> = OnceLock::new(
 static FAVORITES_CACHE: OnceLock<Mutex<FavoritesCache>> = OnceLock::new();
 static POPUP_SELECTION_STATE: OnceLock<Mutex<PopupSelectionState>> = OnceLock::new();
 static POPUP_HEADER_PRESS: OnceLock<Mutex<Option<HeaderButtonPress>>> = OnceLock::new();
+static POPUP_HEADER_HOVER: OnceLock<Mutex<Option<HeaderButtonHover>>> = OnceLock::new();
 
 pub const POPUP_ANIM_TIMER_ID: usize = 100;
 pub const POPUP_HEADER_PRESS_TIMER_ID: usize = 101;
@@ -128,6 +133,7 @@ struct PopupLineBudgetCache {
     signatures: Vec<RestaurantCacheSignature>,
     max_wrapped_lines: Option<usize>,
     max_content_width_px: Option<i32>,
+    max_extra_height_px: Option<i32>,
 }
 
 #[derive(Debug, Clone)]
@@ -139,6 +145,11 @@ struct PopupLineSignatureCache {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PopupDesiredSizeKey {
     today_key: String,
+    restaurant_code: String,
+    status: FetchStatus,
+    error_message: String,
+    stale_network_error: bool,
+    stale_date: bool,
     expanded_recipe_id: Option<u32>,
     enable_antell_restaurants: bool,
     language: String,
@@ -169,11 +180,19 @@ struct PopupDesiredSizeCacheEntry {
 #[derive(Debug, Clone)]
 enum Line {
     Heading(String),
+    DateTime {
+        date: String,
+        hours: String,
+        stale: bool,
+    },
     Subheading {
         text: String,
         reserve_prefix: Option<String>,
     },
     Text(String),
+    StatusText(String),
+    StaleNotice(String),
+    ClosureNotice(String),
     MenuItem {
         show_bullet: bool,
         price_prefix: Option<String>,
@@ -278,19 +297,20 @@ struct FavoritesCache {
 #[derive(Debug, Clone)]
 enum PopupAnimationKind {
     Open {
-        lines: Vec<Line>,
+        lines: Arc<Vec<Line>>,
         title: String,
     },
     Close {
-        lines: Vec<Line>,
+        lines: Arc<Vec<Line>>,
         title: String,
     },
     Switch {
-        old_lines: Vec<Line>,
-        new_lines: Vec<Line>,
+        old_lines: Arc<Vec<Line>>,
+        new_lines: Arc<Vec<Line>>,
         old_title: String,
         new_title: String,
         direction: i32,
+        interrupted: bool,
     },
 }
 
@@ -305,22 +325,23 @@ struct PopupAnimation {
 #[derive(Debug, Clone)]
 enum PopupAnimationFrame {
     Open {
-        lines: Vec<Line>,
+        lines: Arc<Vec<Line>>,
         title: String,
         progress: f32,
     },
     Close {
-        lines: Vec<Line>,
+        lines: Arc<Vec<Line>>,
         title: String,
         progress: f32,
     },
     Switch {
-        old_lines: Vec<Line>,
-        new_lines: Vec<Line>,
+        old_lines: Arc<Vec<Line>>,
+        new_lines: Arc<Vec<Line>>,
         old_title: String,
         new_title: String,
         direction: i32,
         progress: f32,
+        interrupted: bool,
     },
 }
 
@@ -352,6 +373,12 @@ struct HeaderButtonPress {
     hwnd: HWND,
     action: HeaderButtonAction,
     until_epoch_ms: i64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct HeaderButtonHover {
+    hwnd: HWND,
+    action: HeaderButtonAction,
 }
 
 mod animation;
@@ -436,6 +463,11 @@ pub fn header_button_at(
     interaction::header_button_at(hwnd, settings, x, y)
 }
 
+/// Updates the currently hovered header button and returns true when it changed.
+pub fn update_hovered_header_button(hwnd: HWND, action: Option<HeaderButtonAction>) -> bool {
+    animation::update_hovered_header_button(hwnd, action)
+}
+
 /// Returns the cursor affordance for the given client-space popup point.
 pub fn cursor_kind_at(hwnd: HWND, settings: &Settings, x: i32, y: i32) -> PopupCursorKind {
     if header_button_at(hwnd, settings, x, y).is_some() {
@@ -474,6 +506,16 @@ pub fn scroll_recipe_detail_at(hwnd: HWND, x: i32, y: i32, delta: i32) -> bool {
     interaction::scroll_recipe_detail_at(hwnd, x, y, delta)
 }
 
+#[cfg(feature = "bench")]
+pub fn bench_build_line_count(state: &AppState) -> usize {
+    content::build_lines(state).len()
+}
+
+#[cfg(feature = "bench")]
+pub fn bench_favorite_match_range_count(text: &str, snippets_lower: &[String]) -> usize {
+    render::bench_favorite_match_range_count(text, snippets_lower)
+}
+
 /// Collapses the expanded recipe detail block when the point is inside it.
 pub fn collapse_recipe_detail_at(hwnd: HWND, x: i32, y: i32) -> bool {
     interaction::collapse_recipe_detail_at(hwnd, x, y)
@@ -484,7 +526,7 @@ pub fn paint_popup(hwnd: HWND, state: &AppState) {
     render::paint_popup(hwnd, state);
 }
 
-fn request_repaint(hwnd: HWND) {
+pub fn request_repaint(hwnd: HWND) {
     unsafe {
         InvalidateRect(hwnd, None, false);
     }

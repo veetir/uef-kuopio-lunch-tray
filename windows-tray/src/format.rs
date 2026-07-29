@@ -1,8 +1,9 @@
 //! Text normalization and presentation helpers for menu content.
 
-use crate::model::{MenuGroup, TodayMenu};
+use crate::model::{MenuGroup, PriceAudience, TodayMenu};
 use crate::restaurant::Provider;
 use regex::Regex;
+use std::sync::OnceLock;
 
 #[derive(Debug, Clone, Copy)]
 /// Price-group visibility filters applied when rendering Compass headings.
@@ -46,16 +47,8 @@ pub fn normalize_text(value: &str) -> String {
     out.trim().to_string()
 }
 
-/// Normalizes an optional string and returns an empty string when missing.
-pub fn normalize_optional(value: Option<&str>) -> String {
-    match value {
-        Some(v) => normalize_text(v),
-        None => String::new(),
-    }
-}
-
-/// Formats an ISO date for the selected UI language.
-pub fn format_display_date(date_iso: &str, language: &str) -> String {
+/// Formats an ISO date in the app's day-first local date order.
+pub fn format_display_date(date_iso: &str, _language: &str) -> String {
     let iso = normalize_text(date_iso);
     let parts: Vec<&str> = iso.split('-').collect();
     if parts.len() != 3 {
@@ -70,26 +63,38 @@ pub fn format_display_date(date_iso: &str, language: &str) -> String {
         Ok(d) => d,
         Err(_) => return iso,
     };
-    if language == "fi" {
-        return format!("{}.{}.{}", day, month, year);
-    }
-    format!("{}/{}/{}", month, day, year)
+    format!("{}.{}.{}", day, month, year)
 }
 
 /// Returns the popup line that combines the menu date and lunch time.
 pub fn date_and_time_line(today_menu: Option<&TodayMenu>, language: &str) -> String {
-    let menu = match today_menu {
-        Some(m) => m,
-        None => return String::new(),
+    let Some((date_part, time_part)) = date_and_time_parts(today_menu, language) else {
+        return String::new();
     };
-    let date_part = format_display_date(&menu.date_iso, language);
-    let time_part = normalize_text(&menu.lunch_time);
     if !date_part.is_empty() && !time_part.is_empty() {
         format!("{} {}", date_part, time_part)
     } else if !date_part.is_empty() {
         date_part
     } else {
         time_part
+    }
+}
+
+/// Returns separately formatted date and lunch-time parts for aligned popup metadata.
+pub fn date_and_time_parts(
+    today_menu: Option<&TodayMenu>,
+    language: &str,
+) -> Option<(String, String)> {
+    let menu = match today_menu {
+        Some(m) => m,
+        None => return None,
+    };
+    let date_part = format_display_date(&menu.date_iso, language);
+    let time_part = normalize_text(&menu.lunch_time);
+    if date_part.is_empty() && time_part.is_empty() {
+        None
+    } else {
+        Some((date_part, time_part))
     }
 }
 
@@ -103,6 +108,7 @@ pub fn text_for(language: &str, key: &str) -> String {
             "staleNetwork" => {
                 "Ei verkkoyhteyttä. Näytetään viimeisin tallennettu lista.".to_string()
             }
+            "staleDate" => "Vanhentunut ruokalista".to_string(),
             "fetchError" => "Päivitysvirhe".to_string(),
             "ingredients" => "Ainesosat".to_string(),
             "nutrition" => "Ravintoarvot".to_string(),
@@ -114,6 +120,7 @@ pub fn text_for(language: &str, key: &str) -> String {
             "noMenu" => "No lunch menu available for today.".to_string(),
             "stale" => "Update failed. Showing last cached menu.".to_string(),
             "staleNetwork" => "Offline. Showing last cached menu.".to_string(),
+            "staleDate" => "Stale menu".to_string(),
             "fetchError" => "Fetch error".to_string(),
             "ingredients" => "Ingredients".to_string(),
             "nutrition" => "Nutrition".to_string(),
@@ -161,12 +168,7 @@ pub fn menu_heading_for_restaurant(
 
 /// Returns the cleaned display category/title for a menu group.
 pub fn menu_group_title_for_restaurant(menu: &MenuGroup, restaurant_code: &str) -> String {
-    let title = display_menu_group_name(&menu.name, restaurant_code);
-    if title.is_empty() {
-        "Menu".to_string()
-    } else {
-        title
-    }
+    display_menu_group_name(&menu.name, restaurant_code)
 }
 
 /// Returns the filtered display price text for a menu group.
@@ -191,6 +193,9 @@ pub fn menu_price_for_restaurant_display(
     if !show_prices {
         return String::new();
     }
+    if !menu.prices.is_empty() {
+        return structured_price_text(menu, groups);
+    }
     let price = normalize_text(&menu.price);
     if price.is_empty() {
         return String::new();
@@ -204,21 +209,20 @@ pub fn menu_price_for_restaurant_display(
 
 fn menu_heading_with_name(
     menu: &MenuGroup,
-    mut heading: String,
+    heading: String,
     restaurant_code: &str,
     provider: Provider,
     show_prices: bool,
     groups: PriceGroups,
 ) -> String {
-    if heading.is_empty() {
-        heading = "Menu".to_string();
-    }
     let price = normalize_text(&menu.price);
     if show_prices && !price.is_empty() {
         let filtered =
             menu_price_for_restaurant_display(menu, restaurant_code, provider, show_prices, groups);
         if filtered.is_empty() {
             heading
+        } else if heading.is_empty() {
+            filtered
         } else {
             format!("{} - {}", heading, filtered)
         }
@@ -229,7 +233,7 @@ fn menu_heading_with_name(
 
 fn display_menu_group_name(name: &str, restaurant_code: &str) -> String {
     let name = normalize_text(name);
-    if restaurant_code != "0439" {
+    if restaurant_code != "0439" && restaurant_code != "tietoteknia" {
         return name;
     }
 
@@ -240,6 +244,54 @@ fn display_menu_group_name(name: &str, restaurant_code: &str) -> String {
         "JÄLKKÄRI" => "Jälkiruoka".to_string(),
         _ => name,
     }
+}
+
+fn structured_price_text(menu: &MenuGroup, groups: PriceGroups) -> String {
+    let finnish = menu.price.contains("Opiskelija")
+        || menu.price.contains("Henkilökunta")
+        || menu.price.contains("Vierailija");
+    let mut parts = Vec::new();
+    for price in &menu.prices {
+        let amount = normalize_price_text(&format!("{} €", price.amount.replace('.', ",")));
+        if price.audiences.is_empty() {
+            parts.push(amount);
+            continue;
+        }
+        for audience in &price.audiences {
+            let include = match audience {
+                PriceAudience::Student => groups.student,
+                PriceAudience::Staff => groups.staff,
+                PriceAudience::Guest => groups.guest,
+            };
+            if !include {
+                continue;
+            }
+            if groups.names {
+                let label = match (finnish, audience) {
+                    (true, PriceAudience::Student) => "Opiskelija",
+                    (true, PriceAudience::Staff) => "Henkilökunta",
+                    (true, PriceAudience::Guest) => "Vierailija",
+                    (false, PriceAudience::Student) => "Student",
+                    (false, PriceAudience::Staff) => "Staff",
+                    (false, PriceAudience::Guest) => "Guest",
+                };
+                parts.push(format!("{} {}", label, amount));
+            } else if !parts.contains(&amount) {
+                parts.push(amount.clone());
+            }
+        }
+    }
+    parts.join(" / ")
+}
+
+pub fn student_price_for_group(menu: &MenuGroup) -> Option<f32> {
+    if menu.prices.is_empty() {
+        return student_price_eur(&menu.price);
+    }
+    menu.prices
+        .iter()
+        .find(|price| price.audiences.contains(&PriceAudience::Student))
+        .and_then(|price| price.amount.replace(',', ".").parse::<f32>().ok())
 }
 
 /// Splits a rendered menu component into main text and allergen suffix.
@@ -456,13 +508,19 @@ fn peel_last_allergen_token(text: &str) -> Option<(String, AllergenToken)> {
 
 fn split_requested_allergen_phrase(text: &str) -> (String, bool) {
     let clean = normalize_text(text);
-    let Some(re) = Regex::new(r"(?i)\bpyydet(?:t)?[äa]ess[äa]\s*$").ok() else {
-        return (clean, false);
-    };
+    let re = requested_allergen_re();
     if !re.is_match(&clean) {
         return (clean, false);
     }
     (normalize_text(re.replace(&clean, "").as_ref()), true)
+}
+
+fn requested_allergen_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        crate::perf::count_regex_compilation();
+        Regex::new(r"(?i)\bpyydet(?:t)?[äa]ess[äa]\s*$").expect("valid requested allergen regex")
+    })
 }
 
 fn normalize_allergen_token(token: &str) -> Option<AllergenToken> {
@@ -535,7 +593,7 @@ fn price_text_for_restaurant_groups(
     groups: PriceGroups,
 ) -> String {
     let entries = parse_compass_price_entries(price);
-    if restaurant_code == "0439" {
+    if restaurant_code == "0439" || restaurant_code == "tietoteknia" {
         return tietoteknia_price_text_for_groups(entries, groups);
     }
     price_text_for_entries(entries, groups)
@@ -851,12 +909,30 @@ fn normalize_euro_spacing(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        menu_heading, menu_heading_for_restaurant, menu_price_for_display,
+        date_and_time_line, menu_heading, menu_heading_for_restaurant, menu_price_for_display,
         menu_price_for_restaurant_display, renderable_menu_components, split_component_suffix,
         PriceGroups,
     };
-    use crate::model::MenuGroup;
+    use crate::model::{MenuGroup, MenuPrice, PriceAudience, TodayMenu};
     use crate::restaurant::Provider;
+
+    #[test]
+    fn date_line_uses_day_first_order_for_all_languages() {
+        let menu = TodayMenu {
+            date_iso: "2026-07-29".to_string(),
+            lunch_time: "10:30-12:30".to_string(),
+            menus: Vec::new(),
+        };
+
+        assert_eq!(
+            date_and_time_line(Some(&menu), "en"),
+            "29.7.2026 10:30-12:30"
+        );
+        assert_eq!(
+            date_and_time_line(Some(&menu), "fi"),
+            "29.7.2026 10:30-12:30"
+        );
+    }
 
     #[test]
     fn extracts_compass_suffix_with_parentheses() {
@@ -926,6 +1002,8 @@ mod tests {
         let group = MenuGroup {
             name: "Lunch".to_string(),
             price: String::new(),
+            prices: Vec::new(),
+            presentation: crate::model::MenuGroupPresentation::Standard,
             components: vec![],
             component_recipe_ids: Vec::new(),
             component_recipe_details: Vec::new(),
@@ -938,6 +1016,8 @@ mod tests {
         let group = MenuGroup {
             name: "Lunch".to_string(),
             price: String::new(),
+            prices: Vec::new(),
+            presentation: crate::model::MenuGroupPresentation::Standard,
             components: vec!["".to_string(), "   ".to_string(), "\n\t".to_string()],
             component_recipe_ids: Vec::new(),
             component_recipe_details: Vec::new(),
@@ -950,6 +1030,8 @@ mod tests {
         let group = MenuGroup {
             name: "Lunch".to_string(),
             price: String::new(),
+            prices: Vec::new(),
+            presentation: crate::model::MenuGroupPresentation::Standard,
             components: vec![
                 "".to_string(),
                 " ".to_string(),
@@ -970,6 +1052,8 @@ mod tests {
         let group = MenuGroup {
             name: "Lunch buffet".to_string(),
             price: "student 3,100 € / staff 8,567 € / guest 10,000 €".to_string(),
+            prices: Vec::new(),
+            presentation: crate::model::MenuGroupPresentation::Standard,
             components: Vec::new(),
             component_recipe_ids: Vec::new(),
             component_recipe_details: Vec::new(),
@@ -998,6 +1082,8 @@ mod tests {
         let group = MenuGroup {
             name: "Lunch buffet".to_string(),
             price: "student 3,10 € / staff 8,5 €".to_string(),
+            prices: Vec::new(),
+            presentation: crate::model::MenuGroupPresentation::Standard,
             components: Vec::new(),
             component_recipe_ids: Vec::new(),
             component_recipe_details: Vec::new(),
@@ -1023,6 +1109,8 @@ mod tests {
         let group = MenuGroup {
             name: "Lunch buffet".to_string(),
             price: "student 3,10 € / staff 8,5 € / guest 10,00 €".to_string(),
+            prices: Vec::new(),
+            presentation: crate::model::MenuGroupPresentation::Standard,
             components: Vec::new(),
             component_recipe_ids: Vec::new(),
             component_recipe_details: Vec::new(),
@@ -1048,6 +1136,8 @@ mod tests {
         let group = MenuGroup {
             name: "Päivän soppa".to_string(),
             price: "opisk. 3,10€".to_string(),
+            prices: Vec::new(),
+            presentation: crate::model::MenuGroupPresentation::Standard,
             components: Vec::new(),
             component_recipe_ids: Vec::new(),
             component_recipe_details: Vec::new(),
@@ -1073,6 +1163,8 @@ mod tests {
         let group = MenuGroup {
             name: "Lunch".to_string(),
             price: "12,50/3,10€".to_string(),
+            prices: Vec::new(),
+            presentation: crate::model::MenuGroupPresentation::Standard,
             components: Vec::new(),
             component_recipe_ids: Vec::new(),
             component_recipe_details: Vec::new(),
@@ -1080,7 +1172,7 @@ mod tests {
 
         let price = menu_price_for_display(
             &group,
-            Provider::Antell,
+            Provider::LunchApi,
             true,
             PriceGroups {
                 student: true,
@@ -1094,10 +1186,60 @@ mod tests {
     }
 
     #[test]
+    fn structured_prices_filter_staff_and_deduplicate_shared_amounts() {
+        let group = MenuGroup {
+            name: "Main course".to_string(),
+            price: "Staff 13,30 € / Guest 13,30 € / Student 3,10 €".to_string(),
+            prices: vec![
+                MenuPrice {
+                    amount: "13.30".to_string(),
+                    audiences: vec![PriceAudience::Staff, PriceAudience::Guest],
+                },
+                MenuPrice {
+                    amount: "3.10".to_string(),
+                    audiences: vec![PriceAudience::Student],
+                },
+            ],
+            presentation: crate::model::MenuGroupPresentation::Standard,
+            components: Vec::new(),
+            component_recipe_ids: Vec::new(),
+            component_recipe_details: Vec::new(),
+        };
+
+        let staff_only = menu_price_for_display(
+            &group,
+            Provider::LunchApi,
+            true,
+            PriceGroups {
+                student: false,
+                staff: true,
+                guest: false,
+                names: false,
+            },
+        );
+        assert_eq!(staff_only, "13,30 €");
+
+        let all_without_names = menu_price_for_display(
+            &group,
+            Provider::LunchApi,
+            true,
+            PriceGroups {
+                student: true,
+                staff: true,
+                guest: true,
+                names: false,
+            },
+        );
+        assert_eq!(all_without_names, "13,30 € / 3,10 €");
+    }
+
+    #[test]
     fn tietoteknia_student_only_uses_inferred_student_price_from_unlabeled_pair() {
         let group = MenuGroup {
             name: "Pääruoka".to_string(),
             price: "13,30 € / 3,10 €".to_string(),
+            prices: Vec::new(),
+            presentation: crate::model::MenuGroupPresentation::Standard,
             components: Vec::new(),
             component_recipe_ids: Vec::new(),
             component_recipe_details: Vec::new(),
@@ -1124,6 +1266,8 @@ mod tests {
         let group = MenuGroup {
             name: "Pääruoka".to_string(),
             price: "13,30 € / 3,10 €".to_string(),
+            prices: Vec::new(),
+            presentation: crate::model::MenuGroupPresentation::Standard,
             components: Vec::new(),
             component_recipe_ids: Vec::new(),
             component_recipe_details: Vec::new(),
@@ -1154,6 +1298,8 @@ mod tests {
         let group = MenuGroup {
             name: "Kesäsalaatti".to_string(),
             price: "11,00 €".to_string(),
+            prices: Vec::new(),
+            presentation: crate::model::MenuGroupPresentation::Standard,
             components: Vec::new(),
             component_recipe_ids: Vec::new(),
             component_recipe_details: Vec::new(),
@@ -1188,6 +1334,8 @@ mod tests {
             let group = MenuGroup {
                 name: raw.to_string(),
                 price: String::new(),
+                prices: Vec::new(),
+                presentation: crate::model::MenuGroupPresentation::Standard,
                 components: Vec::new(),
                 component_recipe_ids: Vec::new(),
                 component_recipe_details: Vec::new(),
@@ -1215,6 +1363,8 @@ mod tests {
         let group = MenuGroup {
             name: "LOUNAS BUFFA".to_string(),
             price: String::new(),
+            prices: Vec::new(),
+            presentation: crate::model::MenuGroupPresentation::Standard,
             components: Vec::new(),
             component_recipe_ids: Vec::new(),
             component_recipe_details: Vec::new(),

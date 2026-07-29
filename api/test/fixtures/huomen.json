@@ -1,0 +1,42 @@
+{
+  "success": true,
+  "data": {
+    "week": {
+      "days": [
+        {
+          "dateString": "2026-02-23",
+          "isClosed": false,
+          "lunches": [
+            {
+              "title": {
+                "fi": "Porkkana-inkiväärikeitto",
+                "en": "Carrot and ginger soup"
+              },
+              "normalPrice": {
+                "price": "10,90 €"
+              },
+              "allergens": [
+                {
+                  "abbreviation": {
+                    "fi": "G",
+                    "en": "G"
+                  }
+                }
+              ]
+            },
+            {
+              "title": {
+                "fi": "Broileria ja riisiä",
+                "en": "Chicken and rice"
+              },
+              "normalPrice": {
+                "price": "12,90 €"
+              },
+              "allergens": []
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

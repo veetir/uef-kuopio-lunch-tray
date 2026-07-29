@@ -16,6 +16,7 @@ impl App {
         state.today_menu = None;
         state.payload_date.clear();
         state.stale_date = false;
+        state.api_stale = false;
         state.status = FetchStatus::Idle;
         state.loading_started_epoch_ms = 0;
         state.stale_network_error = false;
@@ -43,6 +44,7 @@ impl App {
         state.today_menu = None;
         state.payload_date.clear();
         state.stale_date = false;
+        state.api_stale = false;
         state.status = FetchStatus::Idle;
         state.loading_started_epoch_ms = 0;
         state.stale_network_error = false;
@@ -165,6 +167,7 @@ impl App {
         state.today_menu = None;
         state.payload_date.clear();
         state.stale_date = false;
+        state.api_stale = false;
         state.status = FetchStatus::Idle;
         state.loading_started_epoch_ms = 0;
         state.stale_network_error = false;

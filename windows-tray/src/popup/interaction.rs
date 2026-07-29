@@ -62,19 +62,22 @@ pub(super) fn update_text_selection(hwnd: HWND, x: i32, y: i32) {
         Ok(value) => value,
         Err(_) => return,
     };
-    let layout = match state.layout.as_ref() {
-        Some(value) if value.hwnd == hwnd => value.clone(),
+    let Some(drag) = state.drag.as_ref() else {
+        return;
+    };
+    let item_id = drag.item_id;
+    let next_index = match state.layout.as_ref() {
+        Some(value) if value.hwnd == hwnd => {
+            let Some((_, next_index)) = hit_test_row_for_item(value, item_id, x, y) else {
+                return;
+            };
+            next_index
+        }
         _ => return,
     };
     let Some(drag) = state.drag.as_mut() else {
         return;
     };
-    let Some((row, next_index)) = hit_test_row_for_item(&layout, drag.item_id, x, y) else {
-        return;
-    };
-    if row.item_id != drag.item_id {
-        return;
-    }
     if drag.current != next_index {
         drag.current = next_index;
         request_repaint(hwnd);
@@ -386,30 +389,22 @@ fn hit_test_row_for_item(
     x: i32,
     y: i32,
 ) -> Option<(&SelectableRow, usize)> {
-    let item_rows: Vec<&SelectableRow> = layout
-        .rows
-        .iter()
-        .filter(|row| row.item_id == item_id)
-        .collect();
-    if item_rows.is_empty() {
-        return None;
+    let mut closest = None;
+    for row in layout.rows.iter().filter(|row| row.item_id == item_id) {
+        if y >= row.top && y <= row.bottom {
+            let local = row_byte_index_from_x(row, x);
+            return Some((row, row.start + local));
+        }
+        let distance = if y < row.top {
+            row.top - y
+        } else {
+            y - row.bottom
+        };
+        if closest.is_none_or(|(_, closest_distance)| distance < closest_distance) {
+            closest = Some((row, distance));
+        }
     }
-
-    let row = item_rows
-        .iter()
-        .copied()
-        .find(|row| y >= row.top && y <= row.bottom)
-        .or_else(|| {
-            item_rows.iter().copied().min_by_key(|row| {
-                if y < row.top {
-                    row.top - y
-                } else if y > row.bottom {
-                    y - row.bottom
-                } else {
-                    0
-                }
-            })
-        })?;
+    let (row, _) = closest?;
     let local = row_byte_index_from_x(row, x);
     Some((row, row.start + local))
 }

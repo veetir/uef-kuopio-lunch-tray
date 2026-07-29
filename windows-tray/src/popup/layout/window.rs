@@ -190,8 +190,14 @@ fn desired_size(hwnd: HWND, state: &AppState) -> (i32, i32) {
         target_lines = target_lines.min(MAX_DYNAMIC_LINES);
         let metrics = text_metrics(hdc, normal_font);
         let line_height = metrics.tmHeight as i32 + scale.line_gap;
-        let height =
-            scale.header_height + (target_lines as i32 * line_height) + scale.padding_y * 2;
+        let target_extra_height = budget
+            .max_extra_height_px
+            .unwrap_or(current_wrapped_metrics.extra_height_px)
+            .max(current_wrapped_metrics.extra_height_px);
+        let height = scale.header_height
+            + (target_lines as i32 * line_height)
+            + target_extra_height
+            + scale.padding_y * 2;
         let title_width = max_header_title_width(hdc, bold_font, &state.settings);
         let title_button_margin = scale_px(HEADER_TITLE_BUTTON_MARGIN, scale.factor);
         let header_reserved = scale.padding_x * 2

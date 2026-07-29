@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum LunchItemDisplayMode {
-    Legacy,
+    Classic,
     Standard,
     Compact,
 }
@@ -49,7 +49,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            restaurant_code: "0437".to_string(),
+            restaurant_code: "snellmania".to_string(),
             language: "fi".to_string(),
             refresh_minutes: 1440,
             show_prices: true,
@@ -57,7 +57,7 @@ impl Default for Settings {
             show_staff_price: true,
             show_guest_price: true,
             show_price_group_names: false,
-            lunch_item_display_mode: LunchItemDisplayMode::Standard,
+            lunch_item_display_mode: LunchItemDisplayMode::Classic,
             hide_expensive_student_meals: false,
             theme: "dark".to_string(),
             highlight_theme: HighlightTheme::Default,
@@ -159,7 +159,12 @@ fn decode_settings(data: &str) -> anyhow::Result<Settings> {
         .unwrap_or_else(|| defaults.widget_scale.clone());
 
     Ok(Settings {
-        restaurant_code: raw.restaurant_code.unwrap_or(defaults.restaurant_code),
+        restaurant_code: crate::restaurant::permanent_restaurant_id(
+            raw.restaurant_code
+                .as_deref()
+                .unwrap_or(&defaults.restaurant_code),
+        )
+        .to_string(),
         language: raw.language.unwrap_or(defaults.language),
         refresh_minutes: raw.refresh_minutes.unwrap_or(defaults.refresh_minutes),
         // Existing installs without this key predate the price-first layout.
@@ -180,7 +185,7 @@ fn decode_settings(data: &str) -> anyhow::Result<Settings> {
             .lunch_item_display_mode
             .as_deref()
             .map(normalize_lunch_item_display_mode)
-            .unwrap_or(LunchItemDisplayMode::Legacy),
+            .unwrap_or(LunchItemDisplayMode::Classic),
         hide_expensive_student_meals: raw
             .hide_expensive_student_meals
             .unwrap_or(defaults.hide_expensive_student_meals),
@@ -249,10 +254,10 @@ pub fn normalize_widget_scale(value: &str) -> String {
 /// Normalizes user-facing lunch item display mode values to the supported presets.
 pub fn normalize_lunch_item_display_mode(value: &str) -> LunchItemDisplayMode {
     match value.to_ascii_lowercase().as_str() {
-        "legacy" => LunchItemDisplayMode::Legacy,
+        "classic" | "legacy" => LunchItemDisplayMode::Classic,
         "compact" => LunchItemDisplayMode::Compact,
         "standard" => LunchItemDisplayMode::Standard,
-        _ => LunchItemDisplayMode::Standard,
+        _ => LunchItemDisplayMode::Classic,
     }
 }
 
@@ -271,12 +276,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn new_default_uses_price_first_menu_defaults() {
+    fn new_default_uses_classic_layout_with_all_prices() {
         let settings = Settings::default();
 
         assert_eq!(
             settings.lunch_item_display_mode,
-            LunchItemDisplayMode::Standard
+            LunchItemDisplayMode::Classic
         );
         assert!(settings.show_prices);
         assert!(settings.show_student_price);
@@ -287,7 +292,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_lunch_item_display_mode_keeps_existing_settings_on_legacy() {
+    fn missing_lunch_item_display_mode_keeps_existing_settings_on_classic() {
         let settings = decode_settings(r#"{"language":"en","theme":"blue"}"#).unwrap();
 
         assert_eq!(settings.language, "en");
@@ -295,12 +300,26 @@ mod tests {
         assert!(!settings.show_prices);
         assert_eq!(
             settings.lunch_item_display_mode,
-            LunchItemDisplayMode::Legacy
+            LunchItemDisplayMode::Classic
         );
     }
 
     #[test]
     fn lunch_item_display_mode_decodes_supported_values() {
+        let settings = decode_settings(r#"{"lunch_item_display_mode":"classic"}"#).unwrap();
+
+        assert_eq!(
+            settings.lunch_item_display_mode,
+            LunchItemDisplayMode::Classic
+        );
+
+        let settings = decode_settings(r#"{"lunch_item_display_mode":"legacy"}"#).unwrap();
+
+        assert_eq!(
+            settings.lunch_item_display_mode,
+            LunchItemDisplayMode::Classic
+        );
+
         let settings = decode_settings(r#"{"lunch_item_display_mode":"compact"}"#).unwrap();
 
         assert_eq!(
@@ -318,5 +337,14 @@ mod tests {
         let settings = decode_settings(r#"{"highlight_theme":"diploma"}"#).unwrap();
 
         assert_eq!(settings.highlight_theme, HighlightTheme::Diploma);
+    }
+
+    #[test]
+    fn legacy_restaurant_code_migrates_to_public_api_id() {
+        let settings = decode_settings(r#"{"restaurant_code":"0439"}"#).unwrap();
+        assert_eq!(settings.restaurant_code, "tietoteknia");
+
+        let settings = decode_settings(r#"{"restaurant_code":"pranzeria-html"}"#).unwrap();
+        assert_eq!(settings.restaurant_code, "pranzeria-sorrento");
     }
 }

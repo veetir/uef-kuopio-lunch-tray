@@ -2,16 +2,13 @@ use super::*;
 
 pub(super) fn build_lines(state: &AppState) -> Vec<Line> {
     let mut lines = Vec::new();
-    let closure_notice = seasonal_closure_notice(
-        &state.settings.restaurant_code,
-        &state.settings.language,
-        OffsetDateTime::now_local()
-            .unwrap_or_else(|_| OffsetDateTime::now_utc())
-            .date(),
-    );
+    let closure_notice = api::closure_notice(&state.raw_payload, &state.settings.language);
 
     if state.stale_date {
-        lines.push(Line::Heading("[STALE]".to_string()));
+        lines.push(Line::StaleNotice(text_for(
+            &state.settings.language,
+            "staleDate",
+        )));
     }
 
     let show_loading_hint = state.status == FetchStatus::Loading
@@ -23,9 +20,14 @@ pub(super) fn build_lines(state: &AppState) -> Vec<Line> {
         lines.push(Line::Text(text_for(&state.settings.language, "loading")));
     }
 
-    let date_line = date_and_time_line(state.today_menu.as_ref(), &state.settings.language);
-    if !date_line.is_empty() {
-        lines.push(Line::Heading(date_line));
+    if let Some((date, hours)) =
+        date_and_time_parts(state.today_menu.as_ref(), &state.settings.language)
+    {
+        lines.push(Line::DateTime {
+            date,
+            hours,
+            stale: state.stale_date,
+        });
     }
 
     match &state.today_menu {
@@ -87,11 +89,14 @@ pub(super) fn build_lines(state: &AppState) -> Vec<Line> {
         } else {
             "stale"
         };
-        lines.push(Line::Text(text_for(&state.settings.language, stale_key)));
+        lines.push(Line::StatusText(text_for(
+            &state.settings.language,
+            stale_key,
+        )));
     }
 
     if !state.error_message.is_empty() && state.status != FetchStatus::Ok {
-        lines.push(Line::Text(format!(
+        lines.push(Line::StatusText(format!(
             "{}: {}",
             text_for(&state.settings.language, "fetchError"),
             state.error_message
@@ -103,108 +108,10 @@ pub(super) fn build_lines(state: &AppState) -> Vec<Line> {
 
 fn push_no_menu_or_closure_notice(lines: &mut Vec<Line>, notice: Option<&str>, language: &str) {
     if let Some(notice) = notice {
-        lines.push(Line::Text(notice.to_string()));
+        lines.push(Line::ClosureNotice(notice.to_string()));
     } else {
         lines.push(Line::Text(text_for(language, "noMenu")));
     }
-}
-
-fn seasonal_closure_notice(code: &str, language: &str, today: time::Date) -> Option<String> {
-    let closure = seasonal_closure_for(code)?;
-    if today < closure.start || today > closure.end {
-        return None;
-    }
-    let start = closure_display_date(closure.start);
-    let end = closure_display_date(closure.end);
-    if language == "fi" {
-        Some(format!(
-            "{} on suljettu ajalla {}-{}. Lounaslistaa ei ole saatavilla tälle päivälle.",
-            closure.fi_name, start, end
-        ))
-    } else {
-        Some(format!(
-            "{} is closed from {} to {}. No lunch menu is available for today.",
-            closure.en_name, start, end
-        ))
-    }
-}
-
-struct SeasonalClosure {
-    start: time::Date,
-    end: time::Date,
-    fi_name: &'static str,
-    en_name: &'static str,
-}
-
-fn seasonal_closure_for(code: &str) -> Option<SeasonalClosure> {
-    use time::Month;
-    let date = |month, day| time::Date::from_calendar_date(2026, month, day).ok();
-    let (start, end, fi_name, en_name) = match code {
-        "043601" => (
-            date(Month::May, 4)?,
-            date(Month::August, 16)?,
-            "Ravintola Mediteknia",
-            "Restaurant Mediteknia",
-        ),
-        "3488" => (
-            date(Month::June, 9)?,
-            date(Month::August, 9)?,
-            "Caari",
-            "Caari",
-        ),
-        "snellari-rss" => (
-            date(Month::May, 8)?,
-            date(Month::August, 30)?,
-            "Cafe Snellari",
-            "Cafe Snellari",
-        ),
-        "0437" => (
-            date(Month::July, 4)?,
-            date(Month::July, 19)?,
-            "Snellmania",
-            "Snellmania",
-        ),
-        "0436" => (
-            date(Month::June, 18)?,
-            date(Month::August, 9)?,
-            "Canthia",
-            "Canthia",
-        ),
-        "antell-highway" => (
-            date(Month::June, 22)?,
-            date(Month::August, 2)?,
-            "Ravintola Antell Highway",
-            "Restaurant Antell Highway",
-        ),
-        "huomen-bioteknia" => (
-            date(Month::July, 6)?,
-            date(Month::August, 2)?,
-            "Ravintola Hyvä Huomen",
-            "Restaurant Hyvä Huomen",
-        ),
-        "antell-round" => (
-            date(Month::June, 29)?,
-            date(Month::August, 2)?,
-            "Ravintola Antell Round",
-            "Restaurant Antell Round",
-        ),
-        _ => return None,
-    };
-    Some(SeasonalClosure {
-        start,
-        end,
-        fi_name,
-        en_name,
-    })
-}
-
-fn closure_display_date(date: time::Date) -> String {
-    format!(
-        "{:02}-{:02}-{:04}",
-        date.day(),
-        date.month() as u8,
-        date.year()
-    )
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -236,8 +143,8 @@ fn append_menus(lines: &mut Vec<Line>, menu: &TodayMenu, options: MenuRenderOpti
 
     for render_group in groups {
         let group = render_group.group;
-        if options.provider == Provider::Compass && options.hide_expensive_student_meals {
-            if let Some(price) = student_price_eur(&group.price) {
+        if options.hide_expensive_student_meals {
+            if let Some(price) = student_price_for_group(group) {
                 if price > 4.0 {
                     continue;
                 }
@@ -245,37 +152,33 @@ fn append_menus(lines: &mut Vec<Line>, menu: &TodayMenu, options: MenuRenderOpti
         }
 
         let renderable_components = renderable_group_components(group);
-        if renderable_components.is_empty() {
+        if renderable_components.is_empty()
+            && group.presentation != MenuGroupPresentation::GeneralOffer
+        {
             continue;
         }
 
         let category = render_group.category;
-        if options.display_mode == crate::settings::LunchItemDisplayMode::Legacy {
+        if group.presentation == MenuGroupPresentation::GeneralOffer {
+            lines.push(Line::Heading(render_group.heading));
+            for (main, _, _, _) in render_group.components {
+                lines.push(Line::Text(main));
+            }
+            rendered_groups += 1;
+            continue;
+        }
+        if options.display_mode == crate::settings::LunchItemDisplayMode::Classic
+            && !render_group.heading.is_empty()
+        {
             lines.push(Line::Heading(render_group.heading));
         }
-        if price_note_style(options.provider) && !render_group.price_text.is_empty() {
-            lines.push(Line::Subheading {
-                text: translate_price_note(
-                    options.provider,
-                    &render_group.price_text,
-                    options.language,
-                ),
-                reserve_prefix: None,
-            });
-        }
         rendered_groups += 1;
-        let list_components = options.provider == Provider::PranzeriaHtml;
         let mut rendered_component_count = 0usize;
         for (main, suffix, recipe_id, recipe_detail) in render_group.components {
             let is_primary_component = rendered_component_count == 0
-                || list_components
-                || options.display_mode == crate::settings::LunchItemDisplayMode::Legacy;
+                || options.display_mode == crate::settings::LunchItemDisplayMode::Classic;
             let price_prefix = if is_primary_component {
-                if list_components || price_note_style(options.provider) {
-                    None
-                } else {
-                    render_group.price_prefix.clone()
-                }
+                render_group.price_prefix.clone()
             } else {
                 None
             };
@@ -325,7 +228,9 @@ fn append_menus(lines: &mut Vec<Line>, menu: &TodayMenu, options: MenuRenderOpti
             }
             rendered_component_count += 1;
         }
-        if options.display_mode == crate::settings::LunchItemDisplayMode::Standard {
+        if options.display_mode == crate::settings::LunchItemDisplayMode::Standard
+            && !category.is_empty()
+        {
             lines.push(Line::Subheading {
                 text: category.clone(),
                 reserve_prefix: render_group.price_prefix.clone(),
@@ -341,7 +246,6 @@ struct RenderableGroup<'a> {
     components: Vec<(String, String, Option<u32>, Option<RecipeInfo>)>,
     category: String,
     heading: String,
-    price_text: String,
     price_prefix: Option<String>,
     sort_prices: Vec<f32>,
     original_index: usize,
@@ -353,7 +257,7 @@ fn renderable_group<'a>(
     options: MenuRenderOptions,
 ) -> Option<RenderableGroup<'a>> {
     let components = renderable_group_components(group);
-    if components.is_empty() {
+    if components.is_empty() && group.presentation != MenuGroupPresentation::GeneralOffer {
         return None;
     }
     let category = menu_group_title_for_restaurant(group, options.restaurant_code);
@@ -371,8 +275,8 @@ fn renderable_group<'a>(
         options.show_prices,
         options.price_groups,
     );
-    let price_prefix = if options.display_mode == crate::settings::LunchItemDisplayMode::Legacy
-        || price_note_style(options.provider)
+    let price_prefix = if options.display_mode == crate::settings::LunchItemDisplayMode::Classic
+        || group.presentation == MenuGroupPresentation::GeneralOffer
         || price_text.is_empty()
     {
         None
@@ -390,7 +294,6 @@ fn renderable_group<'a>(
         components,
         category,
         heading,
-        price_text: price_text.clone(),
         price_prefix,
         sort_prices,
         original_index,
@@ -401,6 +304,15 @@ fn compare_renderable_groups(
     left: &RenderableGroup<'_>,
     right: &RenderableGroup<'_>,
 ) -> std::cmp::Ordering {
+    match (
+        left.group.presentation == MenuGroupPresentation::GeneralOffer,
+        right.group.presentation == MenuGroupPresentation::GeneralOffer,
+    ) {
+        (true, true) => return left.original_index.cmp(&right.original_index),
+        (true, false) => return std::cmp::Ordering::Less,
+        (false, true) => return std::cmp::Ordering::Greater,
+        (false, false) => {}
+    }
     compare_price_vectors_desc(&left.sort_prices, &right.sort_prices)
         .then_with(|| left.original_index.cmp(&right.original_index))
 }
@@ -422,28 +334,6 @@ fn compare_price_vectors_desc(left: &[f32], right: &[f32]) -> std::cmp::Ordering
         }
     }
     std::cmp::Ordering::Equal
-}
-
-fn price_note_style(provider: Provider) -> bool {
-    matches!(provider, Provider::PranzeriaHtml | Provider::HuomenJson)
-}
-
-fn translate_price_note(provider: Provider, price_text: &str, language: &str) -> String {
-    if provider == Provider::PranzeriaHtml {
-        return translate_pranzeria_price_summary(price_text, language);
-    }
-    normalize_text(price_text)
-}
-
-fn translate_pranzeria_price_summary(price_text: &str, language: &str) -> String {
-    let clean = normalize_text(price_text);
-    if language != "en" {
-        return clean;
-    }
-    clean
-        .replace("Salaattilounas", "Salad lunch")
-        .replace("Lounasbuffet", "Lunch buffet")
-        .replace("Sopimuslounas", "Contract lunch")
 }
 
 fn ingredient_alert_matches(detail: &RecipeInfo, favorites: &FavoritesSnapshot) -> bool {
@@ -517,7 +407,7 @@ fn recipe_detail_rows(detail: &RecipeInfo, language: &str) -> Vec<RecipeDetailRo
 
 fn compact_nutrition_line(detail: &RecipeInfo) -> String {
     let wanted = [
-        ("EnergyKcal", "kcal"),
+        ("EnergyKcal", ""),
         ("Protein", "protein"),
         ("Carbohydrates", "carbs"),
         ("Fat", "fat"),
@@ -529,12 +419,12 @@ fn compact_nutrition_line(detail: &RecipeInfo) -> String {
             .iter()
             .find(|entry| entry.name == key)
         {
-            parts.push(format!(
-                "{} {} {}",
-                format_amount(value.amount),
-                value.unit,
-                label
-            ));
+            let value_text = format!("{} {}", format_amount(value.amount), value.unit);
+            parts.push(if label.is_empty() {
+                value_text
+            } else {
+                format!("{} {}", value_text, label)
+            });
         }
     }
     parts.join(", ")
@@ -654,7 +544,7 @@ pub(super) fn invalidate_favorites_cache() {
 mod tests {
     use super::*;
     use crate::model::{MenuGroup, NutritionalValue, TodayMenu};
-    use crate::settings::LunchItemDisplayMode;
+    use crate::settings::{LunchItemDisplayMode, Settings};
 
     #[test]
     fn recipe_detail_rows_use_finnish_labels_for_finnish_ui() {
@@ -680,8 +570,59 @@ mod tests {
     }
 
     #[test]
-    fn legacy_layout_renders_heading_then_menu_item() {
-        let lines = render_test_lines(LunchItemDisplayMode::Legacy);
+    fn nutrition_does_not_repeat_kcal_unit() {
+        let detail = RecipeInfo {
+            recipe_id: 42,
+            name: "Soup".to_string(),
+            ingredients_cleaned: String::new(),
+            nutritional_values: vec![NutritionalValue {
+                name: "EnergyKcal".to_string(),
+                amount: 93.0,
+                unit: "kcal".to_string(),
+            }],
+            kg_co2e_per100g: None,
+            diets: String::new(),
+        };
+
+        assert_eq!(compact_nutrition_line(&detail), "93 kcal");
+    }
+
+    #[test]
+    fn stale_date_renders_notice_and_stale_date_time_row() {
+        let state = AppState {
+            settings: Settings {
+                language: "en".to_string(),
+                ..Settings::default()
+            },
+            status: FetchStatus::Ok,
+            loading_started_epoch_ms: 0,
+            error_message: String::new(),
+            stale_network_error: false,
+            today_menu: Some(TodayMenu {
+                date_iso: "2026-07-28".to_string(),
+                lunch_time: "10:30-14:00".to_string(),
+                menus: Vec::new(),
+            }),
+            restaurant_name: "Snellmania".to_string(),
+            restaurant_url: String::new(),
+            raw_payload: String::new(),
+            provider: Provider::LunchApi,
+            payload_date: "2026-07-28".to_string(),
+            stale_date: true,
+            api_stale: false,
+        };
+
+        let lines = build_lines(&state);
+
+        assert!(matches!(&lines[0], Line::StaleNotice(text) if text == "Stale menu"));
+        assert!(
+            matches!(&lines[1], Line::DateTime { date, hours, stale } if date == "28.7.2026" && hours == "10:30-14:00" && *stale)
+        );
+    }
+
+    #[test]
+    fn classic_layout_renders_heading_then_menu_item() {
+        let lines = render_test_lines(LunchItemDisplayMode::Classic);
 
         assert!(matches!(&lines[0], Line::Heading(text) if text == "Main course - 3,10 €"));
         assert!(
@@ -712,13 +653,15 @@ mod tests {
     }
 
     #[test]
-    fn huomen_price_renders_as_note_not_item_prefix() {
+    fn general_offer_renders_as_heading_and_description() {
         let menu = TodayMenu {
             date_iso: "2026-06-24".to_string(),
             lunch_time: String::new(),
             menus: vec![MenuGroup {
                 name: "Lunch".to_string(),
-                price: "Lunch 12,90 € / Soup lunch 10,90 €".to_string(),
+                price: "12,90 €".to_string(),
+                prices: Vec::new(),
+                presentation: MenuGroupPresentation::GeneralOffer,
                 components: vec!["Tofu soup".to_string()],
                 component_recipe_ids: Vec::new(),
                 component_recipe_details: Vec::new(),
@@ -726,16 +669,21 @@ mod tests {
         };
         let mut lines = Vec::new();
         let mut options = test_options(LunchItemDisplayMode::Standard);
-        options.provider = Provider::HuomenJson;
-        options.restaurant_code = "huomen-bioteknia";
+        options.provider = Provider::LunchApi;
+        options.restaurant_code = "hyva-huomen-bioteknia";
         append_menus(&mut lines, &menu, options);
 
-        assert!(
-            matches!(&lines[0], Line::Subheading { text, reserve_prefix } if text == "Lunch 12,90 € / Soup lunch 10,90 €" && reserve_prefix.is_none())
-        );
-        assert!(
-            matches!(&lines[1], Line::MenuItem { price_prefix, main, .. } if price_prefix.is_none() && main == "Tofu soup")
-        );
+        assert!(matches!(&lines[0], Line::Heading(text) if text == "Lunch - 12,90 €"));
+        assert!(matches!(&lines[1], Line::Text(text) if text == "Tofu soup"));
+    }
+
+    #[test]
+    fn closure_notice_uses_dedicated_line_style() {
+        let mut lines = Vec::new();
+
+        push_no_menu_or_closure_notice(&mut lines, Some("Closed 24.6.-30.6."), "en");
+
+        assert!(matches!(&lines[0], Line::ClosureNotice(text) if text == "Closed 24.6.-30.6."));
     }
 
     #[test]
@@ -789,7 +737,7 @@ mod tests {
         };
         let mut lines = Vec::new();
         let mut options = test_options(LunchItemDisplayMode::Standard);
-        options.provider = Provider::Antell;
+        options.provider = Provider::LunchApi;
         append_menus(&mut lines, &menu, options);
 
         let mains: Vec<&str> = lines
@@ -818,6 +766,8 @@ mod tests {
             menus: vec![MenuGroup {
                 name: "Main course".to_string(),
                 price: "student 3,10 €".to_string(),
+                prices: Vec::new(),
+                presentation: MenuGroupPresentation::Standard,
                 components: vec![
                     "Chicken rissoles".to_string(),
                     "Roasted potatoes".to_string(),
@@ -869,70 +819,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn seasonal_closure_notice_is_limited_to_2026_interval() {
-        use time::Month;
-        let inside = time::Date::from_calendar_date(2026, Month::June, 26).expect("valid date");
-        let outside = time::Date::from_calendar_date(2026, Month::August, 17).expect("valid date");
-
-        let notice = seasonal_closure_notice("043601", "en", inside).expect("notice");
-
-        assert!(notice.contains("Restaurant Mediteknia is closed"));
-        assert!(notice.contains("04-05-2026"));
-        assert!(notice.contains("16-08-2026"));
-        assert!(seasonal_closure_notice("043601", "en", outside).is_none());
-    }
-
-    #[test]
-    fn seasonal_closure_notice_localizes_finnish() {
-        use time::Month;
-        let inside = time::Date::from_calendar_date(2026, Month::June, 26).expect("valid date");
-        let notice = seasonal_closure_notice("snellari-rss", "fi", inside).expect("notice");
-
-        assert!(notice.contains("Cafe Snellari on suljettu"));
-        assert!(notice.contains("08-05-2026"));
-        assert!(notice.contains("30-08-2026"));
-
-        let snellmania = time::Date::from_calendar_date(2026, Month::July, 4).expect("valid date");
-        let notice = seasonal_closure_notice("0437", "fi", snellmania).expect("notice");
-
-        assert!(notice.contains("Snellmania on suljettu"));
-        assert!(notice.contains("04-07-2026"));
-        assert!(notice.contains("19-07-2026"));
-    }
-
-    #[test]
-    fn seasonal_closure_notice_covers_snellmania_summer_2026_in_english() {
-        use time::Month;
-        let inside = time::Date::from_calendar_date(2026, Month::July, 19).expect("valid date");
-        let outside = time::Date::from_calendar_date(2026, Month::July, 20).expect("valid date");
-
-        let notice = seasonal_closure_notice("0437", "en", inside).expect("notice");
-
-        assert!(notice.contains("Snellmania is closed"));
-        assert!(notice.contains("04-07-2026"));
-        assert!(notice.contains("19-07-2026"));
-        assert!(seasonal_closure_notice("0437", "en", outside).is_none());
-    }
-
-    #[test]
-    fn seasonal_closure_notice_covers_antell_and_huomen_summer_2026() {
-        use time::Month;
-        let highway = time::Date::from_calendar_date(2026, Month::June, 22).expect("valid date");
-        let huomen = time::Date::from_calendar_date(2026, Month::July, 6).expect("valid date");
-        let round = time::Date::from_calendar_date(2026, Month::June, 29).expect("valid date");
-
-        assert!(seasonal_closure_notice("antell-highway", "en", highway)
-            .expect("notice")
-            .contains("22-06-2026"));
-        assert!(seasonal_closure_notice("huomen-bioteknia", "fi", huomen)
-            .expect("notice")
-            .contains("06-07-2026"));
-        assert!(seasonal_closure_notice("antell-round", "en", round)
-            .expect("notice")
-            .contains("29-06-2026"));
-    }
-
     fn render_test_lines(display_mode: LunchItemDisplayMode) -> Vec<Line> {
         let menu = TodayMenu {
             date_iso: "2026-06-24".to_string(),
@@ -940,6 +826,8 @@ mod tests {
             menus: vec![MenuGroup {
                 name: "Main course".to_string(),
                 price: "student 3,10 € / staff 8,50 €".to_string(),
+                prices: Vec::new(),
+                presentation: MenuGroupPresentation::Standard,
                 components: vec!["Sweet sour tofu and vegetable wok - Tofu Kung Pao".to_string()],
                 component_recipe_ids: Vec::new(),
                 component_recipe_details: Vec::new(),
@@ -975,6 +863,8 @@ mod tests {
         MenuGroup {
             name: name.to_string(),
             price: price.to_string(),
+            prices: Vec::new(),
+            presentation: MenuGroupPresentation::Standard,
             components: vec![component.to_string()],
             component_recipe_ids: Vec::new(),
             component_recipe_details: Vec::new(),

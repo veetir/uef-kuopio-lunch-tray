@@ -1,0 +1,85 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "uef-kuopio-lunch-api-staging",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-27",
+  "workers_dev": false,
+  "cache": {
+    "enabled": false
+  },
+  "triggers": {
+    "crons": []
+  },
+  "vars": {
+    "ENVIRONMENT": "staging"
+  },
+  "kv_namespaces": [
+    {
+      "binding": "MENU_CACHE",
+      "id": "9e65ea45fcb04f0aa4eb552c1da8a4df"
+    }
+  ],
+  "ratelimits": [
+    {
+      "name": "API_CLIENT_RATE_LIMITER",
+      "namespace_id": "728202601",
+      "simple": {
+        "limit": 60,
+        "period": 60
+      }
+    },
+    {
+      "name": "API_GLOBAL_RATE_LIMITER",
+      "namespace_id": "728202602",
+      "simple": {
+        "limit": 120,
+        "period": 60
+      }
+    }
+  ],
+  "env": {
+    "production": {
+      "name": "uef-kuopio-lunch-api",
+      "workers_dev": false,
+      "cache": {
+        "enabled": true
+      },
+      "triggers": {
+        "crons": ["*/6 * * * *"]
+      },
+      "routes": [
+        {
+          "pattern": "lunch.veeti.dev",
+          "custom_domain": true
+        }
+      ],
+      "vars": {
+        "ENVIRONMENT": "production"
+      },
+      "kv_namespaces": [
+        {
+          "binding": "MENU_CACHE",
+          "id": "5c65bbdfc01b4ceaae9da59b6aac4c9a"
+        }
+      ],
+      "ratelimits": [
+        {
+          "name": "API_CLIENT_RATE_LIMITER",
+          "namespace_id": "728202611",
+          "simple": {
+            "limit": 60,
+            "period": 60
+          }
+        },
+        {
+          "name": "API_GLOBAL_RATE_LIMITER",
+          "namespace_id": "728202612",
+          "simple": {
+            "limit": 120,
+            "period": 60
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,205 @@
+{
+  "revision": "2026-07-27",
+  "cacheRevision": "2026-07-29.1",
+  "cacheFallbackRevisions": ["2026-07-28.1", "2026-07-27"],
+  "restaurants": [
+    {
+      "id": "snellmania",
+      "order": 1,
+      "name": {
+        "fi": "Snellmania",
+        "en": "Snellmania"
+      },
+      "websiteUrl": "https://www.compass-group.fi/ravintolat-ja-ruokalistat/foodco/kaupungit/kuopio/ita-suomen-yliopistosnellmania/",
+      "languages": ["fi", "en"],
+      "closures": [
+        {
+          "kind": "seasonal",
+          "startsOn": "2026-07-04",
+          "endsOn": "2026-07-19"
+        }
+      ],
+      "source": {
+        "type": "compass",
+        "costNumber": "0437"
+      }
+    },
+    {
+      "id": "cafe-snellari",
+      "order": 2,
+      "name": {
+        "fi": "Cafe Snellari",
+        "en": "Cafe Snellari"
+      },
+      "websiteUrl": "https://www.compass-group.fi/ravintolat-ja-ruokalistat/foodco/kaupungit/kuopio/cafe-snellari/",
+      "languages": ["fi", "en"],
+      "closures": [
+        {
+          "kind": "seasonal",
+          "startsOn": "2026-05-08",
+          "endsOn": "2026-08-30"
+        }
+      ],
+      "source": {
+        "type": "compassRss",
+        "costNumber": "4370"
+      }
+    },
+    {
+      "id": "canthia",
+      "order": 3,
+      "name": {
+        "fi": "Canthia",
+        "en": "Canthia"
+      },
+      "websiteUrl": null,
+      "languages": ["fi", "en"],
+      "closures": [
+        {
+          "kind": "seasonal",
+          "startsOn": "2026-06-18",
+          "endsOn": "2026-08-09"
+        }
+      ],
+      "source": {
+        "type": "compass",
+        "costNumber": "0436"
+      }
+    },
+    {
+      "id": "tietoteknia",
+      "order": 4,
+      "name": {
+        "fi": "Tietoteknia",
+        "en": "Tietoteknia"
+      },
+      "websiteUrl": null,
+      "languages": ["fi", "en"],
+      "closures": [],
+      "source": {
+        "type": "compass",
+        "costNumber": "0439"
+      }
+    },
+    {
+      "id": "hyva-huomen-bioteknia",
+      "order": 5,
+      "name": {
+        "fi": "Hyvä Huomen Bioteknia",
+        "en": "Hyvä Huomen Bioteknia"
+      },
+      "websiteUrl": "https://hyvahuomen.fi/bioteknia/",
+      "languages": ["fi", "en"],
+      "closures": [
+        {
+          "kind": "seasonal",
+          "startsOn": "2026-07-06",
+          "endsOn": "2026-08-02"
+        }
+      ],
+      "source": {
+        "type": "huomen",
+        "url": "https://europe-west1-luncher-7cf76.cloudfunctions.net/api/v1/week/a96b7ccf-2c3d-432a-8504-971dbb6d55d3/active"
+      }
+    },
+    {
+      "id": "antell-round",
+      "order": 6,
+      "name": {
+        "fi": "Antell Round",
+        "en": "Antell Round"
+      },
+      "websiteUrl": "https://antell.fi/lounas/kuopio/round/",
+      "languages": ["fi", "en"],
+      "closures": [
+        {
+          "kind": "seasonal",
+          "startsOn": "2026-06-29",
+          "endsOn": "2026-08-02"
+        }
+      ],
+      "source": {
+        "type": "antell",
+        "slug": "round"
+      }
+    },
+    {
+      "id": "antell-highway",
+      "order": 7,
+      "name": {
+        "fi": "Antell Highway",
+        "en": "Antell Highway"
+      },
+      "websiteUrl": "https://antell.fi/lounas/kuopio/highway/",
+      "languages": ["fi"],
+      "closures": [
+        {
+          "kind": "seasonal",
+          "startsOn": "2026-06-22",
+          "endsOn": "2026-08-02"
+        }
+      ],
+      "source": {
+        "type": "antell",
+        "slug": "highway"
+      }
+    },
+    {
+      "id": "mediteknia",
+      "order": 8,
+      "name": {
+        "fi": "Mediteknia",
+        "en": "Mediteknia"
+      },
+      "websiteUrl": "https://www.compass-group.fi/ravintolat-ja-ruokalistat/foodco/kaupungit/kuopio/ita-suomen-yliopisto-mediteknia/",
+      "languages": ["fi", "en"],
+      "closures": [
+        {
+          "kind": "seasonal",
+          "startsOn": "2026-05-04",
+          "endsOn": "2026-08-16"
+        }
+      ],
+      "source": {
+        "type": "compass",
+        "costNumber": "043601"
+      }
+    },
+    {
+      "id": "pranzeria-sorrento",
+      "order": 9,
+      "name": {
+        "fi": "Pranzeria Sorrento",
+        "en": "Pranzeria Sorrento"
+      },
+      "websiteUrl": "https://www.sorrento.fi/pranzeria/",
+      "languages": ["fi"],
+      "closures": [],
+      "source": {
+        "type": "pranzeria",
+        "url": "https://www.sorrento.fi/pranzeria/"
+      }
+    },
+    {
+      "id": "caari",
+      "order": 10,
+      "name": {
+        "fi": "Caari",
+        "en": "Caari"
+      },
+      "websiteUrl": "https://www.compass-group.fi/ravintolat-ja-ruokalistat/foodco/kaupungit/kuopio/caari/",
+      "languages": ["fi"],
+      "closures": [
+        {
+          "kind": "seasonal",
+          "startsOn": "2026-06-09",
+          "endsOn": "2026-08-09"
+        }
+      ],
+      "source": {
+        "type": "compass",
+        "costNumber": "3488"
+      }
+    }
+  ]
+}

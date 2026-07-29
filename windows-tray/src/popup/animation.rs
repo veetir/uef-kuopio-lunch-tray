@@ -72,6 +72,31 @@ pub(super) fn pressed_header_button(hwnd: HWND) -> Option<HeaderButtonAction> {
     None
 }
 
+pub(super) fn update_hovered_header_button(hwnd: HWND, action: Option<HeaderButtonAction>) -> bool {
+    let store = POPUP_HEADER_HOVER.get_or_init(|| Mutex::new(None));
+    let mut guard = match store.lock() {
+        Ok(value) => value,
+        Err(_) => return false,
+    };
+    let next = action.map(|action| HeaderButtonHover { hwnd, action });
+    if guard.as_ref().map(|hover| (hover.hwnd, hover.action))
+        == next.as_ref().map(|hover| (hover.hwnd, hover.action))
+    {
+        return false;
+    }
+    *guard = next;
+    true
+}
+
+pub(super) fn hovered_header_button(hwnd: HWND) -> Option<HeaderButtonAction> {
+    let store = POPUP_HEADER_HOVER.get_or_init(|| Mutex::new(None));
+    let guard = store.lock().ok()?;
+    guard
+        .as_ref()
+        .filter(|hover| hover.hwnd == hwnd)
+        .map(|hover| hover.action)
+}
+
 pub(super) fn begin_open_animation(hwnd: HWND, state: &AppState) {
     if !popup_animations_enabled(&state.settings) {
         clear_animation_state(hwnd);
@@ -82,7 +107,7 @@ pub(super) fn begin_open_animation(hwnd: HWND, state: &AppState) {
         hwnd,
         POPUP_OPEN_ANIM_MS,
         PopupAnimationKind::Open {
-            lines: build_lines(state),
+            lines: Arc::new(build_lines(state)),
             title: header_title(state),
         },
     );
@@ -149,6 +174,7 @@ pub(super) fn current_animation_frame(hwnd: HWND) -> Option<PopupAnimationFrame>
             old_title,
             new_title,
             direction,
+            interrupted,
         } => Some(PopupAnimationFrame::Switch {
             old_lines: old_lines.clone(),
             new_lines: new_lines.clone(),
@@ -156,6 +182,7 @@ pub(super) fn current_animation_frame(hwnd: HWND) -> Option<PopupAnimationFrame>
             new_title: new_title.clone(),
             direction: *direction,
             progress,
+            interrupted: *interrupted,
         }),
     }
 }
@@ -176,7 +203,7 @@ pub(super) fn begin_close_animation(hwnd: HWND, state: &AppState) {
         hwnd,
         POPUP_CLOSE_ANIM_MS,
         PopupAnimationKind::Close {
-            lines: build_lines(state),
+            lines: Arc::new(build_lines(state)),
             title: header_title(state),
         },
     );
@@ -194,17 +221,33 @@ pub(super) fn begin_switch_animation(
         request_repaint(hwnd);
         return;
     }
+    let interrupted = switch_animation_active(hwnd);
     start_animation(
         hwnd,
-        POPUP_SWITCH_ANIM_MS,
+        if interrupted {
+            POPUP_INTERRUPTED_SWITCH_ANIM_MS
+        } else {
+            POPUP_SWITCH_ANIM_MS
+        },
         PopupAnimationKind::Switch {
-            old_lines: build_lines(old_state),
-            new_lines: build_lines(new_state),
+            old_lines: Arc::new(build_lines(old_state)),
+            new_lines: Arc::new(build_lines(new_state)),
             old_title: header_title(old_state),
             new_title: header_title(new_state),
             direction,
+            interrupted,
         },
     );
+}
+
+fn switch_animation_active(hwnd: HWND) -> bool {
+    let store = POPUP_ANIMATION.get_or_init(|| Mutex::new(None));
+    match store.lock() {
+        Ok(guard) => guard.as_ref().is_some_and(|anim| {
+            anim.hwnd == hwnd && matches!(anim.kind, PopupAnimationKind::Switch { .. })
+        }),
+        Err(_) => false,
+    }
 }
 
 pub(super) fn tick_animation(hwnd: HWND) {

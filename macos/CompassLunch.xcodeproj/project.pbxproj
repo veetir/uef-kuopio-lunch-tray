@@ -16,9 +16,9 @@
 		A00000000000000000000107 /* MenuPopoverView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000007 /* MenuPopoverView.swift */; };
 		A00000000000000000000108 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000008 /* SettingsView.swift */; };
 		A00000000000000000000109 /* CompassParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000009 /* CompassParserTests.swift */; };
-		A00000000000000000000110 /* ProviderParsers.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000012 /* ProviderParsers.swift */; };
-		A00000000000000000000111 /* RecipeDetails.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000013 /* RecipeDetails.swift */; };
 		A00000000000000000000112 /* Appearance.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000014 /* Appearance.swift */; };
+		A00000000000000000000113 /* UpdateChecker.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000015 /* UpdateChecker.swift */; };
+		A00000000000000000000114 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000016 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -43,9 +43,9 @@
 		A00000000000000000000009 /* CompassParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompassParserTests.swift; sourceTree = "<group>"; };
 		A00000000000000000000010 /* LunchTray.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LunchTray.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A00000000000000000000011 /* CompassLunchTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = CompassLunchTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		A00000000000000000000012 /* ProviderParsers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderParsers.swift; sourceTree = "<group>"; };
-		A00000000000000000000013 /* RecipeDetails.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecipeDetails.swift; sourceTree = "<group>"; };
 		A00000000000000000000014 /* Appearance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Appearance.swift; sourceTree = "<group>"; };
+		A00000000000000000000015 /* UpdateChecker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateChecker.swift; sourceTree = "<group>"; };
+		A00000000000000000000016 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -82,10 +82,10 @@
 				A00000000000000000000002 /* AppDelegate.swift */,
 				A00000000000000000000006 /* AppModel.swift */,
 				A00000000000000000000014 /* Appearance.swift */,
+				A00000000000000000000015 /* UpdateChecker.swift */,
+				A00000000000000000000016 /* Assets.xcassets */,
 				A00000000000000000000003 /* Models.swift */,
 				A00000000000000000000004 /* MenuService.swift */,
-				A00000000000000000000012 /* ProviderParsers.swift */,
-				A00000000000000000000013 /* RecipeDetails.swift */,
 				A00000000000000000000005 /* CacheStore.swift */,
 				A00000000000000000000007 /* MenuPopoverView.swift */,
 				A00000000000000000000008 /* SettingsView.swift */,
@@ -191,6 +191,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A00000000000000000000114 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -212,11 +213,10 @@
 				A00000000000000000000102 /* AppDelegate.swift in Sources */,
 				A00000000000000000000103 /* Models.swift in Sources */,
 				A00000000000000000000104 /* MenuService.swift in Sources */,
-				A00000000000000000000110 /* ProviderParsers.swift in Sources */,
-				A00000000000000000000111 /* RecipeDetails.swift in Sources */,
 				A00000000000000000000105 /* CacheStore.swift in Sources */,
 				A00000000000000000000106 /* AppModel.swift in Sources */,
 				A00000000000000000000112 /* Appearance.swift in Sources */,
+				A00000000000000000000113 /* UpdateChecker.swift in Sources */,
 				A00000000000000000000107 /* MenuPopoverView.swift in Sources */,
 				A00000000000000000000108 /* SettingsView.swift in Sources */,
 			);
@@ -351,8 +351,9 @@
 		A00000000000000000000803 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Lunch Tray";
@@ -362,7 +363,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.2.0;
+				MARKETING_VERSION = 0.3.0;
 				PRODUCT_BUNDLE_IDENTIFIER = io.github.veetir.CompassLunch;
 				PRODUCT_MODULE_NAME = CompassLunch;
 				PRODUCT_NAME = LunchTray;
@@ -374,8 +375,9 @@
 		A00000000000000000000804 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Lunch Tray";
@@ -385,7 +387,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.2.0;
+				MARKETING_VERSION = 0.3.0;
 				PRODUCT_BUNDLE_IDENTIFIER = io.github.veetir.CompassLunch;
 				PRODUCT_MODULE_NAME = CompassLunch;
 				PRODUCT_NAME = LunchTray;

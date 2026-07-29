@@ -13,31 +13,7 @@ impl App {
                 state.settings.language.clone(),
             )
         };
-        if is_hard_closed_today(restaurant) {
-            let result = api::closed_today_fetch_output(restaurant, &language);
-            self.apply_cached_result(&result);
-            log_line(&format!(
-                "closed-day synthetic state provider={} code={} language={}",
-                provider_key(restaurant.provider),
-                restaurant.code,
-                language
-            ));
-            return true;
-        }
-
-        let cached_date = if restaurant.provider == Provider::Antell {
-            cache::cache_mtime_ms(restaurant.provider, restaurant.code, &language)
-                .and_then(date_key_from_epoch_ms)
-        } else {
-            None
-        };
-
-        if self.load_memory_for(
-            restaurant.code,
-            &language,
-            restaurant.provider,
-            cached_date.as_deref(),
-        ) {
+        if self.load_memory_for(restaurant.code, &language) {
             log_line(&format!(
                 "memory cache hit provider={} code={} language={}",
                 provider_key(restaurant.provider),
@@ -47,27 +23,9 @@ impl App {
             return true;
         }
 
-        if matches!(restaurant.provider, Provider::Compass | Provider::Antell) {
-            if let Some(result) = read_enriched_menu_cache(restaurant, &language) {
-                self.apply_cached_result(&result);
-                self.store_memory_from_fetch_output(restaurant.code, &language, &result);
-                log_line(&format!(
-                    "enriched cache hit provider={} code={} language={}",
-                    provider_key(restaurant.provider),
-                    restaurant.code,
-                    language
-                ));
-                return true;
-            }
-        }
-
         if let Some(raw) = cache::read_cache(restaurant.provider, restaurant.code, &language) {
             match api::parse_cached_payload(&raw, restaurant.provider, restaurant, &language) {
                 Ok(result) => {
-                    let mut result = result;
-                    if let Some(date_key) = cached_date {
-                        result.payload_date = date_key;
-                    }
                     self.apply_cached_result(&result);
                     self.store_memory_from_fetch_output(restaurant.code, &language, &result);
                     log_line(&format!(
@@ -112,6 +70,7 @@ impl App {
         state.today_menu = result.today_menu.clone();
         state.provider = result.provider;
         state.payload_date = result.payload_date.clone();
+        state.api_stale = result.is_stale;
         update_stale_date(&mut state);
         if result.ok {
             state.status = FetchStatus::Ok;
@@ -137,32 +96,21 @@ impl App {
             provider: result.provider,
             raw_payload: result.raw_json.clone(),
             payload_date: result.payload_date.clone(),
+            api_stale: result.is_stale,
         };
         let mut cache = self.memory_menu_cache.lock().unwrap();
         cache.insert(key, entry);
     }
 
-    fn load_memory_for(
-        &self,
-        code: &str,
-        language: &str,
-        provider: Provider,
-        antell_payload_date: Option<&str>,
-    ) -> bool {
+    fn load_memory_for(&self, code: &str, language: &str) -> bool {
         let key = menu_cache_key(code, language);
         let mut entry = {
             let cache = self.memory_menu_cache.lock().unwrap();
             cache.get(&key).cloned()
         };
-        let Some(mut entry) = entry.take() else {
+        let Some(entry) = entry.take() else {
             return false;
         };
-
-        if provider == Provider::Antell {
-            if let Some(date_key) = antell_payload_date {
-                entry.payload_date = date_key.to_string();
-            }
-        }
 
         let mut state = self.state.lock().unwrap();
         state.raw_payload = entry.raw_payload;
@@ -171,6 +119,7 @@ impl App {
         state.today_menu = entry.today_menu;
         state.provider = entry.provider;
         state.payload_date = entry.payload_date;
+        state.api_stale = entry.api_stale;
         update_stale_date(&mut state);
         state.loading_started_epoch_ms = 0;
         state.stale_network_error = false;
@@ -186,18 +135,17 @@ impl App {
 
     /// Starts any startup refresh work that should happen after cached state is restored.
     pub fn maybe_refresh_on_startup(&self) {
-        self.maybe_refresh_current_with_reasons(
-            "startup",
-            RefreshNeedReasons {
-                missing: FetchReason::StartupMissingCache,
-                stale: FetchReason::StartupStaleDate,
-                interval: FetchReason::StartupRefreshInterval,
-            },
-            StartOptions {
-                mark_loading_when_empty: true,
-                bypass_cooldown: false,
-            },
-        );
+        let reason = {
+            let state = self.state.lock().unwrap();
+            if state.raw_payload.is_empty() {
+                FetchReason::StartupMissingCache
+            } else if state.payload_date != today_key() {
+                FetchReason::StartupStaleDate
+            } else {
+                FetchReason::StartupRefreshInterval
+            }
+        };
+        self.start_daily_snapshot_refresh(reason, true, true);
     }
 
     /// Triggers a timer-driven refresh for the currently selected restaurant.
@@ -239,17 +187,13 @@ impl App {
     /// Starts a retry fetch after a previous refresh failure.
     pub fn start_refresh_retry(&self) {
         let target = self.current_target();
-        if is_hard_closed_today(target.restaurant) {
-            log_probe_skip("retry_timer", &target, "hard_closed_today");
-            return;
-        }
-
-        let (refresh_minutes, payload_date, has_payload) = {
+        let (refresh_minutes, payload_date, has_payload, api_stale) = {
             let state = self.state.lock().unwrap();
             (
                 state.settings.refresh_minutes,
                 state.payload_date.clone(),
                 !state.raw_payload.is_empty(),
+                state.api_stale,
             )
         };
 
@@ -258,6 +202,7 @@ impl App {
             refresh_minutes,
             &payload_date,
             has_payload,
+            api_stale,
             now_epoch_ms(),
         ) else {
             log_probe_skip("retry_timer", &target, "cache_fresh");
@@ -313,11 +258,6 @@ impl App {
             (settings, target, is_current)
         };
 
-        if is_hard_closed_today(target.restaurant) {
-            log_fetch_probe("gate", &context, &target, "skip", "hard_closed_today");
-            return false;
-        }
-
         {
             let mut request_states = self.request_states.lock().unwrap();
             let entry = request_states.entry(target.key.clone()).or_default();
@@ -366,6 +306,13 @@ impl App {
 
         std::thread::spawn(move || {
             let result = api::fetch_today(&settings, &context);
+            if result.ok {
+                persist_result_cache_files(
+                    &requested_code,
+                    &result,
+                    &[requested_language.as_str()],
+                );
+            }
             let message = FetchMessage {
                 requested_code,
                 requested_language,
@@ -384,6 +331,138 @@ impl App {
                     windows::Win32::Foundation::LPARAM(ptr),
                 );
             }
+        });
+        true
+    }
+
+    fn start_daily_snapshot_refresh(
+        &self,
+        reason: FetchReason,
+        mark_loading_when_empty: bool,
+        bypass_recent_prefetch: bool,
+    ) -> bool {
+        let now = now_epoch_ms();
+        if !bypass_recent_prefetch {
+            let last_prefetch = self.last_prefetch_ms.lock().unwrap();
+            if now.saturating_sub(*last_prefetch) < 5 * 60_000 {
+                let target = self.current_target();
+                log_probe_skip("snapshot", &target, "recently_ran");
+                return false;
+            }
+        }
+
+        {
+            let mut in_flight = self.snapshot_fetch_in_flight.lock().unwrap();
+            if *in_flight {
+                let target = self.current_target();
+                log_probe_skip("snapshot", &target, "in_flight");
+                return false;
+            }
+            *in_flight = true;
+        }
+        *self.last_prefetch_ms.lock().unwrap() = now;
+
+        let (settings, current_code, enable_antell) = {
+            let mut state = self.state.lock().unwrap();
+            if mark_loading_when_empty && state.raw_payload.is_empty() {
+                state.status = FetchStatus::Loading;
+                state.loading_started_epoch_ms = now;
+            }
+            state.error_message.clear();
+            (
+                state.settings.clone(),
+                state.settings.restaurant_code.clone(),
+                state.settings.enable_antell_restaurants,
+            )
+        };
+        let allowed_codes: std::collections::HashSet<String> = available_restaurants(enable_antell)
+            .into_iter()
+            .map(|restaurant| restaurant.code.to_string())
+            .collect();
+        let current_target = fetch_target_for_code(&settings, &current_code, enable_antell);
+        let hwnd = self.hwnd_tray();
+        let in_flight = Arc::clone(&self.snapshot_fetch_in_flight);
+        let snapshot_context = FetchContext::new(FetchMode::Background, reason);
+
+        std::thread::spawn(move || {
+            match api::fetch_daily_snapshot(&settings, &snapshot_context) {
+                Ok(mut results) => {
+                    results.retain(|(code, _)| allowed_codes.contains(code));
+                    let current_result_present =
+                        results.iter().any(|(code, _)| code == &current_code);
+                    results.sort_by_key(|(code, _)| code != &current_code);
+                    for (code, result) in results {
+                        persist_result_cache_files(&code, &result, &[settings.language.as_str()]);
+                        let target = fetch_target_for_code(&settings, &code, enable_antell);
+                        let context = FetchContext::new(
+                            if code == current_code {
+                                FetchMode::Current
+                            } else {
+                                FetchMode::Background
+                            },
+                            reason,
+                        );
+                        post_fetch_message(
+                            hwnd,
+                            FetchMessage {
+                                requested_code: code,
+                                requested_language: settings.language.clone(),
+                                requested_effective_language: target.effective_language,
+                                request_key: target.key,
+                                context,
+                                result,
+                            },
+                        );
+                    }
+                    if !current_result_present {
+                        let error =
+                            "Lunch API snapshot omitted the selected restaurant".to_string();
+                        log_line(&format!(
+                            "snapshot result mode={} reason={} code={} language={} outcome=failure err={}",
+                            snapshot_context.mode.as_str(),
+                            snapshot_context.reason.as_str(),
+                            current_code,
+                            settings.language,
+                            error,
+                        ));
+                        post_fetch_message(
+                            hwnd,
+                            FetchMessage {
+                                requested_code: current_code,
+                                requested_language: settings.language.clone(),
+                                requested_effective_language: current_target.effective_language,
+                                request_key: current_target.key,
+                                context: FetchContext::new(FetchMode::Current, reason),
+                                result: api::failed_fetch_output(current_target.restaurant, error),
+                            },
+                        );
+                    }
+                }
+                Err(err) => {
+                    log_line(&format!(
+                        "snapshot result mode={} reason={} language={} outcome=failure err={}",
+                        snapshot_context.mode.as_str(),
+                        snapshot_context.reason.as_str(),
+                        settings.language,
+                        err,
+                    ));
+                    post_fetch_message(
+                        hwnd,
+                        FetchMessage {
+                            requested_code: current_code,
+                            requested_language: settings.language.clone(),
+                            requested_effective_language: current_target.effective_language,
+                            request_key: current_target.key,
+                            context: FetchContext::new(FetchMode::Current, reason),
+                            result: api::failed_fetch_output(
+                                current_target.restaurant,
+                                err.to_string(),
+                            ),
+                        },
+                    );
+                }
+            }
+            *in_flight.lock().unwrap() = false;
         });
         true
     }
@@ -417,17 +496,16 @@ impl App {
         } else {
             None
         };
-        let cooldown_ms = self.finish_request_state(&request_key, &context, result.ok, now);
+        let cooldown_ms =
+            self.finish_request_state(&request_key, &context, result.ok && !result.is_stale, now);
+        let stale_generation_cooldown_ms =
+            self.apply_stale_generation_cooldown(&request_key, &result, now);
         let stale_no_menu_cooldown_ms =
             self.apply_stale_no_menu_cooldown(&request_key, &result, now);
 
         if !is_current_request {
             if result.ok {
-                self.persist_result_for_languages(
-                    &requested_code,
-                    &result,
-                    &[requested_language.as_str()],
-                );
+                self.store_memory_from_fetch_output(&requested_code, &requested_language, &result);
                 log_line(&format!(
                     "fetch apply mode=background reason={} code={} ui_language={} fetch_language={} outcome=success request_key={}",
                     context.reason.as_str(),
@@ -473,11 +551,10 @@ impl App {
                 state.today_menu = result.today_menu.clone();
                 state.provider = result.provider;
                 state.payload_date = result.payload_date.clone();
+                state.api_stale = result.is_stale;
                 update_stale_date(&mut state);
                 state.settings.last_updated_epoch_ms = now;
-                if let Err(err) = save_settings(&state.settings) {
-                    log_line(&format!("save settings failed: {}", err));
-                }
+                let settings_to_save = state.settings.clone();
                 log_line(&format!(
                     "fetch apply mode=current reason={} code={} ui_language={} fetch_language={} outcome=success request_key={}",
                     context.reason.as_str(),
@@ -497,12 +574,26 @@ impl App {
                     ));
                 }
                 drop(state);
-                let mut languages = vec![requested_language.as_str()];
-                if let Some(alias_language) = alias_language.as_deref() {
-                    languages.push(alias_language);
+                if let Err(err) = save_settings(&settings_to_save) {
+                    log_line(&format!("save settings failed: {}", err));
                 }
-                self.persist_result_for_languages(&requested_code, &result, &languages);
-                FetchApplyOutcome::CurrentSuccess
+                self.store_memory_from_fetch_output(&requested_code, &requested_language, &result);
+                if let Some(alias_language) = alias_language.as_deref() {
+                    persist_result_cache_files(&requested_code, &result, &[alias_language]);
+                    self.store_memory_from_fetch_output(&requested_code, alias_language, &result);
+                }
+                if result.is_stale {
+                    log_line(&format!(
+                        "fetch cooldown mode=current reason={} code={} request_key={} cooldown_ms={} detail=stale_api_generation",
+                        context.reason.as_str(),
+                        requested_code,
+                        request_key,
+                        stale_generation_cooldown_ms,
+                    ));
+                    FetchApplyOutcome::CurrentStale
+                } else {
+                    FetchApplyOutcome::CurrentSuccess
+                }
             } else {
                 if !state.raw_payload.is_empty() {
                     state.status = FetchStatus::Stale;
@@ -550,6 +641,23 @@ impl App {
         STALE_NO_MENU_COOLDOWN_MS
     }
 
+    fn apply_stale_generation_cooldown(
+        &self,
+        request_key: &str,
+        result: &FetchOutput,
+        now: i64,
+    ) -> u32 {
+        if !result.ok || !result.is_stale {
+            return 0;
+        }
+        let mut request_states = self.request_states.lock().unwrap();
+        let Some(entry) = request_states.get_mut(request_key) else {
+            return 0;
+        };
+        entry.cooldown_until_epoch_ms = now.saturating_add(STALE_NO_MENU_COOLDOWN_MS as i64);
+        STALE_NO_MENU_COOLDOWN_MS
+    }
+
     fn finish_request_state(
         &self,
         request_key: &str,
@@ -572,27 +680,6 @@ impl App {
             let delay_ms = retry_delay_ms_for_failures(entry.consecutive_failures);
             entry.cooldown_until_epoch_ms = now.saturating_add(delay_ms as i64);
             delay_ms
-        }
-    }
-
-    fn persist_result_for_languages(&self, code: &str, result: &FetchOutput, languages: &[&str]) {
-        if result.raw_json.is_empty() {
-            return;
-        }
-
-        for language in languages {
-            if let Err(err) = cache::write_cache(result.provider, code, language, &result.raw_json)
-            {
-                log_line(&format!(
-                    "cache write failed code={} language={} err={}",
-                    code, language, err
-                ));
-                continue;
-            }
-            if matches!(result.provider, Provider::Compass | Provider::Antell) {
-                persist_enriched_menu_cache(code, language, result);
-            }
-            self.store_memory_from_fetch_output(code, language, result);
         }
     }
 
@@ -630,13 +717,6 @@ impl App {
     /// Refreshes if the cached payload date no longer matches the local day.
     pub fn check_stale_date_and_refresh(&self) {
         let target = self.current_target();
-        if is_hard_closed_today(target.restaurant) {
-            log_probe_skip("stale_check", &target, "hard_closed_today");
-            let mut state = self.state.lock().unwrap();
-            state.stale_date = false;
-            return;
-        }
-
         let should_refresh = {
             let mut state = self.state.lock().unwrap();
             let today_key = today_key();
@@ -680,78 +760,37 @@ impl App {
 
     /// Prefetches menus for non-selected restaurants to improve switching latency.
     pub fn prefetch_enabled_restaurants(&self) {
-        let now = now_epoch_ms();
-        {
-            let mut last_prefetch = self.last_prefetch_ms.lock().unwrap();
-            if now.saturating_sub(*last_prefetch) < 5 * 60_000 {
-                let target = self.current_target();
-                log_probe_skip("prefetch", &target, "recently_ran");
-                return;
-            }
-            *last_prefetch = now;
-        }
-
-        let (settings, current_code) = {
+        let settings = {
             let state = self.state.lock().unwrap();
-            (
-                state.settings.clone(),
-                state.settings.restaurant_code.clone(),
-            )
+            state.settings.clone()
         };
         let today = today_key();
         let restaurants = available_restaurants(settings.enable_antell_restaurants);
 
-        let mut queued = 0usize;
+        let mut missing = false;
+        let mut stale = false;
         for restaurant in restaurants {
-            if restaurant.code == current_code {
-                continue;
-            }
-            if is_hard_closed_today(restaurant) {
-                let target = FetchTarget {
-                    restaurant,
-                    ui_language: settings.language.clone(),
-                    effective_language: effective_fetch_language(restaurant, &settings.language),
-                    key: request_state_key(
-                        restaurant.code,
-                        &effective_fetch_language(restaurant, &settings.language),
-                    ),
-                };
-                log_probe_skip("prefetch", &target, "hard_closed_today");
-                continue;
-            }
-            let target = fetch_target_for_code(
-                &settings,
-                restaurant.code,
-                settings.enable_antell_restaurants,
-            );
-            let need = match cache::cache_mtime_ms(
-                restaurant.provider,
-                restaurant.code,
-                &settings.language,
-            ) {
-                None => Some(FetchReason::PrefetchMissingCache),
-                Some(ts) => match date_key_from_epoch_ms(ts) {
-                    Some(date) if date != today => Some(FetchReason::PrefetchStaleDate),
-                    Some(_) => None,
-                    None => Some(FetchReason::PrefetchStaleDate),
-                },
-            };
-            let Some(reason) = need else {
-                log_probe_skip("prefetch", &target, "cache_fresh");
-                continue;
-            };
-            if self.start_refresh_for_code(
-                restaurant.code,
-                FetchContext::new(FetchMode::Background, reason),
-                StartOptions {
-                    mark_loading_when_empty: false,
-                    bypass_cooldown: false,
-                },
-            ) {
-                queued = queued.saturating_add(1);
+            match cache::cache_mtime_ms(restaurant.provider, restaurant.code, &settings.language)
+                .and_then(date_key_from_epoch_ms)
+            {
+                None => missing = true,
+                Some(date) if date != today => stale = true,
+                Some(_) => {}
             }
         }
-        log_line(&format!("prefetch queued={}", queued));
+        let reason = if missing {
+            Some(FetchReason::PrefetchMissingCache)
+        } else if stale {
+            Some(FetchReason::PrefetchStaleDate)
+        } else {
+            None
+        };
+        let Some(reason) = reason else {
+            let target = self.current_target();
+            log_probe_skip("prefetch", &target, "cache_fresh");
+            return;
+        };
+        self.start_daily_snapshot_refresh(reason, false, false);
     }
 
     fn maybe_refresh_current_with_reasons(
@@ -761,34 +800,24 @@ impl App {
         options: StartOptions,
     ) -> bool {
         let target = self.current_target();
-        if is_hard_closed_today(target.restaurant) {
-            log_probe_skip(trigger, &target, "hard_closed_today");
-            return false;
-        }
-
-        let (refresh_minutes, payload_date, has_payload, missing_recipe_metadata) = {
+        let (refresh_minutes, payload_date, has_payload, api_stale) = {
             let state = self.state.lock().unwrap();
             (
                 state.settings.refresh_minutes,
                 state.payload_date.clone(),
                 !state.raw_payload.is_empty(),
-                provider_menu_lacks_recipe_metadata(
-                    target.restaurant.provider,
-                    state.today_menu.as_ref(),
-                ),
+                state.api_stale,
             )
         };
 
-        let mut need = refresh_need_for_target(
+        let need = refresh_need_for_target(
             &target,
             refresh_minutes,
             &payload_date,
             has_payload,
+            api_stale,
             now_epoch_ms(),
         );
-        if need.is_none() && missing_recipe_metadata {
-            need = Some(RefreshNeed::RefreshIntervalElapsed);
-        }
 
         let Some(need) = need else {
             log_probe_skip(trigger, &target, "cache_fresh");
@@ -802,7 +831,7 @@ impl App {
 
         let reason = match need {
             RefreshNeed::MissingCache => reasons.missing,
-            RefreshNeed::StaleDate => reasons.stale,
+            RefreshNeed::StaleDate | RefreshNeed::ApiStale => reasons.stale,
             RefreshNeed::RefreshIntervalElapsed => reasons.interval,
         };
         self.start_refresh_for_code(
@@ -813,144 +842,30 @@ impl App {
     }
 }
 
-fn provider_menu_lacks_recipe_metadata(provider: Provider, menu: Option<&TodayMenu>) -> bool {
-    if !matches!(provider, Provider::Compass | Provider::Antell) {
-        return false;
-    }
-    let Some(menu) = menu else {
-        return false;
-    };
-    let has_components = menu.menus.iter().any(|group| {
-        group
-            .components
-            .iter()
-            .any(|component| !crate::format::normalize_text(component).is_empty())
-    });
-    let has_recipe_ids = menu.menus.iter().any(|group| {
-        group
-            .component_recipe_ids
-            .iter()
-            .any(|recipe_id| recipe_id.is_some())
-    });
-    has_components && !has_recipe_ids
-}
-
-#[derive(Debug, serde::Deserialize, serde::Serialize)]
-struct EnrichedMenuCache {
-    version: u32,
-    raw_json: String,
-    restaurant_name: String,
-    restaurant_url: String,
-    payload_date: String,
-    today_menu: Option<TodayMenu>,
-}
-
-fn read_enriched_menu_cache(restaurant: Restaurant, language: &str) -> Option<FetchOutput> {
-    let raw = cache::read_enriched_cache(restaurant.provider, restaurant.code, language)?;
-    let parsed: EnrichedMenuCache = serde_json::from_str(&raw).ok()?;
-    if parsed.version != 1 {
-        return None;
-    }
-    if provider_menu_lacks_recipe_metadata(restaurant.provider, parsed.today_menu.as_ref()) {
-        return None;
-    }
-    Some(FetchOutput {
-        ok: true,
-        error_message: String::new(),
-        today_menu: parsed.today_menu,
-        restaurant_name: parsed.restaurant_name,
-        restaurant_url: parsed.restaurant_url,
-        provider: restaurant.provider,
-        raw_json: parsed.raw_json,
-        payload_date: parsed.payload_date,
-    })
-}
-
-fn persist_enriched_menu_cache(code: &str, language: &str, result: &FetchOutput) {
-    if provider_menu_lacks_recipe_metadata(result.provider, result.today_menu.as_ref()) {
+fn persist_result_cache_files(code: &str, result: &FetchOutput, languages: &[&str]) {
+    if result.raw_json.is_empty() {
         return;
     }
-    let payload = EnrichedMenuCache {
-        version: 1,
-        raw_json: result.raw_json.clone(),
-        restaurant_name: result.restaurant_name.clone(),
-        restaurant_url: result.restaurant_url.clone(),
-        payload_date: result.payload_date.clone(),
-        today_menu: result.today_menu.clone(),
-    };
-    let Ok(json) = serde_json::to_string(&payload) else {
-        return;
-    };
-    if let Err(err) = cache::write_enriched_cache(result.provider, code, language, &json) {
-        log_line(&format!(
-            "enriched cache write failed code={} language={} err={}",
-            code, language, err
-        ));
+
+    for language in languages {
+        if let Err(err) = cache::write_cache(result.provider, code, language, &result.raw_json) {
+            log_line(&format!(
+                "cache write failed code={} language={} err={}",
+                code, language, err
+            ));
+        }
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::model::{MenuGroup, TodayMenu};
-
-    #[test]
-    fn antell_menu_with_components_and_no_recipe_ids_lacks_recipe_metadata() {
-        let menu = TodayMenu {
-            date_iso: "2026-06-24".to_string(),
-            lunch_time: String::new(),
-            menus: vec![MenuGroup {
-                name: "Lunch".to_string(),
-                price: "12,50/3,10 €".to_string(),
-                components: vec!["Soup".to_string()],
-                component_recipe_ids: vec![None],
-                component_recipe_details: vec![None],
-            }],
-        };
-
-        assert!(provider_menu_lacks_recipe_metadata(
-            Provider::Antell,
-            Some(&menu)
-        ));
-    }
-
-    #[test]
-    fn antell_menu_with_recipe_ids_has_recipe_metadata() {
-        let menu = TodayMenu {
-            date_iso: "2026-06-24".to_string(),
-            lunch_time: String::new(),
-            menus: vec![MenuGroup {
-                name: "Lunch".to_string(),
-                price: "12,50/3,10 €".to_string(),
-                components: vec!["Soup".to_string()],
-                component_recipe_ids: vec![Some(1)],
-                component_recipe_details: vec![None],
-            }],
-        };
-
-        assert!(!provider_menu_lacks_recipe_metadata(
-            Provider::Antell,
-            Some(&menu)
-        ));
-    }
-
-    #[test]
-    fn providers_without_recipe_details_do_not_lack_recipe_metadata() {
-        let menu = TodayMenu {
-            date_iso: "2026-06-24".to_string(),
-            lunch_time: String::new(),
-            menus: vec![MenuGroup {
-                name: "Lunch".to_string(),
-                price: String::new(),
-                components: vec!["Soup".to_string()],
-                component_recipe_ids: Vec::new(),
-                component_recipe_details: Vec::new(),
-            }],
-        };
-
-        assert!(!provider_menu_lacks_recipe_metadata(
-            Provider::PranzeriaHtml,
-            Some(&menu)
-        ));
+fn post_fetch_message(hwnd: windows::Win32::Foundation::HWND, message: FetchMessage) {
+    let boxed = Box::new(message);
+    let ptr = Box::into_raw(boxed) as isize;
+    unsafe {
+        let _ = windows::Win32::UI::WindowsAndMessaging::PostMessageW(
+            hwnd,
+            crate::winmsg::WM_APP_FETCH_COMPLETE,
+            windows::Win32::Foundation::WPARAM(0),
+            windows::Win32::Foundation::LPARAM(ptr),
+        );
     }
 }

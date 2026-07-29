@@ -120,6 +120,7 @@ fn cached_line_budget(
         Some(CachedLayoutBudget {
             max_wrapped_lines: entry.max_wrapped_lines,
             max_content_width_px: entry.max_content_width_px,
+            max_extra_height_px: entry.max_extra_height_px,
         })
     } else {
         None
@@ -138,6 +139,7 @@ fn update_line_budget_cache(
             signatures,
             max_wrapped_lines: budget.max_wrapped_lines,
             max_content_width_px: budget.max_content_width_px,
+            max_extra_height_px: budget.max_extra_height_px,
         });
     }
 }
@@ -153,6 +155,11 @@ pub(super) fn desired_size_cache_key(
 
     Some(PopupDesiredSizeKey {
         today_key: local_today_key(),
+        restaurant_code: state.settings.restaurant_code.clone(),
+        status: state.status,
+        error_message: state.error_message.clone(),
+        stale_network_error: state.stale_network_error,
+        stale_date: state.stale_date,
         expanded_recipe_id,
         enable_antell_restaurants: state.settings.enable_antell_restaurants,
         language: state.settings.language.clone(),
@@ -215,29 +222,30 @@ fn max_today_cached_layout_budget(
     let scale = popup_scale_for_dpi(settings, dpi_y);
     let mut max_wrapped_lines: Option<usize> = None;
     let mut max_content_width_px: Option<i32> = None;
+    let mut max_extra_height_px: Option<i32> = None;
 
     for restaurant in available_restaurants(settings.enable_antell_restaurants) {
-        let parsed = if is_hard_closed_today(restaurant) {
-            api::closed_today_fetch_output(restaurant, &settings.language)
-        } else {
-            let raw = match crate::cache::read_cache(
-                restaurant.provider,
-                restaurant.code,
-                &settings.language,
-            ) {
-                Some(payload) => payload,
-                None => continue,
-            };
-
-            match api::parse_cached_payload(
-                &raw,
-                restaurant.provider,
-                restaurant,
-                &settings.language,
-            ) {
-                Ok(value) => value,
-                Err(_) => continue,
+        let raw = match crate::cache::read_cache(
+            restaurant.provider,
+            restaurant.code,
+            &settings.language,
+        ) {
+            Some(payload) => {
+                crate::perf::count_layout_budget_cache_read();
+                payload
             }
+            None => continue,
+        };
+
+        crate::perf::count_layout_budget_cache_parse();
+        let parsed = match api::parse_cached_payload(
+            &raw,
+            restaurant.provider,
+            restaurant,
+            &settings.language,
+        ) {
+            Ok(value) => value,
+            Err(_) => continue,
         };
 
         if !parsed.ok || !is_today_valid_cache(&parsed, restaurant, settings, today_key) {
@@ -266,32 +274,25 @@ fn max_today_cached_layout_budget(
                 prev.max(metrics.required_content_width)
             }),
         );
+        max_extra_height_px = Some(max_extra_height_px.map_or(metrics.extra_height_px, |prev| {
+            prev.max(metrics.extra_height_px)
+        }));
     }
 
     CachedLayoutBudget {
         max_wrapped_lines,
         max_content_width_px,
+        max_extra_height_px,
     }
 }
 
 fn is_today_valid_cache(
     parsed: &api::FetchOutput,
-    restaurant: Restaurant,
-    settings: &Settings,
+    _restaurant: Restaurant,
+    _settings: &Settings,
     today_key: &str,
 ) -> bool {
-    if is_hard_closed_today(restaurant) {
-        return true;
-    }
-
-    match restaurant.provider {
-        Provider::Antell => {
-            crate::cache::cache_mtime_ms(restaurant.provider, restaurant.code, &settings.language)
-                .and_then(date_key_from_epoch_ms)
-                .is_some_and(|date| date == today_key)
-        }
-        _ => !parsed.payload_date.is_empty() && parsed.payload_date == today_key,
-    }
+    !parsed.payload_date.is_empty() && parsed.payload_date == today_key
 }
 
 fn popup_state_from_cached_result(
@@ -323,6 +324,7 @@ fn popup_state_from_cached_result(
         provider: restaurant.provider,
         payload_date: parsed.payload_date.clone(),
         stale_date: !parsed.payload_date.is_empty() && parsed.payload_date != today_key,
+        api_stale: parsed.is_stale,
     }
 }
 
@@ -337,33 +339,52 @@ fn local_today_key() -> String {
     )
 }
 
-fn date_key_from_epoch_ms(ms: i64) -> Option<String> {
-    if ms <= 0 {
-        return None;
-    }
-
-    let secs = ms / 1000;
-    let nanos = ((ms % 1000) * 1_000_000) as u32;
-    let mut dt = OffsetDateTime::from_unix_timestamp(secs).ok()?;
-    dt = dt.replace_nanosecond(nanos).ok()?;
-    let offset = UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC);
-    let local = dt.to_offset(offset);
-    let date = local.date();
-    Some(format!(
-        "{:04}-{:02}-{:02}",
-        date.year(),
-        date.month() as u8,
-        date.day()
-    ))
-}
-
 #[cfg(test)]
 mod tests {
-    use super::date_key_from_epoch_ms;
+    use super::desired_size_cache_key;
+    use crate::restaurant::Provider;
+    use crate::settings::Settings;
+    use crate::state::{AppState, FetchStatus};
 
     #[test]
-    fn date_key_rejects_non_positive_epoch() {
-        assert_eq!(date_key_from_epoch_ms(0), None);
-        assert_eq!(date_key_from_epoch_ms(-1), None);
+    fn desired_size_key_tracks_status_and_restaurant_line_inputs() {
+        let base = test_state();
+        let base_key = desired_size_cache_key(&base, 96, None).unwrap();
+
+        let mut different_restaurant = base.clone();
+        different_restaurant.settings.restaurant_code = "tietoteknia".to_string();
+        assert_ne!(
+            base_key,
+            desired_size_cache_key(&different_restaurant, 96, None).unwrap()
+        );
+
+        let mut stale = base.clone();
+        stale.status = FetchStatus::Stale;
+        stale.stale_network_error = true;
+        stale.stale_date = true;
+        assert_ne!(base_key, desired_size_cache_key(&stale, 96, None).unwrap());
+
+        let mut error = base.clone();
+        error.status = FetchStatus::Error;
+        error.error_message = "provider failed".to_string();
+        assert_ne!(base_key, desired_size_cache_key(&error, 96, None).unwrap());
+    }
+
+    fn test_state() -> AppState {
+        AppState {
+            settings: Settings::default(),
+            status: FetchStatus::Ok,
+            loading_started_epoch_ms: 0,
+            error_message: String::new(),
+            stale_network_error: false,
+            today_menu: None,
+            restaurant_name: "Tietoteknia".to_string(),
+            restaurant_url: String::new(),
+            raw_payload: String::new(),
+            provider: Provider::LunchApi,
+            payload_date: String::new(),
+            stale_date: false,
+            api_stale: false,
+        }
     }
 }

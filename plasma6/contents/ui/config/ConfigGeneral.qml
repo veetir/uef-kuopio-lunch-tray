@@ -5,8 +5,8 @@ import QtQuick.Layouts 1.15
 Item {
     id: page
 
-    property string cfg_restaurantCode: "0437"
-    property string cfg_enabledRestaurantCodes: "0437,snellari-rss,0436,043601,0439,antell-round,antell-highway,pranzeria-html,huomen-bioteknia"
+    property string cfg_restaurantCode: "snellmania"
+    property string cfg_enabledRestaurantCodes: "snellmania,cafe-snellari,canthia,tietoteknia,hyva-huomen-bioteknia,antell-round,antell-highway,mediteknia,pranzeria-sorrento,caari"
     property alias cfg_refreshMinutes: refreshSpin.value
     property int cfg_manualRefreshToken: 0
     property alias cfg_showPrices: showPricesCheck.checked
@@ -24,19 +24,30 @@ Item {
     property string cfg_language: "fi"
 
     property var allRestaurantOptions: [
-        { code: "0437", label: "Ita-Suomen yliopisto/Snellmania (0437)", shortLabel: "Snellmania" },
-        { code: "snellari-rss", label: "Cafe Snellari (RSS)", shortLabel: "Snellari" },
-        { code: "0436", label: "Ita-Suomen yliopisto/Canthia (0436)", shortLabel: "Canthia" },
-        { code: "043601", label: "Ita-Suomen yliopisto/Mediteknia (043601)", shortLabel: "Mediteknia" },
-        { code: "0439", label: "Tietoteknia (0439)", shortLabel: "Tietoteknia" },
+        { code: "snellmania", label: "Snellmania", shortLabel: "Snellmania" },
+        { code: "cafe-snellari", label: "Cafe Snellari", shortLabel: "Snellari" },
+        { code: "canthia", label: "Canthia", shortLabel: "Canthia" },
+        { code: "tietoteknia", label: "Tietoteknia", shortLabel: "Tietoteknia" },
+        { code: "hyva-huomen-bioteknia", label: "Hyvä Huomen Bioteknia", shortLabel: "Hyvä Huomen" },
         { code: "antell-round", label: "Antell Round", shortLabel: "Round" },
         { code: "antell-highway", label: "Antell Highway", shortLabel: "Highway" },
-        { code: "pranzeria-html", label: "Pranzeria Sorrento (HTML)", shortLabel: "Pranzeria" },
-        { code: "huomen-bioteknia", label: "Hyvä Huomen Bioteknia (JSON)", shortLabel: "Hyvä Huomen" }
+        { code: "mediteknia", label: "Mediteknia", shortLabel: "Mediteknia" },
+        { code: "pranzeria-sorrento", label: "Pranzeria Sorrento", shortLabel: "Pranzeria" },
+        { code: "caari", label: "Caari", shortLabel: "Caari" }
     ]
+    property var legacyRestaurantCodes: ({
+        "0437": "snellmania",
+        "snellari-rss": "cafe-snellari",
+        "0436": "canthia",
+        "0439": "tietoteknia",
+        "huomen-bioteknia": "hyva-huomen-bioteknia",
+        "043601": "mediteknia",
+        "pranzeria-html": "pranzeria-sorrento",
+        "3488": "caari"
+    })
 
     function defaultRestaurantCode() {
-        return allRestaurantOptions.length > 0 ? allRestaurantOptions[0].code : "0437"
+        return allRestaurantOptions.length > 0 ? allRestaurantOptions[0].code : "snellmania"
     }
 
     function canonicalizeCodes(codes) {
@@ -44,7 +55,8 @@ Item {
         var selectedList = Array.isArray(codes) ? codes : []
 
         for (var i = 0; i < selectedList.length; i++) {
-            var code = String(selectedList[i] || "").trim()
+            var rawCode = String(selectedList[i] || "").trim()
+            var code = legacyRestaurantCodes[rawCode] || rawCode
             if (code.length > 0) {
                 selectedMap[code] = true
             }
@@ -135,6 +147,7 @@ Item {
     }
 
     function syncRestaurantCombo() {
+        cfg_restaurantCode = legacyRestaurantCodes[cfg_restaurantCode] || cfg_restaurantCode
         ensureFavoriteInCycle()
 
         var model = availableRestaurantOptions()
@@ -292,7 +305,7 @@ Item {
 
         QQC2.CheckBox {
             id: hideExpensiveStudentMealsCheck
-            text: "Hide Compass meals with student price over 4 €"
+            text: "Hide meals with student price over 4 €"
         }
 
         RowLayout {

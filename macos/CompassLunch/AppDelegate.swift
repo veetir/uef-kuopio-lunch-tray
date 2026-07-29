@@ -12,6 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var localEventMonitor: Any?
     private var globalScrollMonitor: Any?
     private var globalClickMonitor: Any?
+    private var updateCheckTask: Task<Void, Never>?
     private var scrollAccumulator: CGFloat = 0
     private var lastRestaurantScrollAt = Date.distantPast
     private let panelSize = NSSize(width: 440, height: 560)
@@ -38,12 +39,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         installEventMonitors()
 
         Task {
-            await appModel.refreshIfNeeded()
+            await appModel.prepareMenusInBackground()
         }
 
         let timer = Timer(timeInterval: 15 * 60, repeats: true) { _ in
             Task { @MainActor in
-                await AppModel.shared.refreshIfNeeded()
+                await AppModel.shared.prepareMenusInBackground()
             }
         }
         RunLoop.main.add(timer, forMode: .common)
@@ -78,6 +79,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         refreshTimer?.invalidate()
+        updateCheckTask?.cancel()
         if let localEventMonitor {
             NSEvent.removeMonitor(localEventMonitor)
         }
@@ -93,11 +95,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.terminate(nil)
     }
 
+    @objc private func checkForUpdates() {
+        guard updateCheckTask == nil else { return }
+        let currentVersion = Bundle.main.object(
+            forInfoDictionaryKey: "CFBundleShortVersionString"
+        ) as? String ?? "0.0.0"
+
+        updateCheckTask = Task { [weak self] in
+            guard let self else { return }
+            defer { updateCheckTask = nil }
+            do {
+                let result = try await MacUpdateChecker().check(
+                    currentVersion: currentVersion
+                )
+                guard !Task.isCancelled else { return }
+                showUpdateResult(result)
+            } catch is CancellationError {
+                return
+            } catch {
+                guard !Task.isCancelled else { return }
+                showUpdateError(error)
+            }
+        }
+    }
+
     private func showContextMenu() {
         hidePanel()
         guard let statusItem, let button = statusItem.button else { return }
 
         let menu = NSMenu()
+        let updateTitle = appModel.language == .fi
+            ? "Tarkista päivitykset…"
+            : "Check for Updates…"
+        let updateItem = NSMenuItem(
+            title: updateTitle,
+            action: #selector(checkForUpdates),
+            keyEquivalent: ""
+        )
+        updateItem.target = self
+        updateItem.isEnabled = updateCheckTask == nil
+        menu.addItem(updateItem)
+        menu.addItem(.separator())
+
         let quitTitle = appModel.language == .fi ? "Lopeta" : "Quit"
         let quitItem = NSMenuItem(
             title: quitTitle,
@@ -112,6 +151,62 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.menu = nil
     }
 
+    private func showUpdateResult(_ result: MacUpdateCheckResult) {
+        let finnish = appModel.language == .fi
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+
+        switch result {
+        case let .latestPublished(currentVersion, _):
+            alert.messageText = finnish
+                ? "Lunch Tray on ajan tasalla"
+                : "Lunch Tray is up to date"
+            alert.informativeText = finnish
+                ? "Versio \(currentVersion) on uusin julkaistu versio."
+                : "Version \(currentVersion) is the latest published version."
+            alert.addButton(withTitle: "OK")
+        case let .updateAvailable(
+            currentVersion,
+            latestVersion,
+            releaseURL
+        ):
+            alert.messageText = finnish
+                ? "Päivitys saatavilla"
+                : "Update available"
+            alert.informativeText = finnish
+                ? "Versio \(latestVersion) on saatavilla. Käytössä on versio \(currentVersion)."
+                : "Version \(latestVersion) is available. You are using \(currentVersion)."
+            alert.addButton(withTitle: finnish ? "Avaa julkaisu" : "Open Release")
+            alert.addButton(withTitle: finnish ? "Peruuta" : "Cancel")
+            if alert.runModal() == .alertFirstButtonReturn {
+                NSWorkspace.shared.open(releaseURL)
+            }
+            return
+        case let .newerThanLatestPublished(currentVersion, latestVersion):
+            alert.messageText = finnish
+                ? "Käytössä on julkaistua uudempi versio"
+                : "You are using a newer version"
+            alert.informativeText = finnish
+                ? "Käytössä on versio \(currentVersion). Uusin julkaistu versio on \(latestVersion)."
+                : "You are using \(currentVersion). The latest published version is \(latestVersion)."
+            alert.addButton(withTitle: "OK")
+        }
+
+        alert.runModal()
+    }
+
+    private func showUpdateError(_ error: Error) {
+        let finnish = appModel.language == .fi
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = finnish
+            ? "Päivityksiä ei voitu tarkistaa"
+            : "Could not check for updates"
+        alert.informativeText = error.localizedDescription
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+
     private func installEventMonitors() {
         localEventMonitor = NSEvent.addLocalMonitorForEvents(
             matching: [.keyDown, .scrollWheel, .leftMouseDown, .rightMouseDown]
@@ -124,7 +219,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if self.handleRestaurantScroll(event) {
                     return nil
                 }
-                self.panel.resetMenuItemNavigation()
             }
             if event.type == .leftMouseDown || event.type == .rightMouseDown {
                 self.hidePanelForOutsideClick()
@@ -294,19 +388,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 private final class LunchPanel: NSPanel {
-    private var currentMenuItemID: String?
-    private var lastItemScrollOrigin: CGFloat?
-
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 
     var visibleMenuHeight: CGFloat {
         menuScrollView?.contentView.bounds.height ?? 0
-    }
-
-    func resetMenuItemNavigation() {
-        currentMenuItemID = nil
-        lastItemScrollOrigin = nil
     }
 
     func scrollMenuByItem(direction: Int) -> Bool {
@@ -326,69 +412,36 @@ private final class LunchPanel: NSPanel {
         }
 
         let clipView = scrollView.contentView
-        let currentOrigin = clipView.bounds.origin.y
-        let maximumY = maximumScrollOrigin(
+        let maximumOffset = maximumVisualOffset(
             documentView: documentView,
             clipView: clipView
         )
-        let currentIndex: Int
+        guard maximumOffset > 1 else { return true }
 
-        if let currentMenuItemID,
-           let lastItemScrollOrigin,
-           abs(currentOrigin - lastItemScrollOrigin) < 1,
-           let trackedIndex = anchors.firstIndex(where: {
-               $0.view.anchorID == currentMenuItemID
-           }) {
-            currentIndex = trackedIndex
-        } else {
-            currentIndex = inferredMenuItemIndex(
-                anchors: anchors,
-                documentView: documentView,
-                clipView: clipView
-            )
-        }
-
-        if direction < 0, currentIndex == 0 {
-            let minimumY = documentView.bounds.minY
-            guard abs(currentOrigin - minimumY) > 1 else { return true }
-            scroll(
-                clipView,
-                in: scrollView,
-                toY: minimumY
-            )
-            currentMenuItemID = anchors[0].view.anchorID
-            lastItemScrollOrigin = clipView.bounds.origin.y
-            return true
-        }
-
-        if direction > 0, currentIndex == anchors.count - 1 {
-            guard abs(currentOrigin - maximumY) > 1 else { return true }
-            scroll(
-                clipView,
-                in: scrollView,
-                toY: maximumY
-            )
-            currentMenuItemID = anchors[currentIndex].view.anchorID
-            lastItemScrollOrigin = clipView.bounds.origin.y
-            return true
-        }
-
-        let targetIndex = min(
-            max(currentIndex + direction, 0),
-            anchors.count - 1
+        let currentOffset = visualOffset(
+            documentView: documentView,
+            clipView: clipView
         )
-        let target = anchors[targetIndex]
-        let unclampedY = documentView.isFlipped
-            ? target.rect.minY
-            : target.rect.maxY - clipView.bounds.height
-        let targetY = min(
-            max(unclampedY, documentView.bounds.minY),
-            maximumY
+        let itemOffsets = anchors.map {
+            itemTopOffset(
+                rect: $0,
+                documentView: documentView
+            )
+        }
+        let targetOffset = MenuItemScrollNavigator.targetOffset(
+            currentOffset: currentOffset,
+            direction: direction,
+            itemTopOffsets: itemOffsets,
+            maximumOffset: maximumOffset,
+            tailSnapThreshold: min(96, clipView.bounds.height * 0.2)
         )
 
-        scroll(clipView, in: scrollView, toY: targetY)
-        currentMenuItemID = target.view.anchorID
-        lastItemScrollOrigin = clipView.bounds.origin.y
+        scroll(
+            clipView,
+            in: scrollView,
+            documentView: documentView,
+            toVisualOffset: targetOffset
+        )
         return true
     }
 
@@ -401,40 +454,37 @@ private final class LunchPanel: NSPanel {
 
         scrollView.layoutSubtreeIfNeeded()
         let clipView = scrollView.contentView
-        let minimumY = documentView.bounds.minY
-        let maximumY = maximumScrollOrigin(
+        let maximumOffset = maximumVisualOffset(
             documentView: documentView,
             clipView: clipView
         )
-        guard maximumY - minimumY > 1 else { return true }
+        guard maximumOffset > 1 else { return true }
 
-        let coordinateDelta = documentView.isFlipped ? visualDelta : -visualDelta
-        let targetY = min(
-            max(clipView.bounds.origin.y + coordinateDelta, minimumY),
-            maximumY
+        let currentOffset = visualOffset(
+            documentView: documentView,
+            clipView: clipView
         )
-        scroll(clipView, in: scrollView, toY: targetY)
+        let targetOffset = min(
+            max(currentOffset + visualDelta, 0),
+            maximumOffset
+        )
+        scroll(
+            clipView,
+            in: scrollView,
+            documentView: documentView,
+            toVisualOffset: targetOffset
+        )
         return true
     }
 
-    private typealias MenuItemAnchor = (
-        view: MenuItemScrollAnchorView,
-        rect: NSRect
-    )
-
-    private func menuItemAnchors(in documentView: NSView) -> [MenuItemAnchor] {
+    private func menuItemAnchors(in documentView: NSView) -> [NSRect] {
         descendantMenuItemAnchors(in: documentView)
             .map { view in
-                (
-                    view: view,
-                    rect: view.convert(view.bounds, to: documentView)
-                )
+                view.convert(view.bounds, to: documentView)
             }
-            .sorted { lhs, rhs in
-                if documentView.isFlipped {
-                    return lhs.rect.minY < rhs.rect.minY
-                }
-                return lhs.rect.maxY > rhs.rect.maxY
+            .sorted {
+                itemTopOffset(rect: $0, documentView: documentView)
+                    < itemTopOffset(rect: $1, documentView: documentView)
             }
     }
 
@@ -451,48 +501,42 @@ private final class LunchPanel: NSPanel {
         return anchors
     }
 
-    private func inferredMenuItemIndex(
-        anchors: [MenuItemAnchor],
-        documentView: NSView,
-        clipView: NSClipView
-    ) -> Int {
-        let visibleTop = documentView.isFlipped
-            ? clipView.bounds.minY
-            : clipView.bounds.maxY
-        let tolerance: CGFloat = 2
-        var index = 0
-
-        for (candidateIndex, anchor) in anchors.enumerated() {
-            let anchorTop = documentView.isFlipped
-                ? anchor.rect.minY
-                : anchor.rect.maxY
-            let isAtOrAboveVisibleTop = documentView.isFlipped
-                ? anchorTop <= visibleTop + tolerance
-                : anchorTop >= visibleTop - tolerance
-            if isAtOrAboveVisibleTop {
-                index = candidateIndex
-            } else {
-                break
-            }
-        }
-        return index
-    }
-
-    private func maximumScrollOrigin(
+    private func visualOffset(
         documentView: NSView,
         clipView: NSClipView
     ) -> CGFloat {
-        max(
-            documentView.bounds.minY,
-            documentView.bounds.maxY - clipView.bounds.height
-        )
+        if documentView.isFlipped {
+            return clipView.bounds.minY - documentView.bounds.minY
+        }
+        return documentView.bounds.maxY - clipView.bounds.maxY
+    }
+
+    private func itemTopOffset(
+        rect: NSRect,
+        documentView: NSView
+    ) -> CGFloat {
+        if documentView.isFlipped {
+            return rect.minY - documentView.bounds.minY
+        }
+        return documentView.bounds.maxY - rect.maxY
+    }
+
+    private func maximumVisualOffset(
+        documentView: NSView,
+        clipView: NSClipView
+    ) -> CGFloat {
+        max(0, documentView.bounds.height - clipView.bounds.height)
     }
 
     private func scroll(
         _ clipView: NSClipView,
         in scrollView: NSScrollView,
-        toY targetY: CGFloat
+        documentView: NSView,
+        toVisualOffset targetOffset: CGFloat
     ) {
+        let targetY = documentView.isFlipped
+            ? documentView.bounds.minY + targetOffset
+            : documentView.bounds.maxY - clipView.bounds.height - targetOffset
         clipView.scroll(
             to: NSPoint(x: clipView.bounds.origin.x, y: targetY)
         )
@@ -501,18 +545,73 @@ private final class LunchPanel: NSPanel {
 
     private var menuScrollView: NSScrollView? {
         guard let contentView else { return nil }
-        return firstScrollView(in: contentView)
+        return MenuScrollViewFinder.find(in: contentView)
     }
+}
 
-    private func firstScrollView(in view: NSView) -> NSScrollView? {
-        if let scrollView = view as? NSScrollView {
+enum MenuItemScrollNavigator {
+    static func targetOffset(
+        currentOffset: CGFloat,
+        direction: Int,
+        itemTopOffsets: [CGFloat],
+        maximumOffset: CGFloat,
+        tailSnapThreshold: CGFloat
+    ) -> CGFloat {
+        guard direction != 0, maximumOffset > 0 else {
+            return min(max(currentOffset, 0), maximumOffset)
+        }
+
+        var stops = [CGFloat(0)]
+        stops.append(contentsOf: itemTopOffsets.map {
+            min(max($0, 0), maximumOffset)
+        })
+        stops.append(maximumOffset)
+        stops.sort()
+
+        let tolerance: CGFloat = 1
+        stops = stops.reduce(into: []) { result, offset in
+            if let previous = result.last,
+               abs(previous - offset) <= tolerance {
+                return
+            }
+            result.append(offset)
+        }
+
+        if direction > 0,
+           stops.count >= 3,
+           let tailStart = stops.dropLast().last,
+           tailStart > tolerance,
+           maximumOffset - tailStart <= tailSnapThreshold {
+            stops.remove(at: stops.count - 2)
+        }
+
+        if direction > 0 {
+            return stops.first(where: { $0 > currentOffset + tolerance })
+                ?? maximumOffset
+        }
+        return stops.last(where: { $0 < currentOffset - tolerance }) ?? 0
+    }
+}
+
+enum MenuScrollViewFinder {
+    static func find(in view: NSView) -> NSScrollView? {
+        if let scrollView = view as? NSScrollView,
+           let documentView = scrollView.documentView,
+           containsMenuScrollMarker(in: documentView) {
             return scrollView
         }
         for subview in view.subviews {
-            if let scrollView = firstScrollView(in: subview) {
+            if let scrollView = find(in: subview) {
                 return scrollView
             }
         }
         return nil
+    }
+
+    private static func containsMenuScrollMarker(in view: NSView) -> Bool {
+        if view is MenuScrollViewMarkerView {
+            return true
+        }
+        return view.subviews.contains(where: containsMenuScrollMarker)
     }
 }

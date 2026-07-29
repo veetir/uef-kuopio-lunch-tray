@@ -30,7 +30,7 @@ enum LunchLayout: String, CaseIterable, Identifiable, Codable {
     }
 }
 
-struct LocalDate: Hashable, Comparable {
+struct LocalDate: Hashable, Comparable, Codable {
     let year: Int
     let month: Int
     let day: Int
@@ -49,192 +49,149 @@ struct LocalDate: Hashable, Comparable {
     }
 }
 
-struct SeasonalClosure: Hashable {
+struct SeasonalClosure: Hashable, Codable {
     let start: LocalDate
     let end: LocalDate
+    let reason: String?
+
+    init(start: LocalDate, end: LocalDate, reason: String? = nil) {
+        self.start = start
+        self.end = end
+        self.reason = reason
+    }
 
     func contains(_ date: LocalDate) -> Bool {
         start <= date && date <= end
     }
 
-    func periodText(language: AppLanguage) -> String {
+    func noticeText(language: AppLanguage, referenceYear: Int) -> String {
+        let includeYear = end.year != referenceYear
+        let date: String
+        let notice: String
+
         switch language {
         case .fi:
-            "\(start.day).\(start.month).–\(end.day).\(end.month).\(end.year)"
+            let months = [
+                "tammikuuta", "helmikuuta", "maaliskuuta", "huhtikuuta",
+                "toukokuuta", "kesäkuuta", "heinäkuuta", "elokuuta",
+                "syyskuuta", "lokakuuta", "marraskuuta", "joulukuuta"
+            ]
+            let month = months.indices.contains(end.month - 1)
+                ? months[end.month - 1]
+                : String(end.month)
+            date = "\(end.day). \(month)" + (includeYear ? " \(end.year)" : "")
+            notice = "Suljettu \(date) asti"
         case .en:
-            "\(englishDate(start)) – \(englishDate(end)), \(end.year)"
+            let months = [
+                "January", "February", "March", "April", "May", "June",
+                "July", "August", "September", "October", "November", "December"
+            ]
+            let month = months.indices.contains(end.month - 1)
+                ? months[end.month - 1]
+                : String(end.month)
+            date = "\(end.day) \(month)" + (includeYear ? " \(end.year)" : "")
+            notice = "Closed until \(date)"
         }
-    }
 
-    private func englishDate(_ date: LocalDate) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US")
-        let symbols = formatter.monthSymbols ?? []
-        let month = symbols.indices.contains(date.month - 1)
-            ? symbols[date.month - 1]
-            : String(date.month)
-        return "\(month) \(date.day)"
+        guard let reason = reason?.normalizedWhitespace, !reason.isEmpty else {
+            return notice
+        }
+        return "\(notice) · \(reason)"
     }
 }
 
-enum ClosureSchedule {
-    private static func period(
-        _ startMonth: Int,
-        _ startDay: Int,
-        _ endMonth: Int,
-        _ endDay: Int
-    ) -> SeasonalClosure {
-        SeasonalClosure(
-            start: LocalDate(year: 2026, month: startMonth, day: startDay),
-            end: LocalDate(year: 2026, month: endMonth, day: endDay)
-        )
-    }
-
-    private static let periodsByRestaurantCode: [String: [SeasonalClosure]] = [
-        "0437": [period(7, 4, 7, 19)],
-        "snellari-rss": [period(5, 8, 8, 30)],
-        "0436": [period(6, 18, 8, 9)],
-        "huomen-bioteknia": [period(7, 6, 8, 2)],
-        "antell-round": [period(6, 29, 8, 2)],
-        "antell-highway": [period(6, 22, 8, 2)],
-        "043601": [period(5, 4, 8, 16)],
-        "3488": [period(6, 9, 8, 9)]
-    ]
-
-    static func periods(for restaurantCode: String) -> [SeasonalClosure] {
-        periodsByRestaurantCode[restaurantCode] ?? []
-    }
-}
-
-struct Restaurant: Identifiable, Hashable {
-    enum Provider: Hashable {
-        case compass
-        case compassRSS(costNumber: String)
-        case huomen(apiURL: URL)
-        case antell(slug: String)
-        case pranzeria
-    }
-
+struct Restaurant: Identifiable, Hashable, Codable {
     let id: String
     let name: String
-    let provider: Provider
     let pageURL: URL?
-    let englishMenuAvailable: Bool
-    let closures: [SeasonalClosure]
+    let languages: [AppLanguage]
 
-    func closure(on date: LocalDate = .today()) -> SeasonalClosure? {
-        closures.first(where: { $0.contains(date) })
-    }
-
-    var supportsRecipeDetails: Bool {
-        switch provider {
-        case .compass, .antell:
-            true
-        case .compassRSS, .huomen, .pranzeria:
-            false
-        }
-    }
-
-    static let restaurants: [Restaurant] = [
-        Restaurant(
-            id: "0437",
-            name: "Snellmania",
-            provider: .compass,
-            pageURL: URL(string: "https://www.compass-group.fi/ravintolat-ja-ruokalistat/foodco/kaupungit/kuopio/ita-suomen-yliopistosnellmania/"),
-            englishMenuAvailable: true,
-            closures: ClosureSchedule.periods(for: "0437")
-        ),
-        Restaurant(
-            id: "snellari-rss",
-            name: "Cafe Snellari",
-            provider: .compassRSS(costNumber: "4370"),
-            pageURL: URL(string: "https://www.compass-group.fi/ravintolat-ja-ruokalistat/foodco/kaupungit/kuopio/cafe-snellari/"),
-            englishMenuAvailable: true,
-            closures: ClosureSchedule.periods(for: "snellari-rss")
-        ),
-        Restaurant(
-            id: "0436",
-            name: "Canthia",
-            provider: .compass,
-            pageURL: nil,
-            englishMenuAvailable: true,
-            closures: ClosureSchedule.periods(for: "0436")
-        ),
-        Restaurant(
-            id: "0439",
-            name: "Tietoteknia",
-            provider: .compass,
-            pageURL: nil,
-            englishMenuAvailable: true,
-            closures: ClosureSchedule.periods(for: "0439")
-        ),
-        Restaurant(
-            id: "huomen-bioteknia",
-            name: "Hyvä Huomen Bioteknia",
-            provider: .huomen(
-                apiURL: URL(string: "https://europe-west1-luncher-7cf76.cloudfunctions.net/api/v1/week/a96b7ccf-2c3d-432a-8504-971dbb6d55d3/active")!
-            ),
-            pageURL: URL(string: "https://hyvahuomen.fi/bioteknia/"),
-            englishMenuAvailable: true,
-            closures: ClosureSchedule.periods(for: "huomen-bioteknia")
-        ),
-        Restaurant(
-            id: "antell-round",
-            name: "Antell Round",
-            provider: .antell(slug: "round"),
-            pageURL: URL(string: "https://antell.fi/lounas/kuopio/round/"),
-            englishMenuAvailable: true,
-            closures: ClosureSchedule.periods(for: "antell-round")
-        ),
-        Restaurant(
-            id: "antell-highway",
-            name: "Antell Highway",
-            provider: .antell(slug: "highway"),
-            pageURL: URL(string: "https://antell.fi/lounas/kuopio/highway/"),
-            englishMenuAvailable: false,
-            closures: ClosureSchedule.periods(for: "antell-highway")
-        ),
-        Restaurant(
-            id: "043601",
-            name: "Mediteknia",
-            provider: .compass,
-            pageURL: URL(string: "https://www.compass-group.fi/ravintolat-ja-ruokalistat/foodco/kaupungit/kuopio/ita-suomen-yliopisto-mediteknia/"),
-            englishMenuAvailable: true,
-            closures: ClosureSchedule.periods(for: "043601")
-        ),
-        Restaurant(
-            id: "pranzeria-html",
-            name: "Pranzeria Sorrento",
-            provider: .pranzeria,
-            pageURL: URL(string: "https://www.sorrento.fi/pranzeria/"),
-            englishMenuAvailable: false,
-            closures: ClosureSchedule.periods(for: "pranzeria-html")
-        ),
-        Restaurant(
-            id: "3488",
-            name: "Caari",
-            provider: .compass,
-            pageURL: URL(string: "https://www.compass-group.fi/ravintolat-ja-ruokalistat/foodco/kaupungit/kuopio/caari/"),
-            englishMenuAvailable: false,
-            closures: ClosureSchedule.periods(for: "3488")
-        )
+    static let fallbackRestaurants: [Restaurant] = [
+        Restaurant(id: "snellmania", name: "Snellmania", pageURL: nil, languages: [.fi, .en]),
+        Restaurant(id: "cafe-snellari", name: "Cafe Snellari", pageURL: nil, languages: [.fi, .en]),
+        Restaurant(id: "canthia", name: "Canthia", pageURL: nil, languages: [.fi, .en]),
+        Restaurant(id: "tietoteknia", name: "Tietoteknia", pageURL: nil, languages: [.fi, .en]),
+        Restaurant(id: "hyva-huomen-bioteknia", name: "Hyvä Huomen Bioteknia", pageURL: nil, languages: [.fi, .en]),
+        Restaurant(id: "antell-round", name: "Antell Round", pageURL: nil, languages: [.fi, .en]),
+        Restaurant(id: "antell-highway", name: "Antell Highway", pageURL: nil, languages: [.fi]),
+        Restaurant(id: "mediteknia", name: "Mediteknia", pageURL: nil, languages: [.fi, .en]),
+        Restaurant(id: "pranzeria-sorrento", name: "Pranzeria Sorrento", pageURL: nil, languages: [.fi]),
+        Restaurant(id: "caari", name: "Caari", pageURL: nil, languages: [.fi])
     ]
 
-    static func restaurant(withID id: String) -> Restaurant {
-        restaurants.first(where: { $0.id == id }) ?? restaurants[0]
+    static let legacyIDs: [String: String] = [
+        "0437": "snellmania",
+        "snellari-rss": "cafe-snellari",
+        "0436": "canthia",
+        "0439": "tietoteknia",
+        "huomen-bioteknia": "hyva-huomen-bioteknia",
+        "043601": "mediteknia",
+        "pranzeria-html": "pranzeria-sorrento",
+        "3488": "caari"
+    ]
+
+    static func migratedID(_ id: String) -> String {
+        legacyIDs[id] ?? id
     }
 }
 
 struct LunchMenu: Codable, Equatable {
     let date: String
     let lunchTime: String
+    let offers: [LunchOffer]
     let groups: [LunchGroup]
+
+    init(
+        date: String,
+        lunchTime: String,
+        offers: [LunchOffer] = [],
+        groups: [LunchGroup]
+    ) {
+        self.date = date
+        self.lunchTime = lunchTime
+        self.offers = offers
+        self.groups = groups
+    }
+}
+
+enum PriceAudience: String, Codable, Hashable {
+    case student
+    case staff
+    case guest
+}
+
+struct LunchPrice: Codable, Equatable, Hashable {
+    let amount: String
+    let audiences: [PriceAudience]?
+
+    var displayText: String {
+        "\(amount.replacingOccurrences(of: ".", with: ",")) €"
+    }
+
+    func isVisible(for selection: PriceSelection) -> Bool {
+        guard let audiences else { return true }
+        return audiences.contains {
+            switch $0 {
+            case .student: selection.student
+            case .staff: selection.staff
+            case .guest: selection.guest
+            }
+        }
+    }
+}
+
+struct LunchOffer: Codable, Equatable, Identifiable {
+    let id: String
+    let label: String
+    let price: LunchPrice
+    let description: String?
 }
 
 struct LunchGroup: Codable, Equatable, Identifiable {
     let id: String
     let name: String
     let price: String
+    let prices: [LunchPrice]?
     let components: [String]
     let componentDetails: [RecipeDetail?]?
 
@@ -242,12 +199,14 @@ struct LunchGroup: Codable, Equatable, Identifiable {
         id: String,
         name: String,
         price: String,
+        prices: [LunchPrice]? = nil,
         components: [String],
         componentDetails: [RecipeDetail?]? = nil
     ) {
         self.id = id
         self.name = name
         self.price = price
+        self.prices = prices
         self.components = components
         self.componentDetails = componentDetails
     }
@@ -261,7 +220,10 @@ struct LunchGroup: Codable, Equatable, Identifiable {
     }
 
     var priceValues: [Double] {
-        PriceFormatter.values(in: price)
+        if let prices {
+            return prices.compactMap { Double($0.amount) }
+        }
+        return PriceFormatter.values(in: price)
     }
 
     func detail(at componentIndex: Int) -> RecipeDetail? {
@@ -635,13 +597,22 @@ enum PriceFormatter {
 }
 
 struct MenuSnapshot: Codable, Equatable {
+    enum ServiceStatus: String, Codable {
+        case serving
+        case closed
+        case noMenu
+        case unknown
+    }
+
     let restaurantCode: String
     let restaurantName: String
     let restaurantURL: URL?
     let language: AppLanguage
     let fetchedAt: Date
     let menu: LunchMenu?
-    let detailEnrichmentAttempted: Bool?
+    let closure: SeasonalClosure?
+    let serviceStatus: ServiceStatus?
+    let isStale: Bool?
 
     init(
         restaurantCode: String,
@@ -650,7 +621,9 @@ struct MenuSnapshot: Codable, Equatable {
         language: AppLanguage,
         fetchedAt: Date,
         menu: LunchMenu?,
-        detailEnrichmentAttempted: Bool? = nil
+        closure: SeasonalClosure? = nil,
+        serviceStatus: ServiceStatus? = nil,
+        isStale: Bool = false
     ) {
         self.restaurantCode = restaurantCode
         self.restaurantName = restaurantName
@@ -658,19 +631,23 @@ struct MenuSnapshot: Codable, Equatable {
         self.language = language
         self.fetchedAt = fetchedAt
         self.menu = menu
-        self.detailEnrichmentAttempted = detailEnrichmentAttempted
+        self.closure = closure
+        self.serviceStatus = serviceStatus
+        self.isStale = isStale
     }
 
-    func markingDetailEnrichmentAttempted() -> MenuSnapshot {
-        MenuSnapshot(
-            restaurantCode: restaurantCode,
-            restaurantName: restaurantName,
-            restaurantURL: restaurantURL,
-            language: language,
-            fetchedAt: fetchedAt,
-            menu: menu,
-            detailEnrichmentAttempted: true
-        )
+    var effectiveServiceStatus: ServiceStatus {
+        if let serviceStatus {
+            return serviceStatus
+        }
+        if closure != nil {
+            return .closed
+        }
+        if let menu,
+           !menu.groups.isEmpty || !menu.offers.isEmpty {
+            return .serving
+        }
+        return .noMenu
     }
 }
 

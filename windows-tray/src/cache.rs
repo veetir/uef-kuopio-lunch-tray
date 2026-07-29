@@ -1,11 +1,11 @@
-//! Disk cache helpers for provider payloads.
+//! Disk cache helpers for lunch API responses.
 
 use crate::restaurant::{provider_key, Provider};
 use anyhow::Context;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Returns the cache directory used for fetched provider payloads.
+/// Returns the cache directory used for fetched API responses.
 pub fn cache_dir() -> PathBuf {
     let base = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| ".".to_string());
     Path::new(&base).join("compass-lunch").join("cache")
@@ -18,11 +18,8 @@ pub fn cache_path(provider: Provider, code: &str, language: &str) -> PathBuf {
 
 fn cache_filename(provider: Provider, code: &str, language: &str) -> String {
     let ext = match provider {
+        Provider::LunchApi => "json",
         Provider::Compass => "json",
-        Provider::CompassRss => "xml",
-        Provider::Antell => "html",
-        Provider::HuomenJson => "json",
-        Provider::PranzeriaHtml => "html",
     };
     format!(
         "{}__{}__{}.{}",
@@ -35,11 +32,8 @@ fn cache_filename(provider: Provider, code: &str, language: &str) -> String {
 
 fn legacy_cache_path(provider: Provider, code: &str, language: &str) -> PathBuf {
     let ext = match provider {
+        Provider::LunchApi => "json",
         Provider::Compass => "json",
-        Provider::CompassRss => "xml",
-        Provider::Antell => "html",
-        Provider::HuomenJson => "json",
-        Provider::PranzeriaHtml => "html",
     };
     let filename = format!("{}|{}|{}.{}", provider_key(provider), code, language, ext);
     cache_dir().join(filename)
@@ -70,11 +64,6 @@ pub fn read_cache(provider: Provider, code: &str, language: &str) -> Option<Stri
     }
 }
 
-/// Reads a sidecar cache payload produced by provider-specific enrichment.
-pub fn read_enriched_cache(provider: Provider, code: &str, language: &str) -> Option<String> {
-    fs::read_to_string(enriched_cache_path(provider, code, language)).ok()
-}
-
 /// Returns the cache modification time in epoch milliseconds, if available.
 pub fn cache_mtime_ms(provider: Provider, code: &str, language: &str) -> Option<i64> {
     let path = cache_path(provider, code, language);
@@ -86,7 +75,7 @@ pub fn cache_mtime_ms(provider: Provider, code: &str, language: &str) -> Option<
     Some(duration.as_millis() as i64)
 }
 
-/// Writes a provider payload to the normalized cache location.
+/// Writes an API response to the cache.
 pub fn write_cache(
     provider: Provider,
     code: &str,
@@ -98,28 +87,4 @@ pub fn write_cache(
     let path = cache_path(provider, code, language);
     fs::write(&path, payload).with_context(|| format!("write cache file {}", path.display()))?;
     Ok(())
-}
-
-/// Writes a sidecar cache payload produced by provider-specific enrichment.
-pub fn write_enriched_cache(
-    provider: Provider,
-    code: &str,
-    language: &str,
-    payload: &str,
-) -> anyhow::Result<()> {
-    let dir = cache_dir();
-    fs::create_dir_all(&dir).context("create cache dir")?;
-    let path = enriched_cache_path(provider, code, language);
-    fs::write(&path, payload)
-        .with_context(|| format!("write enriched cache file {}", path.display()))?;
-    Ok(())
-}
-
-fn enriched_cache_path(provider: Provider, code: &str, language: &str) -> PathBuf {
-    cache_dir().join(format!(
-        "{}__{}__{}__enriched.json",
-        sanitize_key_segment(provider_key(provider)),
-        sanitize_key_segment(code),
-        sanitize_key_segment(language),
-    ))
 }

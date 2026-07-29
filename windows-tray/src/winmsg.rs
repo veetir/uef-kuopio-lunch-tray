@@ -10,10 +10,13 @@ use crate::restaurant::available_restaurants;
 use crate::settings::{HighlightTheme, LunchItemDisplayMode};
 use crate::tray;
 use crate::util::to_wstring;
+use std::mem::size_of;
 use std::sync::{Mutex, OnceLock};
 use time::{OffsetDateTime, Time};
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::UI::Controls::WM_MOUSELEAVE;
+use windows::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT};
 use windows::Win32::UI::WindowsAndMessaging::{
     DefWindowProcW, DestroyWindow, GetCursorPos, GetWindowLongPtrW, GetWindowRect, KillTimer,
     LoadCursorW, MessageBoxW, PostQuitMessage, RegisterClassExW, SetCursor, SetForegroundWindow,
@@ -226,6 +229,16 @@ pub unsafe extern "system" fn tray_wndproc(
                             popup::hide_popup(app.hwnd_popup());
                         }
                     }
+                    FetchApplyOutcome::CurrentStale => {
+                        popup::invalidate_layout_budget_cache();
+                        let delay = app.current_retry_delay_ms();
+                        schedule_retry_timer(hwnd, delay);
+                        app.prefetch_enabled_restaurants();
+                        let state = app.snapshot();
+                        if popup_is_visible(app.hwnd_popup()) {
+                            popup::resize_popup_keep_position(app.hwnd_popup(), &state);
+                        }
+                    }
                     FetchApplyOutcome::CurrentFailure => {
                         let delay = app.current_retry_delay_ms();
                         schedule_retry_timer(hwnd, delay);
@@ -234,9 +247,7 @@ pub unsafe extern "system" fn tray_wndproc(
                             popup::resize_popup_keep_position(app.hwnd_popup(), &state);
                         }
                     }
-                    FetchApplyOutcome::BackgroundSuccess => {
-                        popup::invalidate_layout_budget_cache();
-                    }
+                    FetchApplyOutcome::BackgroundSuccess => {}
                     FetchApplyOutcome::BackgroundFailure => {}
                 }
             }
@@ -334,10 +345,16 @@ pub unsafe extern "system" fn popup_wndproc(
             let app = &*(app);
             let x = (lparam.0 as u32 & 0xFFFF) as i16 as i32;
             let y = ((lparam.0 as u32 >> 16) & 0xFFFF) as i16 as i32;
-            let state = app.snapshot();
-            if popup::header_button_at(hwnd, &state.settings, x, y).is_none()
-                && popup::begin_text_selection(hwnd, x, y)
-            {
+            let settings = app.settings_snapshot();
+            let hovered_header = popup::header_button_at(hwnd, &settings, x, y);
+            if hovered_header.is_some() {
+                if popup::update_hovered_header_button(hwnd, hovered_header) {
+                    popup::request_repaint(hwnd);
+                }
+                apply_popup_cursor(hwnd, &settings, x, y);
+                return LRESULT(0);
+            }
+            if popup::begin_text_selection(hwnd, x, y) {
                 return LRESULT(0);
             }
             LRESULT(0)
@@ -357,14 +374,20 @@ pub unsafe extern "system" fn popup_wndproc(
                     popup::begin_close_animation(hwnd, &state);
                 }
                 0x25 | 0x41 => {
-                    cycle_popup_restaurant(hwnd, app, -1);
+                    if !keydown_is_repeat(lparam) {
+                        cycle_popup_restaurant(hwnd, app, -1);
+                    }
                 }
                 0x27 | 0x44 => {
-                    cycle_popup_restaurant(hwnd, app, 1);
+                    if !keydown_is_repeat(lparam) {
+                        cycle_popup_restaurant(hwnd, app, 1);
+                    }
                 }
                 _ => {
-                    if let Some(index) = popup_shortcut_index(key) {
-                        select_popup_restaurant_index(hwnd, app, index);
+                    if !keydown_is_repeat(lparam) {
+                        if let Some(index) = popup_shortcut_index(key) {
+                            select_popup_restaurant_index(hwnd, app, index);
+                        }
                     }
                 }
             }
@@ -373,12 +396,23 @@ pub unsafe extern "system" fn popup_wndproc(
         WM_MOUSEMOVE => {
             let x = (lparam.0 as u32 & 0xFFFF) as i16 as i32;
             let y = ((lparam.0 as u32 >> 16) & 0xFFFF) as i16 as i32;
+            track_popup_mouse_leave(hwnd);
             popup::update_text_selection(hwnd, x, y);
             let app = app_from_hwnd(hwnd);
             if !app.is_null() {
                 let app = &*(app);
-                let state = app.snapshot();
-                apply_popup_cursor(hwnd, &state.settings, x, y);
+                let settings = app.settings_snapshot();
+                let hovered_header = popup::header_button_at(hwnd, &settings, x, y);
+                if popup::update_hovered_header_button(hwnd, hovered_header) {
+                    popup::request_repaint(hwnd);
+                }
+                apply_popup_cursor(hwnd, &settings, x, y);
+            }
+            LRESULT(0)
+        }
+        WM_MOUSELEAVE => {
+            if popup::update_hovered_header_button(hwnd, None) {
+                popup::request_repaint(hwnd);
             }
             LRESULT(0)
         }
@@ -397,14 +431,22 @@ pub unsafe extern "system" fn popup_wndproc(
                 }
                 return LRESULT(0);
             }
-            let state = app.snapshot();
-            if let Some(action) = popup::header_button_at(hwnd, &state.settings, x, y) {
+            let settings = app.settings_snapshot();
+            if let Some(action) = popup::header_button_at(hwnd, &settings, x, y) {
                 match action {
                     popup::HeaderButtonAction::Prev => {
                         cycle_popup_restaurant(hwnd, app, -1);
+                        let settings = app.settings_snapshot();
+                        let hovered_header = popup::header_button_at(hwnd, &settings, x, y);
+                        let _ = popup::update_hovered_header_button(hwnd, hovered_header);
+                        apply_popup_cursor(hwnd, &settings, x, y);
                     }
                     popup::HeaderButtonAction::Next => {
                         cycle_popup_restaurant(hwnd, app, 1);
+                        let settings = app.settings_snapshot();
+                        let hovered_header = popup::header_button_at(hwnd, &settings, x, y);
+                        let _ = popup::update_hovered_header_button(hwnd, hovered_header);
+                        apply_popup_cursor(hwnd, &settings, x, y);
                     }
                     popup::HeaderButtonAction::Close => {
                         app.persist_settings();
@@ -521,6 +563,10 @@ fn popup_shortcut_index(key: u32) -> Option<usize> {
     }
 }
 
+fn keydown_is_repeat(lparam: LPARAM) -> bool {
+    (lparam.0 as u64 & (1 << 30)) != 0
+}
+
 fn select_popup_restaurant_index(hwnd: HWND, app: &App, index: usize) {
     let old_state = app.snapshot();
     let restaurants = available_restaurants(old_state.settings.enable_antell_restaurants);
@@ -607,8 +653,8 @@ fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
         tray::CMD_TOGGLE_PRICE_GROUP_NAMES => {
             app.toggle_show_price_group_names();
         }
-        tray::CMD_LUNCH_LAYOUT_LEGACY => {
-            app.set_lunch_item_display_mode(LunchItemDisplayMode::Legacy);
+        tray::CMD_LUNCH_LAYOUT_CLASSIC => {
+            app.set_lunch_item_display_mode(LunchItemDisplayMode::Classic);
             popup::invalidate_layout_budget_cache();
         }
         tray::CMD_LUNCH_LAYOUT_STANDARD => {
@@ -971,6 +1017,18 @@ fn popup_close_requested_recently() -> bool {
 
 fn popup_is_visible(hwnd: HWND) -> bool {
     unsafe { windows::Win32::UI::WindowsAndMessaging::IsWindowVisible(hwnd).as_bool() }
+}
+
+fn track_popup_mouse_leave(hwnd: HWND) {
+    let mut event = TRACKMOUSEEVENT {
+        cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
+        dwFlags: TME_LEAVE,
+        hwndTrack: hwnd,
+        dwHoverTime: 0,
+    };
+    unsafe {
+        let _ = TrackMouseEvent(&mut event);
+    }
 }
 
 fn app_from_hwnd(hwnd: HWND) -> *mut App {

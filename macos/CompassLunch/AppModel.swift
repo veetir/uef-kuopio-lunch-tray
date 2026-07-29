@@ -29,6 +29,77 @@ final class SystemLoginItemService: LoginItemService {
     }
 }
 
+struct BackgroundPreloadAttempt: Codable, Equatable {
+    var count: Int
+    var lastAttempt: Date
+}
+
+enum MenuPreloadPolicy {
+    static let maximumAttempts = 3
+    static let retryInterval: TimeInterval = 60 * 60
+    static let cutoffHour = 15
+
+    static func permits(
+        restaurantID: String,
+        now: Date,
+        calendar: Calendar = helsinkiCalendar
+    ) -> Bool {
+        let components = calendar.dateComponents([.weekday, .hour], from: now)
+        guard (components.hour ?? cutoffHour) < cutoffHour else { return false }
+        switch components.weekday {
+        case 1:
+            return false
+        case 7:
+            return restaurantID == "snellmania"
+        default:
+            return true
+        }
+    }
+
+    static func shouldAttempt(
+        snapshot: MenuSnapshot?,
+        attempt: BackgroundPreloadAttempt?,
+        now: Date,
+        calendar: Calendar = helsinkiCalendar
+    ) -> Bool {
+        if let snapshot,
+           calendar.isDate(snapshot.fetchedAt, inSameDayAs: now),
+           snapshot.isStale != true {
+            switch snapshot.effectiveServiceStatus {
+            case .serving, .closed:
+                return false
+            case .noMenu, .unknown:
+                break
+            }
+        }
+        guard (attempt?.count ?? 0) < maximumAttempts else { return false }
+        let currentSnapshotDate = snapshot.flatMap {
+            calendar.isDate($0.fetchedAt, inSameDayAs: now)
+                ? $0.fetchedAt
+                : nil
+        }
+        let mostRecent = [attempt?.lastAttempt, currentSnapshotDate]
+            .compactMap { $0 }
+            .max()
+        return mostRecent.map { now.timeIntervalSince($0) >= retryInterval } ?? true
+    }
+
+    static var helsinkiCalendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Europe/Helsinki")!
+        return calendar
+    }
+}
+
+enum ManualRefreshPolicy {
+    static let cooldown: TimeInterval = 15 * 60
+
+    static func permits(lastRefresh: Date?, now: Date) -> Bool {
+        guard let lastRefresh else { return true }
+        return now.timeIntervalSince(lastRefresh) >= cooldown
+    }
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     static let shared = AppModel()
@@ -47,7 +118,11 @@ final class AppModel: ObservableObject {
     @Published var language: AppLanguage {
         didSet {
             defaults.set(language.rawValue, forKey: Keys.language)
+            preloadGeneration &+= 1
             selectionDidChange()
+            Task {
+                await prepareMenusInBackground()
+            }
         }
     }
 
@@ -114,18 +189,30 @@ final class AppModel: ObservableObject {
         }
     }
 
-    let restaurants = Restaurant.restaurants
+    @Published private(set) var restaurants: [Restaurant]
 
     private let defaults: UserDefaults
     private let cache: CacheStore
     private let service: MenuService
     private let loginItemService: LoginItemService
+    private let nowProvider: () -> Date
     private var refreshTask: Task<Void, Never>?
     private var refreshGeneration = 0
-    private let refreshInterval: TimeInterval = 4 * 60 * 60
+    private var isPreloading = false
+    private var preloadGeneration = 0
+    private var preloadAttempts: [String: BackgroundPreloadAttempt] = [:]
+    private var lastManualRefresh: Date?
+    private var inFlightFetches: [String: InFlightFetch] = [:]
+    @Published private var cooldownRevision = 0
+
+    private struct InFlightFetch {
+        let id: UUID
+        let task: Task<MenuSnapshot, Error>
+    }
 
     var selectedRestaurant: Restaurant {
-        Restaurant.restaurant(withID: selectedRestaurantCode)
+        restaurants.first(where: { $0.id == selectedRestaurantCode })
+            ?? restaurants[0]
     }
 
     var selectedRestaurantIndex: Int {
@@ -133,24 +220,29 @@ final class AppModel: ObservableObject {
     }
 
     var activeClosure: SeasonalClosure? {
-        selectedRestaurant.closure()
+        snapshot?.closure
     }
 
     init(
         defaults: UserDefaults = .standard,
         cache: CacheStore = CacheStore(),
         service: MenuService = MenuService(),
-        loginItemService: LoginItemService = SystemLoginItemService()
+        loginItemService: LoginItemService = SystemLoginItemService(),
+        nowProvider: @escaping () -> Date = Date.init
     ) {
         self.defaults = defaults
         self.cache = cache
         self.service = service
         self.loginItemService = loginItemService
+        self.nowProvider = nowProvider
+        restaurants = Restaurant.fallbackRestaurants
 
-        let savedRestaurant = defaults.string(forKey: Keys.restaurant) ?? "0437"
-        selectedRestaurantCode = Restaurant.restaurants.contains(where: { $0.id == savedRestaurant })
-            ? savedRestaurant
-            : "0437"
+        let savedRestaurant = Restaurant.migratedID(
+            defaults.string(forKey: Keys.restaurant) ?? "snellmania"
+        )
+        selectedRestaurantCode = Restaurant.fallbackRestaurants.contains(
+            where: { $0.id == savedRestaurant }
+        ) ? savedRestaurant : "snellmania"
         language = AppLanguage(rawValue: defaults.string(forKey: Keys.language) ?? "") ?? .fi
         showPrices = defaults.object(forKey: Keys.showPrices) as? Bool ?? true
         showStudentPrice = defaults.object(forKey: Keys.showStudentPrice) as? Bool ?? true
@@ -168,6 +260,18 @@ final class AppModel: ObservableObject {
         highlightedMeals = defaults.stringArray(forKey: Keys.highlightedMeals) ?? []
         highlightedIngredients =
             defaults.stringArray(forKey: Keys.highlightedIngredients) ?? []
+        defaults.set(selectedRestaurantCode, forKey: Keys.restaurant)
+        preloadAttempts = Self.decode(
+            [String: BackgroundPreloadAttempt].self,
+            from: defaults.data(forKey: Keys.preloadAttempts)
+        ) ?? [:]
+        lastManualRefresh = Self.decode(
+            Date.self,
+            from: defaults.data(forKey: Keys.lastManualRefresh)
+        ) ?? Self.decode(
+            [String: Date].self,
+            from: defaults.data(forKey: Keys.legacyManualRefreshDates)
+        )?.values.max()
 
         if showPrices && !hasSelectedPriceGroup {
             showPrices = false
@@ -180,30 +284,73 @@ final class AppModel: ObservableObject {
             restaurantCode: selectedRestaurantCode,
             language: language
         )
+        scheduleManualRefreshCooldownUpdateIfNeeded()
     }
 
     func refreshIfNeeded() async {
-        await refreshIfNeeded(loadCachedSnapshot: true)
+        await refreshIfNeeded(
+            loadCachedSnapshot: true,
+            allowUnpublishedRetry: true
+        )
     }
 
-    private func refreshIfNeeded(loadCachedSnapshot: Bool) async {
+    private func refreshIfNeeded(
+        loadCachedSnapshot: Bool,
+        allowUnpublishedRetry: Bool
+    ) async {
         if let snapshot,
            snapshot.restaurantCode == selectedRestaurantCode,
            snapshot.language == language,
-           (!selectedRestaurant.supportsRecipeDetails
-               || snapshot.detailEnrichmentAttempted == true),
-           Calendar.current.isDate(snapshot.fetchedAt, inSameDayAs: Date()),
-           Date().timeIntervalSince(snapshot.fetchedAt) < refreshInterval {
-            return
+           Calendar.current.isDate(
+               snapshot.fetchedAt,
+               inSameDayAs: nowProvider()
+           ) {
+            if snapshot.isStale == true {
+                if !allowUnpublishedRetry ||
+                    nowProvider().timeIntervalSince(snapshot.fetchedAt) <
+                    noMenuForegroundRetryInterval {
+                    return
+                }
+            } else {
+                switch snapshot.effectiveServiceStatus {
+                case .serving, .closed:
+                    return
+                case .noMenu, .unknown:
+                    if !allowUnpublishedRetry ||
+                        nowProvider().timeIntervalSince(snapshot.fetchedAt) <
+                        noMenuForegroundRetryInterval {
+                        return
+                    }
+                }
+            }
         }
-        await performRefresh(loadCachedSnapshot: loadCachedSnapshot)
+        await performRefresh(
+            loadCachedSnapshot: loadCachedSnapshot,
+            cachePolicy: .useProtocolCachePolicy
+        )
+    }
+
+    var canRefreshSelectedRestaurant: Bool {
+        _ = cooldownRevision
+        return ManualRefreshPolicy.permits(
+            lastRefresh: lastManualRefresh,
+            now: nowProvider()
+        )
     }
 
     func refresh() async {
-        await performRefresh(loadCachedSnapshot: true)
+        guard canRefreshSelectedRestaurant else { return }
+        beginManualRefreshCooldown()
+        await performRefresh(
+            loadCachedSnapshot: true,
+            cachePolicy: .reloadRevalidatingCacheData
+        )
     }
 
-    private func performRefresh(loadCachedSnapshot: Bool) async {
+    private func performRefresh(
+        loadCachedSnapshot: Bool,
+        cachePolicy: URLRequest.CachePolicy
+    ) async {
         refreshTask?.cancel()
         refreshGeneration &+= 1
         let generation = refreshGeneration
@@ -222,7 +369,8 @@ final class AppModel: ObservableObject {
             snapshot = nil
         }
 
-        let task = Task { [service, cache] in
+        let task = Task { [weak self] in
+            guard let self else { return }
             defer {
                 if generation == refreshGeneration {
                     isLoading = false
@@ -230,12 +378,12 @@ final class AppModel: ObservableObject {
             }
 
             do {
-                let result = try await service.fetch(
+                let result = try await fetchSnapshot(
                     restaurant: restaurant,
-                    language: requestedLanguage
+                    language: requestedLanguage,
+                    cachePolicy: cachePolicy
                 )
                 guard !Task.isCancelled else { return }
-                cache.save(result)
                 guard restaurant.id == selectedRestaurantCode,
                       requestedLanguage == language
                 else { return }
@@ -251,6 +399,124 @@ final class AppModel: ObservableObject {
         }
         refreshTask = task
         await task.value
+    }
+
+    func prepareMenusInBackground() async {
+        guard !isPreloading else { return }
+        isPreloading = true
+        defer { isPreloading = false }
+
+        let generation = preloadGeneration
+        let requestedLanguage = language
+        let now = nowProvider()
+        prunePreloadAttempts(now: now)
+
+        let candidates = restaurants.filter { restaurant in
+            guard MenuPreloadPolicy.permits(
+                restaurantID: restaurant.id,
+                now: now
+            ) else {
+                return false
+            }
+            let cached = cache.load(
+                restaurantCode: restaurant.id,
+                language: requestedLanguage
+            )
+            let key = preloadKey(
+                restaurantID: restaurant.id,
+                language: requestedLanguage,
+                now: now
+            )
+            if preloadAttempts[key] == nil,
+               let cached,
+               cached.effectiveServiceStatus == .noMenu,
+               MenuPreloadPolicy.helsinkiCalendar.isDate(
+                   cached.fetchedAt,
+                   inSameDayAs: now
+               ) {
+                preloadAttempts[key] = BackgroundPreloadAttempt(
+                    count: 1,
+                    lastAttempt: cached.fetchedAt
+                )
+            }
+            return MenuPreloadPolicy.shouldAttempt(
+                snapshot: cached,
+                attempt: preloadAttempts[key],
+                now: now
+            )
+        }
+        guard !candidates.isEmpty else { return }
+
+        for restaurant in candidates {
+            let key = preloadKey(
+                restaurantID: restaurant.id,
+                language: requestedLanguage,
+                now: now
+            )
+            let previous = preloadAttempts[key]
+            preloadAttempts[key] = BackgroundPreloadAttempt(
+                count: (previous?.count ?? 0) + 1,
+                lastAttempt: now
+            )
+        }
+        persistPreloadAttempts()
+
+        guard let daily = try? await service.fetchDailySnapshot(
+            language: requestedLanguage,
+            now: now
+        ), generation == preloadGeneration,
+           requestedLanguage == language
+        else {
+            return
+        }
+
+        restaurants = daily.restaurants
+        for menu in daily.menus {
+            cache.save(menu)
+        }
+        if let selected = daily.menus.first(where: {
+            $0.restaurantCode == selectedRestaurantCode
+        }) {
+            snapshot = selected
+            errorMessage = nil
+        }
+    }
+
+    private func fetchSnapshot(
+        restaurant: Restaurant,
+        language: AppLanguage,
+        cachePolicy: URLRequest.CachePolicy
+    ) async throws -> MenuSnapshot {
+        let key = [
+            restaurant.id,
+            language.rawValue,
+            localDateKey(nowProvider()),
+            String(cachePolicy.rawValue)
+        ].joined(separator: "|")
+        if let inFlight = inFlightFetches[key] {
+            let result = try await inFlight.task.value
+            cache.save(result)
+            return result
+        }
+
+        let id = UUID()
+        let task = Task { [service] in
+            try await service.fetch(
+                restaurant: restaurant,
+                language: language,
+                now: nowProvider(),
+                cachePolicy: cachePolicy
+            )
+        }
+        inFlightFetches[key] = InFlightFetch(id: id, task: task)
+        defer {
+            if inFlightFetches[key]?.id == id {
+                inFlightFetches.removeValue(forKey: key)
+            }
+        }
+        let result = try await task.value
+        cache.save(result)
+        return result
     }
 
     func openRestaurantPage() {
@@ -326,18 +592,28 @@ final class AppModel: ObservableObject {
 
     func displayPrice(for group: LunchGroup) -> String {
         guard showPrices else { return "" }
-        guard selectedRestaurant.provider == .compass else {
-            return group.normalizedPrice
+        let selection = PriceSelection(
+            student: showStudentPrice,
+            staff: showStaffPrice,
+            guest: showGuestPrice
+        )
+        if let prices = group.prices {
+            var seen = Set<String>()
+            return prices
+                .filter { $0.isVisible(for: selection) }
+                .map(\.displayText)
+                .filter { seen.insert($0).inserted }
+                .joined(separator: " / ")
         }
         return PriceFormatter.displayPrice(
             group.price,
             restaurantCode: selectedRestaurantCode,
-            selection: PriceSelection(
-                student: showStudentPrice,
-                staff: showStaffPrice,
-                guest: showGuestPrice
-            )
+            selection: selection
         )
+    }
+
+    func displayPrice(for offer: LunchOffer) -> String {
+        showPrices ? offer.price.displayText : ""
     }
 
     func mealIsHighlighted(_ meal: String) -> Bool {
@@ -412,8 +688,12 @@ final class AppModel: ObservableObject {
             restaurantCode: selectedRestaurantCode,
             language: language
         )
+        scheduleManualRefreshCooldownUpdateIfNeeded()
         Task {
-            await refreshIfNeeded(loadCachedSnapshot: false)
+            await refreshIfNeeded(
+                loadCachedSnapshot: false,
+                allowUnpublishedRetry: true
+            )
         }
     }
 
@@ -455,6 +735,90 @@ final class AppModel: ObservableObject {
         }
     }
 
+    private var noMenuForegroundRetryInterval: TimeInterval {
+        30 * 60
+    }
+
+    private func beginManualRefreshCooldown() {
+        let now = nowProvider()
+        lastManualRefresh = now
+        defaults.set(
+            Self.encode(now),
+            forKey: Keys.lastManualRefresh
+        )
+        defaults.removeObject(forKey: Keys.legacyManualRefreshDates)
+        cooldownRevision &+= 1
+        scheduleManualRefreshCooldownUpdateIfNeeded(now: now)
+    }
+
+    private func scheduleManualRefreshCooldownUpdateIfNeeded(
+        now: Date? = nil
+    ) {
+        let now = now ?? nowProvider()
+        guard let lastRefresh = lastManualRefresh else {
+            return
+        }
+        let remaining = ManualRefreshPolicy.cooldown -
+            now.timeIntervalSince(lastRefresh)
+        guard remaining > 0 else { return }
+
+        Task { [weak self] in
+            try? await Task.sleep(
+                nanoseconds: UInt64(remaining * 1_000_000_000)
+            )
+            guard !Task.isCancelled else { return }
+            self?.cooldownRevision &+= 1
+        }
+    }
+
+    private func preloadKey(
+        restaurantID: String,
+        language: AppLanguage,
+        now: Date
+    ) -> String {
+        "\(localDateKey(now))|\(restaurantID)|\(language.rawValue)"
+    }
+
+    private func prunePreloadAttempts(now: Date) {
+        let prefix = "\(localDateKey(now))|"
+        let retained = preloadAttempts.filter { $0.key.hasPrefix(prefix) }
+        guard retained != preloadAttempts else { return }
+        preloadAttempts = retained
+        persistPreloadAttempts()
+    }
+
+    private func persistPreloadAttempts() {
+        defaults.set(
+            Self.encode(preloadAttempts),
+            forKey: Keys.preloadAttempts
+        )
+    }
+
+    private func localDateKey(_ date: Date) -> String {
+        let components = MenuPreloadPolicy.helsinkiCalendar.dateComponents(
+            [.year, .month, .day],
+            from: date
+        )
+        return String(
+            format: "%04d-%02d-%02d",
+            components.year ?? 0,
+            components.month ?? 0,
+            components.day ?? 0
+        )
+    }
+
+    private static func encode<Value: Encodable>(_ value: Value) -> Data? {
+        try? JSONEncoder().encode(value)
+    }
+
+    private static func decode<Value: Decodable>(
+        _ type: Value.Type,
+        from data: Data?
+    ) -> Value? {
+        guard let data else { return nil }
+        return try? JSONDecoder().decode(type, from: data)
+    }
+
     private enum Keys {
         static let restaurant = "restaurantCode"
         static let language = "language"
@@ -469,5 +833,8 @@ final class AppModel: ObservableObject {
         static let launchAtLoginConfigured = "launchAtLoginConfigured"
         static let highlightedMeals = "highlightedMeals"
         static let highlightedIngredients = "highlightedIngredients"
+        static let preloadAttempts = "backgroundPreloadAttempts"
+        static let lastManualRefresh = "lastManualRefresh"
+        static let legacyManualRefreshDates = "manualRefreshDates"
     }
 }

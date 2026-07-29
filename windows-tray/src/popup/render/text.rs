@@ -446,10 +446,13 @@ pub(super) fn draw_header_button(
     text_color: COLORREF,
     font: HFONT,
     pressed: bool,
+    hovered: bool,
 ) {
     let mut button_rect = *rect;
     let bg = if pressed {
         lerp_color(bg_color, rgb(0, 0, 0), 0.28)
+    } else if hovered {
+        lerp_color(bg_color, text_color, 0.14)
     } else {
         bg_color
     };

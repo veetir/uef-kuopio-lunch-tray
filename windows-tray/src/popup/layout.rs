@@ -10,6 +10,8 @@ mod cache;
 mod text;
 mod window;
 
+pub(super) const METADATA_BOTTOM_GAP_PX: i32 = 4;
+
 pub(super) use cache::invalidate_layout_budget_cache;
 pub(super) use text::{
     flatten_suffix_segments, text_metrics, text_width, text_width_with_font,
@@ -64,10 +66,12 @@ pub(super) fn popup_scale_for_dpi(settings: &Settings, dpi_y: i32) -> PopupScale
 pub(super) struct CachedLayoutBudget {
     max_wrapped_lines: Option<usize>,
     max_content_width_px: Option<i32>,
+    max_extra_height_px: Option<i32>,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct LineLayoutMetrics {
     required_content_width: i32,
     wrapped_line_count: usize,
+    extra_height_px: i32,
 }

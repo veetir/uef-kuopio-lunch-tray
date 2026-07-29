@@ -1,0 +1,105 @@
+{
+  "apiVersion": "v1",
+  "schemaVersion": 1,
+  "restaurant": {
+    "id": "tietoteknia",
+    "order": 4,
+    "name": {
+      "fi": "Tietoteknia",
+      "en": "Tietoteknia"
+    },
+    "websiteUrl": null,
+    "languages": ["fi", "en"],
+    "closures": []
+  },
+  "requestedLanguage": "fi",
+  "contentLanguage": "fi",
+  "date": "2026-07-24",
+  "service": {
+    "status": "serving",
+    "hours": "10:30–14:00"
+  },
+  "offers": [
+    {
+      "id": "lunch",
+      "label": "Lounas",
+      "price": {
+        "amount": "12.90",
+        "currency": "EUR"
+      }
+    }
+  ],
+  "groups": [
+    {
+      "id": "group-1",
+      "title": "Lounasbuffet",
+      "prices": [
+        {
+          "amount": "13.30",
+          "currency": "EUR",
+          "audiences": ["staff", "guest"]
+        },
+        {
+          "amount": "3.10",
+          "currency": "EUR",
+          "audiences": ["student"]
+        }
+      ],
+      "items": [
+        {
+          "id": "group-1-item-1",
+          "name": "Härkäpapua tikka masala",
+          "tags": ["G", "L", "M", "Veg"],
+          "recipe": {
+            "id": "compass-123",
+            "name": "Härkäpapua tikka masala",
+            "ingredients": "Härkäpapu, tomaatti, mausteet",
+            "nutritionPer100g": [
+              {
+                "name": "EnergyKcal",
+                "amount": 118,
+                "unit": "kcal"
+              }
+            ],
+            "co2eKilogramsPer100Grams": 0.12,
+            "diets": ["G", "L", "M", "Veg"]
+          }
+        }
+      ],
+      "sortOrder": 1
+    },
+    {
+      "id": "group-2",
+      "title": "Jälkiruoka",
+      "prices": [
+        {
+          "amount": "1.80",
+          "currency": "EUR",
+          "audiences": ["student", "staff", "guest"]
+        }
+      ],
+      "items": [
+        {
+          "id": "group-2-item-1",
+          "name": "Omena-kauramurupaistos"
+        }
+      ],
+      "sortOrder": 2
+    },
+    {
+      "id": "group-3",
+      "prices": [],
+      "items": [
+        {
+          "id": "group-3-item-1",
+          "name": "Satokauden kasviksia"
+        }
+      ],
+      "sortOrder": 3
+    }
+  ],
+  "freshness": {
+    "fetchedAt": "2026-07-24T08:00:00.000Z",
+    "isStale": false
+  }
+}

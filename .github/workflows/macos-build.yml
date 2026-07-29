@@ -81,13 +81,11 @@ jobs:
             dist/LunchTray.zip
             dist/LunchTray.zip.sha256
 
-      - name: Publish prerelease
+      - name: Publish release
         if: startsWith(github.ref, 'refs/tags/macos-v')
         uses: softprops/action-gh-release@v2
         with:
           name: Lunch Tray for macOS v${{ env.MACOS_VERSION }}
-          prerelease: true
-          generate_release_notes: true
           files: |
             dist/LunchTray.zip
             dist/LunchTray.zip.sha256

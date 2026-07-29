@@ -1,0 +1,66 @@
+name: Validate
+
+on:
+  push:
+    branches: [master, api-dev]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  api-and-plasma:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: api/package-lock.json
+
+      - name: Install API dependencies
+        working-directory: api
+        run: npm ci
+
+      - name: Test and type-check API
+        working-directory: api
+        run: |
+          npm test
+          npm run check
+
+      - name: Test Plasma clients
+        run: |
+          node plasma5/tests/parser-check.js
+          node plasma6/tests/parser-check.js
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Test Windows app
+        run: cargo test --manifest-path windows-tray/Cargo.toml
+
+      - name: Test Windows performance counters
+        run: cargo test --manifest-path windows-tray/Cargo.toml --features perf-counters
+
+      - name: Build Windows release
+        run: cargo build --manifest-path windows-tray/Cargo.toml --release
+
+  macos:
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test macOS app
+        run: |
+          xcodebuild \
+            -project macos/CompassLunch.xcodeproj \
+            -scheme CompassLunch \
+            -destination "platform=macOS" \
+            test

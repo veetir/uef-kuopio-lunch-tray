@@ -92,7 +92,10 @@ struct MenuPopoverView: View {
                 .buttonStyle(.borderless)
                 .foregroundStyle(appModel.accent.color)
                 .help(localized("Refresh", "Päivitä"))
-                .disabled(appModel.isLoading)
+                .disabled(
+                    appModel.isLoading ||
+                    !appModel.canRefreshSelectedRestaurant
+                )
 
                 Button {
                     appModel.openRestaurantPage()
@@ -168,7 +171,9 @@ struct MenuPopoverView: View {
                     if let closure = appModel.activeClosure {
                         ClosureNoticeView(
                             closure: closure,
-                            language: appModel.language
+                            language: appModel.language,
+                            referenceYear: Int(snapshot.menu?.date.prefix(4) ?? "")
+                                ?? LocalDate.today().year
                         )
                     } else {
                         menuMetadata(snapshot)
@@ -180,21 +185,40 @@ struct MenuPopoverView: View {
                             )
                         }
 
-                        if let menu = snapshot.menu, !menu.groupsWithItems.isEmpty {
+                        if snapshot.effectiveServiceStatus == .unknown {
+                            EmptyStateView(
+                                title: localized(
+                                    "Menu unavailable",
+                                    "Ruokalistaa ei saatavilla"
+                                ),
+                                description: localized(
+                                    "Try refreshing the menu.",
+                                    "Yritä päivittää ruokalista."
+                                ),
+                                systemImage: "exclamationmark.triangle"
+                            )
+                            .frame(maxWidth: .infinity)
+                            .padding(.top, 45)
+                        } else if let menu = snapshot.menu, !menu.offers.isEmpty {
+                            LunchOffersView(offers: menu.offers)
+                        }
+
+                        if snapshot.effectiveServiceStatus != .unknown,
+                           let menu = snapshot.menu,
+                           !menu.groupsWithItems.isEmpty {
                             ForEach(menu.groupsWithItemsByDescendingPrice { group in
                                 appModel.displayPrice(for: group)
                             }) { group in
                                 MenuGroupView(
                                     group: group,
                                     priceText: appModel.displayPrice(for: group),
-                                    provider: appModel.selectedRestaurant.provider,
                                     showAllergens: appModel.showAllergens,
                                     layout: appModel.lunchLayout,
                                     expandedMealID: $expandedMealID
                                 )
-                                .background(MenuItemScrollAnchor(id: group.id))
+                                .background(MenuItemScrollAnchor())
                             }
-                        } else {
+                        } else if snapshot.effectiveServiceStatus != .unknown {
                             EmptyStateView(
                                 title: localized("No lunch today", "Ei lounasta tänään"),
                                 description: localized(
@@ -210,6 +234,7 @@ struct MenuPopoverView: View {
                 }
                 .padding(.horizontal, 18)
                 .padding(.vertical, 17)
+                .background(MenuScrollViewMarker())
             }
         } else if appModel.isLoading {
             VStack(spacing: 12) {
@@ -221,7 +246,8 @@ struct MenuPopoverView: View {
         } else if let closure = appModel.activeClosure {
             ClosureNoticeView(
                 closure: closure,
-                language: appModel.language
+                language: appModel.language,
+                referenceYear: LocalDate.today().year
             )
             .padding(16)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -269,30 +295,31 @@ struct MenuPopoverView: View {
     }
 }
 
+struct MenuScrollViewMarker: NSViewRepresentable {
+    func makeNSView(context: Context) -> MenuScrollViewMarkerView {
+        MenuScrollViewMarkerView()
+    }
+
+    func updateNSView(_ nsView: MenuScrollViewMarkerView, context: Context) {}
+}
+
+final class MenuScrollViewMarkerView: NSView {}
+
 struct MenuItemScrollAnchor: NSViewRepresentable {
-    let id: String
-
     func makeNSView(context: Context) -> MenuItemScrollAnchorView {
-        let view = MenuItemScrollAnchorView()
-        view.anchorID = id
-        return view
+        MenuItemScrollAnchorView()
     }
 
-    func updateNSView(_ nsView: MenuItemScrollAnchorView, context: Context) {
-        nsView.anchorID = id
-    }
+    func updateNSView(_ nsView: MenuItemScrollAnchorView, context: Context) {}
 }
 
-final class MenuItemScrollAnchorView: NSView {
-    var anchorID = ""
-}
+final class MenuItemScrollAnchorView: NSView {}
 
 private struct MenuGroupView: View {
     @EnvironmentObject private var appModel: AppModel
 
     let group: LunchGroup
     let priceText: String
-    let provider: Restaurant.Provider
     let showAllergens: Bool
     let layout: LunchLayout
     @Binding var expandedMealID: String?
@@ -311,15 +338,19 @@ private struct MenuGroupView: View {
 
     private var legacyView: some View {
         VStack(alignment: .leading, spacing: 10) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(category)
-                    .font(.system(size: 15.5, weight: .semibold))
-                if !priceText.isEmpty {
-                    Text(priceText)
-                        .font(.system(size: 13.5, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
-                        .textSelection(.enabled)
+            if !category.isEmpty || !priceText.isEmpty {
+                VStack(alignment: .leading, spacing: 3) {
+                    if !category.isEmpty {
+                        Text(category)
+                            .font(.system(size: 15.5, weight: .semibold))
+                    }
+                    if !priceText.isEmpty {
+                        Text(priceText)
+                            .font(.system(size: 13.5, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                            .textSelection(.enabled)
+                    }
                 }
             }
 
@@ -332,10 +363,12 @@ private struct MenuGroupView: View {
             priceHeader(font: .system(size: 15, weight: .semibold))
             componentRows(compact: false)
                 .padding(.leading, usesPriceIndent ? 8 : 0)
-            Text(category)
-                .font(.system(size: 12.5, weight: .medium))
-                .foregroundStyle(.secondary)
-                .padding(.leading, usesPriceIndent ? 8 : 0)
+            if !category.isEmpty {
+                Text(category)
+                    .font(.system(size: 12.5, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, usesPriceIndent ? 8 : 0)
+            }
         }
     }
 
@@ -481,21 +514,47 @@ private struct MenuGroupView: View {
     }
 
     private var category: String {
-        group.name.isEmpty ? "Menu" : group.name
+        group.name
     }
 
     private var usesPriceIndent: Bool {
-        guard layout != .legacy, !priceText.isEmpty else { return false }
-        switch provider {
-        case .huomen, .pranzeria:
-            return false
-        case .compass, .compassRSS, .antell:
-            return true
-        }
+        layout != .legacy && !priceText.isEmpty
     }
 
     private func localized(_ english: String, _ finnish: String) -> String {
         appModel.language == .fi ? finnish : english
+    }
+}
+
+private struct LunchOffersView: View {
+    @EnvironmentObject private var appModel: AppModel
+
+    let offers: [LunchOffer]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(offers) { offer in
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        let priceText = appModel.displayPrice(for: offer)
+                        if !priceText.isEmpty {
+                            Text(priceText)
+                                .font(.system(size: 14, weight: .semibold))
+                                .monospacedDigit()
+                        }
+                        Text(offer.label)
+                            .font(.system(size: 14.5, weight: .medium))
+                    }
+                    if let description = offer.description,
+                       !description.normalizedWhitespace.isEmpty {
+                        Text(description)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -679,17 +738,20 @@ private struct StatusMessage: View {
 private struct ClosureNoticeView: View {
     let closure: SeasonalClosure
     let language: AppLanguage
+    let referenceYear: Int
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Image(systemName: "calendar.badge.exclamationmark")
                 .foregroundStyle(closureColor)
 
-            (
-                Text(language == .fi ? "Suljettu" : "Closed")
-                    .fontWeight(.semibold)
-                + Text(" · \(closure.periodText(language: language))")
+            Text(
+                closure.noticeText(
+                    language: language,
+                    referenceYear: referenceYear
+                )
             )
+            .fontWeight(.medium)
             .foregroundStyle(.primary)
         }
         .padding(12)

@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lunch.veeti.dev/schema/v1/restaurants.schema.json",
+  "title": "UEF Kuopio Lunch API restaurant catalogue",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["apiVersion", "schemaVersion", "revision", "restaurants"],
+  "properties": {
+    "apiVersion": {
+      "const": "v1"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "revision": {
+      "type": "string"
+    },
+    "restaurants": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/restaurant"
+      }
+    }
+  },
+  "$defs": {
+    "localizedText": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["fi", "en"],
+      "properties": {
+        "fi": {
+          "type": "string"
+        },
+        "en": {
+          "type": "string"
+        }
+      }
+    },
+    "closure": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["kind", "startsOn", "endsOn"],
+      "properties": {
+        "kind": {
+          "enum": ["seasonal", "exceptional"]
+        },
+        "startsOn": {
+          "type": "string",
+          "format": "date"
+        },
+        "endsOn": {
+          "type": "string",
+          "format": "date"
+        },
+        "reason": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "fi": {
+              "type": "string"
+            },
+            "en": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "restaurant": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "id",
+        "order",
+        "name",
+        "websiteUrl",
+        "languages",
+        "closures"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "order": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "name": {
+          "$ref": "#/$defs/localizedText"
+        },
+        "websiteUrl": {
+          "type": ["string", "null"],
+          "format": "uri"
+        },
+        "languages": {
+          "type": "array",
+          "items": {
+            "enum": ["fi", "en"]
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "closures": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/closure"
+          }
+        }
+      }
+    }
+  }
+}

@@ -9,8 +9,7 @@
 
 ## Windows app
 
-See [Releases](https://github.com/veetir/compass-lunch-plasmoid/releases) for
-exe downloads.
+See [Releases](https://github.com/veetir/uef-kuopio-lunch-tray/releases) for Windows downloads.
 
 ### Features
 
@@ -24,8 +23,7 @@ exe downloads.
 
 ## macOS app
 
-Requires macOS 13 or newer. Download `LunchTray.zip` from Releases, unzip it, and move `LunchTray.app` to `/Applications`.
-The app is currently unsigned, so Control-click it and select **Open** on first launch.
+See [Releases](https://github.com/veetir/uef-kuopio-lunch-tray/releases) for macOS downloads.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="macos/assets/macos-dark.png">
@@ -54,8 +52,8 @@ plasmashell --version
 Clone once:
 
 ```bash
-git clone https://github.com/veetir/compass-lunch-plasmoid.git
-cd compass-lunch-plasmoid
+git clone https://github.com/veetir/uef-kuopio-lunch-tray.git
+cd uef-kuopio-lunch-tray
 ```
 
 Install (Plasma 6):
