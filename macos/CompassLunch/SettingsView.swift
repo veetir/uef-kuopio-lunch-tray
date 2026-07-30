@@ -1,11 +1,16 @@
+import Combine
 import SwiftUI
 
 @MainActor
 final class SettingsState: ObservableObject {
     private let appModel: AppModel
+    private var appModelObservation: AnyCancellable?
 
     init(appModel: AppModel) {
         self.appModel = appModel
+        appModelObservation = appModel.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
     }
 
     var restaurants: [Restaurant] { appModel.restaurants }

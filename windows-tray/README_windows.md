@@ -33,7 +33,7 @@ Only do this for binaries downloaded from the official GitHub Releases page of t
 - Mouse wheel on tray icon: switch restaurant
 - Drag-select text on a dish row: toggle it as a favorite highlight
 - Right-click tray icon: open settings, refresh, and quit
-- Right-click tray icon > Theme > Lunch item layout: choose Classic, Standard, or Compact menu rows
+- Right-click tray icon > Theme > Layout > Lunch items: choose Classic, Standard, or Compact menu rows
 
 ## First-time setup
 

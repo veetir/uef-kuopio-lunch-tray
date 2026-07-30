@@ -1,4 +1,7 @@
 use super::*;
+use time::{Date, Month, OffsetDateTime, Time, UtcOffset, Weekday};
+
+const CLOSING_SOON_MINUTES: u16 = 15;
 
 pub(super) fn build_lines(state: &AppState) -> Vec<Line> {
     let mut lines = Vec::new();
@@ -23,9 +26,11 @@ pub(super) fn build_lines(state: &AppState) -> Vec<Line> {
     if let Some((date, hours)) =
         date_and_time_parts(state.today_menu.as_ref(), &state.settings.language)
     {
+        let hours_status = hours_status(&hours);
         lines.push(Line::DateTime {
             date,
             hours,
+            hours_status,
             stale: state.stale_date,
         });
     }
@@ -131,8 +136,9 @@ struct MenuRenderOptions<'a> {
 
 fn append_menus(lines: &mut Vec<Line>, menu: &TodayMenu, options: MenuRenderOptions) -> usize {
     let mut rendered_groups = 0;
-    let expanded_recipe_id = super::interaction::expanded_recipe_id();
+    let expanded_recipe_key = super::interaction::expanded_recipe_key();
     let favorites = current_favorites_snapshot();
+    let mut recipe_instance_id = 0usize;
     let mut groups: Vec<RenderableGroup<'_>> = menu
         .menus
         .iter()
@@ -175,6 +181,14 @@ fn append_menus(lines: &mut Vec<Line>, menu: &TodayMenu, options: MenuRenderOpti
         rendered_groups += 1;
         let mut rendered_component_count = 0usize;
         for (main, suffix, recipe_id, recipe_detail) in render_group.components {
+            let recipe_key = recipe_id.map(|recipe_id| {
+                let key = RecipeExpansionKey {
+                    recipe_id,
+                    instance_id: recipe_instance_id,
+                };
+                recipe_instance_id += 1;
+                key
+            });
             let is_primary_component = rendered_component_count == 0
                 || options.display_mode == crate::settings::LunchItemDisplayMode::Classic;
             let price_prefix = if is_primary_component {
@@ -198,7 +212,7 @@ fn append_menus(lines: &mut Vec<Line>, menu: &TodayMenu, options: MenuRenderOpti
                     reserve_prefix: reserve_prefix.clone(),
                     main: main.clone(),
                     suffix_segments: Vec::new(),
-                    recipe_id,
+                    recipe_key,
                     ingredient_alert,
                 });
             } else {
@@ -214,11 +228,11 @@ fn append_menus(lines: &mut Vec<Line>, menu: &TodayMenu, options: MenuRenderOpti
                     reserve_prefix: reserve_prefix.clone(),
                     main: main.clone(),
                     suffix_segments: segments,
-                    recipe_id,
+                    recipe_key,
                     ingredient_alert,
                 });
             }
-            if recipe_id.is_some() && recipe_id == expanded_recipe_id {
+            if recipe_key.is_some() && recipe_key == expanded_recipe_key {
                 if let Some(detail) = recipe_detail.as_ref() {
                     let rows = recipe_detail_rows(detail, options.language);
                     if !rows.is_empty() {
@@ -540,6 +554,120 @@ pub(super) fn invalidate_favorites_cache() {
     }
 }
 
+fn hours_status(hours: &str) -> HoursStatus {
+    let Some(now_minutes) = current_helsinki_minutes() else {
+        return HoursStatus::Unknown;
+    };
+    hours_status_at(hours, now_minutes)
+}
+
+fn hours_status_at(hours: &str, now_minutes: u16) -> HoursStatus {
+    let Some((opens_at, closes_at)) = parse_hours_interval(hours) else {
+        return HoursStatus::Unknown;
+    };
+    if closes_at <= opens_at {
+        return HoursStatus::Unknown;
+    }
+    if now_minutes < opens_at || now_minutes >= closes_at {
+        return HoursStatus::Closed;
+    }
+    if closes_at.saturating_sub(now_minutes) <= CLOSING_SOON_MINUTES {
+        HoursStatus::ClosingSoon
+    } else {
+        HoursStatus::Open
+    }
+}
+
+fn parse_hours_interval(hours: &str) -> Option<(u16, u16)> {
+    let times = parse_time_tokens(hours);
+    if times.len() >= 2 {
+        Some((times[0], times[1]))
+    } else {
+        None
+    }
+}
+
+fn parse_time_tokens(value: &str) -> Vec<u16> {
+    let mut times = Vec::new();
+    let chars: Vec<char> = value.chars().collect();
+    for idx in 0..chars.len() {
+        if !chars[idx].is_ascii_digit() {
+            continue;
+        }
+        if idx > 0 && chars[idx - 1].is_ascii_digit() {
+            continue;
+        }
+
+        let mut end_hour = idx;
+        while end_hour < chars.len() && chars[end_hour].is_ascii_digit() {
+            end_hour += 1;
+        }
+        if end_hour == idx || end_hour - idx > 2 || chars.get(end_hour) != Some(&':') {
+            continue;
+        }
+
+        let minute_start = end_hour + 1;
+        let minute_end = minute_start + 2;
+        if minute_end > chars.len()
+            || !chars[minute_start].is_ascii_digit()
+            || !chars[minute_start + 1].is_ascii_digit()
+            || chars.get(minute_end).is_some_and(|ch| ch.is_ascii_digit())
+        {
+            continue;
+        }
+
+        let hour = chars[idx..end_hour]
+            .iter()
+            .collect::<String>()
+            .parse::<u16>()
+            .ok();
+        let minute = chars[minute_start..minute_end]
+            .iter()
+            .collect::<String>()
+            .parse::<u16>()
+            .ok();
+        let (Some(hour), Some(minute)) = (hour, minute) else {
+            continue;
+        };
+        if hour < 24 && minute < 60 {
+            times.push(hour * 60 + minute);
+        }
+    }
+    times
+}
+
+fn current_helsinki_minutes() -> Option<u16> {
+    let now = OffsetDateTime::now_utc();
+    let offset = helsinki_offset_for(now)?;
+    let local_time = now.to_offset(offset).time();
+    Some(local_time.hour() as u16 * 60 + local_time.minute() as u16)
+}
+
+fn helsinki_offset_for(now: OffsetDateTime) -> Option<UtcOffset> {
+    let year = now.year();
+    let daylight_saving_start = last_sunday(year, Month::March)
+        .with_time(Time::from_hms(1, 0, 0).ok()?)
+        .assume_utc();
+    let daylight_saving_end = last_sunday(year, Month::October)
+        .with_time(Time::from_hms(1, 0, 0).ok()?)
+        .assume_utc();
+    let offset_hours = if now >= daylight_saving_start && now < daylight_saving_end {
+        3
+    } else {
+        2
+    };
+    UtcOffset::from_hms(offset_hours, 0, 0).ok()
+}
+
+fn last_sunday(year: i32, month: Month) -> Date {
+    let mut date =
+        Date::from_calendar_date(year, month, 31).expect("March and October have 31 days");
+    while date.weekday() != Weekday::Sunday {
+        date = date.previous_day().expect("valid previous day");
+    }
+    date
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -616,8 +744,32 @@ mod tests {
 
         assert!(matches!(&lines[0], Line::StaleNotice(text) if text == "Stale menu"));
         assert!(
-            matches!(&lines[1], Line::DateTime { date, hours, stale } if date == "28.7.2026" && hours == "10:30-14:00" && *stale)
+            matches!(&lines[1], Line::DateTime { date, hours, stale, .. } if date == "28.7.2026" && hours == "10:30-14:00" && *stale)
         );
+    }
+
+    #[test]
+    fn hours_status_tracks_open_closing_soon_and_closed_intervals() {
+        assert_eq!(hours_status_at("10:30-14:00", 12 * 60), HoursStatus::Open);
+        assert_eq!(
+            hours_status_at("10:30-14:00", 13 * 60 + 45),
+            HoursStatus::ClosingSoon
+        );
+        assert_eq!(hours_status_at("10:30-14:00", 14 * 60), HoursStatus::Closed);
+        assert_eq!(hours_status_at("10:30-14:00", 10 * 60), HoursStatus::Closed);
+    }
+
+    #[test]
+    fn hours_status_parses_prose_with_clear_time_tokens_only() {
+        assert_eq!(
+            hours_status_at("Lunch 10:30–13:30", 13 * 60 + 20),
+            HoursStatus::ClosingSoon
+        );
+        assert_eq!(
+            hours_status_at("Closed until 9 August", 12 * 60),
+            HoursStatus::Unknown
+        );
+        assert_eq!(hours_status_at("10-14", 12 * 60), HoursStatus::Unknown);
     }
 
     #[test]
@@ -819,6 +971,52 @@ mod tests {
         );
     }
 
+    #[test]
+    fn duplicate_recipe_ids_expand_only_selected_occurrence() {
+        let menu = TodayMenu {
+            date_iso: "2026-07-30".to_string(),
+            lunch_time: String::new(),
+            menus: vec![MenuGroup {
+                name: "Lunch".to_string(),
+                price: "student 2,95 €".to_string(),
+                prices: Vec::new(),
+                presentation: MenuGroupPresentation::Standard,
+                components: vec!["Rice".to_string(), "Rice".to_string()],
+                component_recipe_ids: vec![Some(42), Some(42)],
+                component_recipe_details: vec![
+                    Some(test_recipe(42, "first rice ingredients")),
+                    Some(test_recipe(42, "second rice ingredients")),
+                ],
+            }],
+        };
+        super::super::interaction::set_expanded_recipe_key_for_test(Some(RecipeExpansionKey {
+            recipe_id: 42,
+            instance_id: 1,
+        }));
+
+        let mut lines = Vec::new();
+        append_menus(
+            &mut lines,
+            &menu,
+            test_options(LunchItemDisplayMode::Standard),
+        );
+        super::super::interaction::set_expanded_recipe_key_for_test(None);
+
+        let recipe_details: Vec<&Vec<RecipeDetailRow>> = lines
+            .iter()
+            .filter_map(|line| match line {
+                Line::RecipeDetail { rows } => Some(rows),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(recipe_details.len(), 1);
+        assert_eq!(recipe_details[0][0].value, "second rice ingredients");
+        assert!(matches!(&lines[0], Line::MenuItem { main, .. } if main == "Rice"));
+        assert!(matches!(&lines[1], Line::MenuItem { main, .. } if main == "Rice"));
+        assert!(matches!(&lines[2], Line::RecipeDetail { .. }));
+    }
+
     fn render_test_lines(display_mode: LunchItemDisplayMode) -> Vec<Line> {
         let menu = TodayMenu {
             date_iso: "2026-06-24".to_string(),
@@ -868,6 +1066,17 @@ mod tests {
             components: vec![component.to_string()],
             component_recipe_ids: Vec::new(),
             component_recipe_details: Vec::new(),
+        }
+    }
+
+    fn test_recipe(recipe_id: u32, ingredients: &str) -> RecipeInfo {
+        RecipeInfo {
+            recipe_id,
+            name: "Rice".to_string(),
+            ingredients_cleaned: ingredients.to_string(),
+            nutritional_values: Vec::new(),
+            kg_co2e_per100g: None,
+            diets: String::new(),
         }
     }
 }

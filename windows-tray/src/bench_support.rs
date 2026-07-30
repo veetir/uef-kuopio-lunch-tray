@@ -6,7 +6,7 @@ use crate::model::{
 };
 use crate::popup;
 use crate::restaurant::{restaurant_for_code, Provider, Restaurant};
-use crate::settings::{HighlightTheme, LunchItemDisplayMode, Settings};
+use crate::settings::{LunchItemDisplayMode, Settings};
 use crate::state::{AppState, FetchStatus};
 
 pub const FIXTURE_DATE: &str = "2026-07-24";
@@ -107,7 +107,7 @@ fn sample_settings() -> Settings {
         lunch_item_display_mode: LunchItemDisplayMode::Standard,
         hide_expensive_student_meals: false,
         theme: "dark".to_string(),
-        highlight_theme: HighlightTheme::Default,
+        show_restaurant_index_numbers: false,
         widget_scale: "normal".to_string(),
         show_allergens: true,
         highlight_gluten_free: true,

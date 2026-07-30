@@ -7,7 +7,7 @@ use crate::app::{App, FetchApplyOutcome, FetchMessage, UpdateCheckMessage, Updat
 use crate::log::log_line;
 use crate::popup;
 use crate::restaurant::available_restaurants;
-use crate::settings::{HighlightTheme, LunchItemDisplayMode};
+use crate::settings::LunchItemDisplayMode;
 use crate::tray;
 use crate::util::to_wstring;
 use std::mem::size_of;
@@ -21,10 +21,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DefWindowProcW, DestroyWindow, GetCursorPos, GetWindowLongPtrW, GetWindowRect, KillTimer,
     LoadCursorW, MessageBoxW, PostQuitMessage, RegisterClassExW, SetCursor, SetForegroundWindow,
     SetTimer, SetWindowLongPtrW, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, IDC_ARROW,
-    IDC_HAND, IDC_IBEAM, IDYES, MB_DEFBUTTON2, MB_ICONINFORMATION, MB_ICONWARNING, MB_YESNO,
-    WM_ACTIVATE, WM_APP, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND,
-    WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
-    WM_NCCREATE, WM_PAINT, WM_RBUTTONUP, WM_SETTINGCHANGE, WM_THEMECHANGED, WM_TIMER, WNDCLASSEXW,
+    IDC_HAND, IDYES, MB_DEFBUTTON2, MB_ICONINFORMATION, MB_ICONWARNING, MB_YESNO, WM_ACTIVATE,
+    WM_APP, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_KEYDOWN,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_PAINT,
+    WM_RBUTTONUP, WM_SETTINGCHANGE, WM_THEMECHANGED, WM_TIMER, WNDCLASSEXW,
 };
 
 pub const TRAY_WND_CLASS: &str = "CompassLunchTrayWindow";
@@ -354,6 +354,10 @@ pub unsafe extern "system" fn popup_wndproc(
                 apply_popup_cursor(hwnd, &settings, x, y);
                 return LRESULT(0);
             }
+            if popup::header_marker_index_at(hwnd, &settings, x, y).is_some() {
+                apply_popup_cursor(hwnd, &settings, x, y);
+                return LRESULT(0);
+            }
             if popup::begin_text_selection(hwnd, x, y) {
                 return LRESULT(0);
             }
@@ -455,6 +459,10 @@ pub unsafe extern "system" fn popup_wndproc(
                         return LRESULT(0);
                     }
                 }
+            } else if let Some(index) = popup::header_marker_index_at(hwnd, &settings, x, y) {
+                select_popup_restaurant_index(hwnd, app, index);
+                let settings = app.settings_snapshot();
+                apply_popup_cursor(hwnd, &settings, x, y);
             }
             LRESULT(0)
         }
@@ -533,7 +541,6 @@ pub unsafe extern "system" fn popup_wndproc(
 fn apply_popup_cursor(hwnd: HWND, settings: &crate::settings::Settings, x: i32, y: i32) {
     let cursor_id = match popup::cursor_kind_at(hwnd, settings, x, y) {
         popup::PopupCursorKind::Hand => IDC_HAND,
-        popup::PopupCursorKind::Text => IDC_IBEAM,
         popup::PopupCursorKind::Arrow => IDC_ARROW,
     };
     unsafe {
@@ -665,30 +672,6 @@ fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
             app.set_lunch_item_display_mode(LunchItemDisplayMode::Compact);
             popup::invalidate_layout_budget_cache();
         }
-        tray::CMD_HIGHLIGHT_THEME_DEFAULT => {
-            app.set_highlight_theme(HighlightTheme::Default);
-            popup::invalidate_layout_budget_cache();
-            if popup_is_visible(app.hwnd_popup()) {
-                let state = app.snapshot();
-                popup::resize_popup_keep_position(app.hwnd_popup(), &state);
-            }
-        }
-        tray::CMD_HIGHLIGHT_THEME_FRAKTUR => {
-            app.set_highlight_theme(HighlightTheme::Fraktur);
-            popup::invalidate_layout_budget_cache();
-            if popup_is_visible(app.hwnd_popup()) {
-                let state = app.snapshot();
-                popup::resize_popup_keep_position(app.hwnd_popup(), &state);
-            }
-        }
-        tray::CMD_HIGHLIGHT_THEME_DIPLOMA => {
-            app.set_highlight_theme(HighlightTheme::Diploma);
-            popup::invalidate_layout_budget_cache();
-            if popup_is_visible(app.hwnd_popup()) {
-                let state = app.snapshot();
-                popup::resize_popup_keep_position(app.hwnd_popup(), &state);
-            }
-        }
         tray::CMD_TOGGLE_HIDE_EXPENSIVE_STUDENT => {
             app.toggle_hide_expensive_student_meals();
         }
@@ -759,17 +742,31 @@ fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
                 }
             }
         }
+        tray::CMD_WIDGET_SCALE_SMALL => {
+            app.set_widget_scale("small");
+        }
         tray::CMD_WIDGET_SCALE_NORMAL => {
             app.set_widget_scale("normal");
         }
-        tray::CMD_WIDGET_SCALE_125 => {
-            app.set_widget_scale("125");
-        }
-        tray::CMD_WIDGET_SCALE_150 => {
-            app.set_widget_scale("150");
+        tray::CMD_WIDGET_SCALE_LARGE => {
+            app.set_widget_scale("large");
         }
         tray::CMD_TOGGLE_ANIMATIONS => {
             app.toggle_animations();
+            if popup_is_visible(app.hwnd_popup()) {
+                let state = app.snapshot();
+                popup::resize_popup_keep_position(app.hwnd_popup(), &state);
+            }
+        }
+        tray::CMD_RESTAURANT_INDEX_DOTS => {
+            app.set_restaurant_index_numbers(false);
+            if popup_is_visible(app.hwnd_popup()) {
+                let state = app.snapshot();
+                popup::resize_popup_keep_position(app.hwnd_popup(), &state);
+            }
+        }
+        tray::CMD_RESTAURANT_INDEX_NUMBERS => {
+            app.set_restaurant_index_numbers(true);
             if popup_is_visible(app.hwnd_popup()) {
                 let state = app.snapshot();
                 popup::resize_popup_keep_position(app.hwnd_popup(), &state);

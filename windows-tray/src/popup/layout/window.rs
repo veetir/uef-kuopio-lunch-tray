@@ -107,6 +107,41 @@ pub(in crate::popup) fn header_layout(width: i32, scale: &PopupScale) -> HeaderL
     HeaderLayout { prev, next, close }
 }
 
+pub(in crate::popup) fn header_marker_rects(
+    width: i32,
+    settings: &Settings,
+    scale: &PopupScale,
+) -> Vec<RECT> {
+    if settings.show_restaurant_index_numbers {
+        return Vec::new();
+    }
+    let count = available_restaurants(settings.enable_antell_restaurants).len();
+    if count <= 1 {
+        return Vec::new();
+    }
+
+    let dot = scale_px(HEADER_MARKER_DOT_SIZE, scale.factor).max(3);
+    let gap = scale_px(HEADER_MARKER_GAP, scale.factor).max(4);
+    let hit = scale_px(HEADER_MARKER_HIT_SIZE, scale.factor).max(dot + 6);
+    let rail_width = count as i32 * dot + (count.saturating_sub(1) as i32 * gap);
+    let start_x = (width - rail_width) / 2;
+    let dot_top = scale.header_height - scale_px(10, scale.factor).max(8);
+    let center_y = dot_top + dot / 2;
+
+    (0..count)
+        .map(|idx| {
+            let left = start_x + idx as i32 * (dot + gap);
+            let center_x = left + dot / 2;
+            RECT {
+                left: center_x - hit / 2,
+                top: center_y - hit / 2,
+                right: center_x + hit / 2,
+                bottom: center_y + hit / 2,
+            }
+        })
+        .collect()
+}
+
 pub(in crate::popup) fn header_title(state: &AppState) -> String {
     let list = available_restaurants(state.settings.enable_antell_restaurants);
     if list.is_empty() {
@@ -117,7 +152,11 @@ pub(in crate::popup) fn header_title(state: &AppState) -> String {
         .iter()
         .position(|entry| entry.code == state.settings.restaurant_code)
         .unwrap_or(0);
-    format!("{} ({}/{})", list[index].name, index + 1, list.len())
+    if state.settings.show_restaurant_index_numbers {
+        format!("{} ({}/{})", list[index].name, index + 1, list.len())
+    } else {
+        list[index].name.to_string()
+    }
 }
 
 fn max_header_title_width(hdc: HDC, font: HFONT, settings: &Settings) -> i32 {
@@ -125,10 +164,13 @@ fn max_header_title_width(hdc: HDC, font: HFONT, settings: &Settings) -> i32 {
     if list.is_empty() {
         return text_width_with_font(hdc, font, "Compass Lunch");
     }
-    let total = list.len();
     let mut max_width = 0;
     for (idx, restaurant) in list.iter().enumerate() {
-        let title = format!("{} ({}/{})", restaurant.name, idx + 1, total);
+        let title = if settings.show_restaurant_index_numbers {
+            format!("{} ({}/{})", restaurant.name, idx + 1, list.len())
+        } else {
+            restaurant.name.to_string()
+        };
         max_width = max(max_width, text_width_with_font(hdc, font, &title));
     }
     max_width
@@ -138,8 +180,8 @@ fn desired_size(hwnd: HWND, state: &AppState) -> (i32, i32) {
     unsafe {
         let hdc = windows::Win32::Graphics::Gdi::GetDC(hwnd);
         let dpi_y = GetDeviceCaps(hdc, LOGPIXELSY);
-        let expanded_recipe_id = super::super::interaction::expanded_recipe_id();
-        if let Some(key) = desired_size_cache_key(state, dpi_y, expanded_recipe_id) {
+        let expanded_recipe_key = super::super::interaction::expanded_recipe_key();
+        if let Some(key) = desired_size_cache_key(state, dpi_y, expanded_recipe_key) {
             if let Some(size) = cached_desired_size(&key) {
                 windows::Win32::Graphics::Gdi::ReleaseDC(hwnd, hdc);
                 return size;
@@ -147,7 +189,7 @@ fn desired_size(hwnd: HWND, state: &AppState) -> (i32, i32) {
         }
 
         let scale = popup_scale_for_dpi(&state.settings, dpi_y);
-        let (normal_font, bold_font, small_font, small_bold_font) =
+        let (normal_font, bold_font, bold_italic_font, small_font, small_bold_font) =
             create_fonts(hdc, &state.settings.theme, scale.factor);
         let current_lines = build_lines(state);
         let current_metrics = measure_lines_layout(
@@ -213,6 +255,7 @@ fn desired_size(hwnd: HWND, state: &AppState) -> (i32, i32) {
         let width = width_candidate.clamp(scale.min_width, max_width);
         DeleteObject(normal_font);
         DeleteObject(bold_font);
+        DeleteObject(bold_italic_font);
         DeleteObject(small_font);
         DeleteObject(small_bold_font);
         windows::Win32::Graphics::Gdi::ReleaseDC(hwnd, hdc);
@@ -221,7 +264,7 @@ fn desired_size(hwnd: HWND, state: &AppState) -> (i32, i32) {
             width,
             height.max(scale.header_height + scale_px(120, scale.factor)),
         );
-        if let Some(key) = desired_size_cache_key(state, dpi_y, expanded_recipe_id) {
+        if let Some(key) = desired_size_cache_key(state, dpi_y, expanded_recipe_key) {
             update_desired_size_cache(key, size);
         }
         size
@@ -232,7 +275,7 @@ pub(in crate::popup) fn create_fonts(
     _hdc: HDC,
     theme: &str,
     scale_factor: f32,
-) -> (HFONT, HFONT, HFONT, HFONT) {
+) -> (HFONT, HFONT, HFONT, HFONT, HFONT) {
     unsafe {
         let height_normal = -MulDiv(scale_px(12, scale_factor).max(8), BASE_DPI, 72);
         let height_small = -MulDiv(scale_px(10, scale_factor).max(7), BASE_DPI, 72);
@@ -261,6 +304,22 @@ pub(in crate::popup) fn create_fonts(
             0,
             700,
             0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            PCWSTR(face.as_ptr()),
+        );
+        let bold_italic = CreateFontW(
+            height_normal,
+            0,
+            0,
+            0,
+            700,
+            1,
             0,
             0,
             0,
@@ -302,7 +361,7 @@ pub(in crate::popup) fn create_fonts(
             0,
             PCWSTR(face.as_ptr()),
         );
-        (normal, bold, small, small_bold)
+        (normal, bold, bold_italic, small, small_bold)
     }
 }
 

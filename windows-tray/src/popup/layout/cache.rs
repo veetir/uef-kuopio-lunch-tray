@@ -57,7 +57,6 @@ fn line_budget_key(settings: &Settings, today_key: &str, dpi_y: i32) -> PopupLin
         today_key: today_key.to_string(),
         language: settings.language.clone(),
         theme: settings.theme.clone(),
-        highlight_theme: settings.highlight_theme,
         widget_scale: settings.widget_scale.clone(),
         dpi_y,
         enable_antell_restaurants: settings.enable_antell_restaurants,
@@ -147,7 +146,7 @@ fn update_line_budget_cache(
 pub(super) fn desired_size_cache_key(
     state: &AppState,
     dpi_y: i32,
-    expanded_recipe_id: Option<u32>,
+    expanded_recipe_key: Option<RecipeExpansionKey>,
 ) -> Option<PopupDesiredSizeKey> {
     if state.status == FetchStatus::Loading {
         return None;
@@ -160,11 +159,10 @@ pub(super) fn desired_size_cache_key(
         error_message: state.error_message.clone(),
         stale_network_error: state.stale_network_error,
         stale_date: state.stale_date,
-        expanded_recipe_id,
+        expanded_recipe_key,
         enable_antell_restaurants: state.settings.enable_antell_restaurants,
         language: state.settings.language.clone(),
         theme: state.settings.theme.clone(),
-        highlight_theme: state.settings.highlight_theme,
         widget_scale: state.settings.widget_scale.clone(),
         dpi_y,
         show_prices: state.settings.show_prices,

@@ -3,6 +3,7 @@
 var MAX_MENU_HEADING_CHARS = 140;
 var MAX_MENU_PRICE_CHARS = 96;
 var MAX_COMPONENT_MAIN_CHARS = 220;
+var CLOSING_SOON_MINUTES = 15;
 
 function normalizeText(value) {
     if (value === null || value === undefined) {
@@ -75,6 +76,138 @@ function dateAndTimeLine(todayMenu, language) {
         return datePart;
     }
     return timePart;
+}
+
+function hoursStatusAt(hours, nowMinutes) {
+    var times = timeTokens(hours);
+    if (times.length < 2 || times[1] <= times[0]) {
+        return "unknown";
+    }
+    if (nowMinutes < times[0] || nowMinutes >= times[1]) {
+        return "closed";
+    }
+    return times[1] - nowMinutes <= CLOSING_SOON_MINUTES
+        ? "closingSoon"
+        : "open";
+}
+
+function hoursStatus(hours, dateObj) {
+    return hoursStatusAt(hours, helsinkiMinutes(dateObj || new Date()));
+}
+
+function timeTokens(value) {
+    var source = normalizeText(value);
+    var pattern = /(^|[^\d])(\d{1,2}):(\d{2})(?!\d)/g;
+    var result = [];
+    var match;
+    while ((match = pattern.exec(source)) !== null) {
+        var hour = parseInt(match[2], 10);
+        var minute = parseInt(match[3], 10);
+        if (hour < 24 && minute < 60) {
+            result.push(hour * 60 + minute);
+        }
+    }
+    return result;
+}
+
+function helsinkiMinutes(dateObj) {
+    var date = dateObj || new Date();
+    var timestamp = date.getTime();
+    var year = date.getUTCFullYear();
+    var marchLast = new Date(Date.UTC(year, 2, 31));
+    var octoberLast = new Date(Date.UTC(year, 9, 31));
+    var daylightSavingStart = Date.UTC(
+        year,
+        2,
+        31 - marchLast.getUTCDay(),
+        1
+    );
+    var daylightSavingEnd = Date.UTC(
+        year,
+        9,
+        31 - octoberLast.getUTCDay(),
+        1
+    );
+    var offsetHours = timestamp >= daylightSavingStart
+        && timestamp < daylightSavingEnd
+        ? 3
+        : 2;
+    var helsinki = new Date(timestamp + offsetHours * 60 * 60 * 1000);
+    return helsinki.getUTCHours() * 60 + helsinki.getUTCMinutes();
+}
+
+function dateAndTimeLineRich(
+    todayMenu,
+    language,
+    dateObj,
+    textColor,
+    backgroundColor
+) {
+    if (!todayMenu) {
+        return "";
+    }
+
+    var datePart = escapeHtml(formatDisplayDate(todayMenu.dateIso, language));
+    var timePart = normalizeText(todayMenu.lunchTime);
+    var styledTime = styledHoursRich(
+        timePart,
+        dateObj,
+        textColor,
+        backgroundColor
+    );
+    if (datePart && styledTime) {
+        return datePart + " " + styledTime;
+    }
+    return datePart || styledTime;
+}
+
+function styledHoursRich(hours, dateObj, textColor, backgroundColor) {
+    var clean = normalizeText(hours);
+    if (!clean) {
+        return "";
+    }
+    var escaped = escapeHtml(clean);
+    var status = hoursStatus(clean, dateObj);
+    if (status === "closingSoon") {
+        return "<i>" + escaped + "</i>";
+    }
+    if (status === "closed") {
+        var dimColor = blendedColor(textColor, backgroundColor, 0.30);
+        return "<font color=\"" + dimColor + "\">" + escaped + "</font>";
+    }
+    return escaped;
+}
+
+function blendedColor(foreground, background, ratio) {
+    var fg = rgbColor(foreground);
+    var bg = rgbColor(background);
+    if (!fg || !bg) {
+        return "#808080";
+    }
+    var amount = Math.max(0, Math.min(1, Number(ratio) || 0));
+    return "#" + hexByte(Math.round(fg.r + (bg.r - fg.r) * amount))
+        + hexByte(Math.round(fg.g + (bg.g - fg.g) * amount))
+        + hexByte(Math.round(fg.b + (bg.b - fg.b) * amount));
+}
+
+function rgbColor(value) {
+    var clean = String(value || "").trim();
+    if (/^#[0-9a-fA-F]{8}$/.test(clean)) {
+        clean = "#" + clean.slice(3);
+    }
+    if (!/^#[0-9a-fA-F]{6}$/.test(clean)) {
+        return null;
+    }
+    return {
+        r: parseInt(clean.slice(1, 3), 16),
+        g: parseInt(clean.slice(3, 5), 16),
+        b: parseInt(clean.slice(5, 7), 16)
+    };
+}
+
+function hexByte(value) {
+    var text = Math.max(0, Math.min(255, value)).toString(16);
+    return text.length < 2 ? "0" + text : text;
 }
 
 function textFor(language, key) {
@@ -430,7 +563,7 @@ function buildTooltipSubText(language, fetchState, errorMessage, lastUpdatedEpoc
     return lines.join("\n");
 }
 
-function buildTooltipSubTextRich(language, fetchState, errorMessage, lastUpdatedEpochMs, todayMenu, showPrices, showStudentPrice, showStaffPrice, showGuestPrice, isCompassProvider, hideExpensiveStudentMeals, showAllergens, highlightGlutenFree, highlightVeg, highlightLactoseFree, serviceState, serviceStateMessage) {
+function buildTooltipSubTextRich(language, fetchState, errorMessage, lastUpdatedEpochMs, todayMenu, showPrices, showStudentPrice, showStaffPrice, showGuestPrice, isCompassProvider, hideExpensiveStudentMeals, showAllergens, highlightGlutenFree, highlightVeg, highlightLactoseFree, serviceState, serviceStateMessage, nowDate, textColor, backgroundColor) {
     var lines = [];
     var noServiceMessage = serviceMessage(language, serviceState, serviceStateMessage);
 
@@ -442,9 +575,15 @@ function buildTooltipSubTextRich(language, fetchState, errorMessage, lastUpdated
         lines.push(escapeHtml(textFor(language, "loading")));
     }
 
-    var dateLine = dateAndTimeLine(todayMenu, language);
+    var dateLine = dateAndTimeLineRich(
+        todayMenu,
+        language,
+        nowDate,
+        textColor,
+        backgroundColor
+    );
     if (dateLine) {
-        lines.push("<b>" + escapeHtml(dateLine) + "</b>");
+        lines.push("<b>" + dateLine + "</b>");
     }
 
     if (noServiceMessage) {

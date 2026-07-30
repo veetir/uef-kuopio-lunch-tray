@@ -5,7 +5,7 @@
 
 use crate::log::log_line;
 use crate::restaurant::available_restaurants;
-use crate::settings::{HighlightTheme, LunchItemDisplayMode};
+use crate::settings::LunchItemDisplayMode;
 use crate::state::AppState;
 use crate::util::to_wstring;
 use std::path::{Path, PathBuf};
@@ -59,16 +59,15 @@ pub const CMD_TOGGLE_LOGGING: u16 = 2216;
 pub const CMD_OPEN_APPDATA_DIR: u16 = 2217;
 pub const CMD_THEME_TELETEXT1: u16 = 2218;
 pub const CMD_THEME_TELETEXT2: u16 = 2219;
-pub const CMD_WIDGET_SCALE_NORMAL: u16 = 2225;
-pub const CMD_WIDGET_SCALE_125: u16 = 2226;
-pub const CMD_WIDGET_SCALE_150: u16 = 2227;
+pub const CMD_WIDGET_SCALE_SMALL: u16 = 2225;
+pub const CMD_WIDGET_SCALE_NORMAL: u16 = 2226;
+pub const CMD_WIDGET_SCALE_LARGE: u16 = 2227;
 pub const CMD_TOGGLE_ANIMATIONS: u16 = 2228;
 pub const CMD_LUNCH_LAYOUT_CLASSIC: u16 = 2229;
 pub const CMD_LUNCH_LAYOUT_STANDARD: u16 = 2230;
 pub const CMD_LUNCH_LAYOUT_COMPACT: u16 = 2231;
-pub const CMD_HIGHLIGHT_THEME_DEFAULT: u16 = 2232;
-pub const CMD_HIGHLIGHT_THEME_FRAKTUR: u16 = 2233;
-pub const CMD_HIGHLIGHT_THEME_DIPLOMA: u16 = 2234;
+pub const CMD_RESTAURANT_INDEX_DOTS: u16 = 2235;
+pub const CMD_RESTAURANT_INDEX_NUMBERS: u16 = 2236;
 pub const CMD_CUSTOM_THEME_BASE: u16 = 2600;
 pub const CMD_CUSTOM_THEME_LAST: u16 = 2615;
 pub const CMD_REFRESH_NOW: u16 = 2301;
@@ -450,55 +449,56 @@ fn build_context_menu(state: &AppState) -> HMENU {
             "Enable animations",
             state.settings.animations_enabled,
         );
-        let highlight_theme_menu = CreatePopupMenu().expect("CreatePopupMenu");
-        append_menu_item(
-            highlight_theme_menu,
-            CMD_HIGHLIGHT_THEME_DEFAULT,
-            "Default",
-            state.settings.highlight_theme == HighlightTheme::Default,
-        );
-        append_menu_item(
-            highlight_theme_menu,
-            CMD_HIGHLIGHT_THEME_FRAKTUR,
-            "Fraktur",
-            state.settings.highlight_theme == HighlightTheme::Fraktur,
-        );
-        append_menu_item(
-            highlight_theme_menu,
-            CMD_HIGHLIGHT_THEME_DIPLOMA,
-            "Diploma",
-            state.settings.highlight_theme == HighlightTheme::Diploma,
-        );
-        let _ = AppendMenuW(
-            theme_menu,
-            MF_POPUP,
-            highlight_theme_menu.0 as usize,
-            PCWSTR(to_wstring("Highlight theme").as_ptr()),
-        );
         let layout_menu = CreatePopupMenu().expect("CreatePopupMenu");
+        let lunch_item_layout_menu = CreatePopupMenu().expect("CreatePopupMenu");
         append_menu_item(
-            layout_menu,
+            lunch_item_layout_menu,
             CMD_LUNCH_LAYOUT_CLASSIC,
             "Classic",
             state.settings.lunch_item_display_mode == LunchItemDisplayMode::Classic,
         );
         append_menu_item(
-            layout_menu,
+            lunch_item_layout_menu,
             CMD_LUNCH_LAYOUT_STANDARD,
             "Standard",
             state.settings.lunch_item_display_mode == LunchItemDisplayMode::Standard,
         );
         append_menu_item(
-            layout_menu,
+            lunch_item_layout_menu,
             CMD_LUNCH_LAYOUT_COMPACT,
             "Compact",
             state.settings.lunch_item_display_mode == LunchItemDisplayMode::Compact,
         );
         let _ = AppendMenuW(
+            layout_menu,
+            MF_POPUP,
+            lunch_item_layout_menu.0 as usize,
+            PCWSTR(to_wstring("Lunch items").as_ptr()),
+        );
+        let index_menu = CreatePopupMenu().expect("CreatePopupMenu");
+        append_menu_item(
+            index_menu,
+            CMD_RESTAURANT_INDEX_DOTS,
+            "Dots",
+            !state.settings.show_restaurant_index_numbers,
+        );
+        append_menu_item(
+            index_menu,
+            CMD_RESTAURANT_INDEX_NUMBERS,
+            "Numbers",
+            state.settings.show_restaurant_index_numbers,
+        );
+        let _ = AppendMenuW(
+            layout_menu,
+            MF_POPUP,
+            index_menu.0 as usize,
+            PCWSTR(to_wstring("Index").as_ptr()),
+        );
+        let _ = AppendMenuW(
             theme_menu,
             MF_POPUP,
             layout_menu.0 as usize,
-            PCWSTR(to_wstring("Lunch item layout").as_ptr()),
+            PCWSTR(to_wstring("Layout").as_ptr()),
         );
         let _ = AppendMenuW(
             menu,
@@ -509,21 +509,21 @@ fn build_context_menu(state: &AppState) -> HMENU {
         let widget_scale_menu = CreatePopupMenu().expect("CreatePopupMenu");
         append_menu_item(
             widget_scale_menu,
+            CMD_WIDGET_SCALE_SMALL,
+            "Small",
+            state.settings.widget_scale == "small",
+        );
+        append_menu_item(
+            widget_scale_menu,
             CMD_WIDGET_SCALE_NORMAL,
             "Normal",
             state.settings.widget_scale == "normal",
         );
         append_menu_item(
             widget_scale_menu,
-            CMD_WIDGET_SCALE_125,
-            "125%",
-            state.settings.widget_scale == "125",
-        );
-        append_menu_item(
-            widget_scale_menu,
-            CMD_WIDGET_SCALE_150,
-            "150%",
-            state.settings.widget_scale == "150",
+            CMD_WIDGET_SCALE_LARGE,
+            "Large",
+            state.settings.widget_scale == "large",
         );
         let _ = AppendMenuW(
             menu,

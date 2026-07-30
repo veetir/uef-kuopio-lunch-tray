@@ -1,9 +1,59 @@
 import AppKit
+import Combine
 import ServiceManagement
 import XCTest
 @testable import CompassLunch
 
 final class CompassParserTests: XCTestCase {
+    func testMenuBarReentryDismissesOnlyAfterPointerLeaves() {
+        var tracker = MenuBarReentryTracker()
+        tracker.panelOpened()
+
+        XCTAssertFalse(tracker.shouldDismiss(cursorIsInMenuBar: true))
+        XCTAssertFalse(tracker.shouldDismiss(cursorIsInMenuBar: false))
+        XCTAssertTrue(tracker.shouldDismiss(cursorIsInMenuBar: true))
+
+        tracker.panelClosed()
+        XCTAssertFalse(tracker.shouldDismiss(cursorIsInMenuBar: true))
+    }
+
+    @MainActor
+    func testSettingsStateObservesIngredientHighlightsAddedFromMenu() {
+        let defaults = testDefaults()
+        defer { defaults.removePersistentDomain(forName: defaultsSuite(defaults)) }
+        let model = AppModel(
+            defaults: defaults,
+            loginItemService: FakeLoginItemService()
+        )
+        let settings = SettingsState(appModel: model)
+        var settingsChangeCount = 0
+        let observation = settings.objectWillChange.sink {
+            settingsChangeCount += 1
+        }
+
+        model.addIngredientHighlight("tomato")
+
+        XCTAssertEqual(settings.highlightedIngredients, ["tomato"])
+        XCTAssertGreaterThan(settingsChangeCount, 0)
+        withExtendedLifetime(observation) {}
+    }
+
+    @MainActor
+    func testIngredientHighlightEntryTogglesExactMatch() {
+        let defaults = testDefaults()
+        defer { defaults.removePersistentDomain(forName: defaultsSuite(defaults)) }
+        let model = AppModel(
+            defaults: defaults,
+            loginItemService: FakeLoginItemService()
+        )
+
+        model.toggleIngredientHighlight("tomato")
+        XCTAssertEqual(model.highlightedIngredients, ["tomato"])
+
+        model.toggleIngredientHighlight("  TOMATO  ")
+        XCTAssertTrue(model.highlightedIngredients.isEmpty)
+    }
+
     @MainActor
     func testPanelStateRunsConfiguredDismissAction() {
         let panelState = PanelState()
@@ -107,6 +157,44 @@ final class CompassParserTests: XCTestCase {
         XCTAssertNil(AppAppearance.preferredColorScheme)
         XCTAssertFalse(AppAccent.system.overridesSystemAccent)
         XCTAssertTrue(AppAccent.orange.overridesSystemAccent)
+    }
+
+    func testOpeningHoursFollowHelsinkiTime() {
+        XCTAssertEqual(
+            OpeningHoursClock.status(
+                for: "10:30–14:00",
+                at: isoDate("2026-07-30T09:00:00Z")
+            ),
+            .open
+        )
+        XCTAssertEqual(
+            OpeningHoursClock.status(
+                for: "Lunch 10:30–14:00",
+                at: isoDate("2026-07-30T10:45:00Z")
+            ),
+            .closingSoon
+        )
+        XCTAssertEqual(
+            OpeningHoursClock.status(
+                for: "10:30–14:00",
+                at: isoDate("2026-07-30T11:00:00Z")
+            ),
+            .closed
+        )
+        XCTAssertEqual(
+            OpeningHoursClock.status(
+                for: "10:30–14:00",
+                at: isoDate("2026-07-30T07:00:00Z")
+            ),
+            .closed
+        )
+        XCTAssertEqual(
+            OpeningHoursClock.status(
+                for: "10-14",
+                at: isoDate("2026-07-30T09:00:00Z")
+            ),
+            .unknown
+        )
     }
 
     func testMacUpdaterSelectsLatestMacReleaseOnly() throws {
@@ -1045,6 +1133,10 @@ final class CompassParserTests: XCTestCase {
         let defaults = UserDefaults(suiteName: name)!
         defaults.set(name, forKey: "__suite")
         return defaults
+    }
+
+    private func isoDate(_ value: String) -> Date {
+        ISO8601DateFormatter().date(from: value)!
     }
 
     private func defaultsSuite(_ defaults: UserDefaults) -> String {

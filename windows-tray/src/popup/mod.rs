@@ -17,18 +17,16 @@ use crate::settings::Settings;
 use crate::state::{AppState, FetchStatus};
 use crate::util::to_wstring;
 use std::cmp::{max, min};
-use std::ffi::c_void;
 use std::sync::{Arc, Mutex, OnceLock};
 use time::OffsetDateTime;
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{COLORREF, HWND, POINT, RECT};
 use windows::Win32::Graphics::Gdi::{
-    AddFontMemResourceEx, BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC,
-    CreateFontW, CreateSolidBrush, DeleteDC, DeleteObject, EndPaint, FillRect, GetDeviceCaps,
-    GetMonitorInfoW, GetTextExtentPoint32W, GetTextMetricsW, IntersectClipRect, InvalidateRect,
-    MonitorFromPoint, RestoreDC, SaveDC, SelectObject, SetBkMode, SetTextColor, TextOutW, HDC,
-    HFONT, LOGPIXELSY, MONITORINFO, MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, SRCCOPY, TEXTMETRICW,
-    TRANSPARENT,
+    BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW, CreateSolidBrush,
+    DeleteDC, DeleteObject, EndPaint, FillRect, GetDeviceCaps, GetMonitorInfoW,
+    GetTextExtentPoint32W, GetTextMetricsW, IntersectClipRect, InvalidateRect, MonitorFromPoint,
+    RestoreDC, SaveDC, SelectObject, SetBkMode, SetTextColor, TextOutW, HDC, HFONT, LOGPIXELSY,
+    MONITORINFO, MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, SRCCOPY, TEXTMETRICW, TRANSPARENT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GetClientRect, GetCursorPos, GetWindowRect, KillTimer, SetTimer, SetWindowPos, ShowWindow,
@@ -53,6 +51,9 @@ const POPUP_CLOSE_ANIM_MS: i64 = 90;
 const POPUP_SWITCH_ANIM_MS: i64 = 120;
 const POPUP_INTERRUPTED_SWITCH_ANIM_MS: i64 = 80;
 const POPUP_SWITCH_OFFSET_PX: i32 = 6;
+const HEADER_MARKER_DOT_SIZE: i32 = 5;
+const HEADER_MARKER_GAP: i32 = 8;
+const HEADER_MARKER_HIT_SIZE: i32 = 16;
 const FAVORITES_RELOAD_INTERVAL_MS: i64 = 1000;
 const POPUP_DESIRED_SIZE_CACHE_LIMIT: usize = 32;
 const BULLET_PREFIX: &str = "▸ ";
@@ -104,7 +105,6 @@ struct PopupLineBudgetKey {
     today_key: String,
     language: String,
     theme: String,
-    highlight_theme: crate::settings::HighlightTheme,
     widget_scale: String,
     dpi_y: i32,
     enable_antell_restaurants: bool,
@@ -150,11 +150,10 @@ struct PopupDesiredSizeKey {
     error_message: String,
     stale_network_error: bool,
     stale_date: bool,
-    expanded_recipe_id: Option<u32>,
+    expanded_recipe_key: Option<RecipeExpansionKey>,
     enable_antell_restaurants: bool,
     language: String,
     theme: String,
-    highlight_theme: crate::settings::HighlightTheme,
     widget_scale: String,
     dpi_y: i32,
     show_prices: bool,
@@ -183,6 +182,7 @@ enum Line {
     DateTime {
         date: String,
         hours: String,
+        hours_status: HoursStatus,
         stale: bool,
     },
     Subheading {
@@ -199,13 +199,27 @@ enum Line {
         reserve_prefix: Option<String>,
         main: String,
         suffix_segments: Vec<(String, bool)>,
-        recipe_id: Option<u32>,
+        recipe_key: Option<RecipeExpansionKey>,
         ingredient_alert: bool,
     },
     RecipeDetail {
         rows: Vec<RecipeDetailRow>,
     },
     Spacer,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HoursStatus {
+    Unknown,
+    Open,
+    ClosingSoon,
+    Closed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RecipeExpansionKey {
+    recipe_id: u32,
+    instance_id: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -243,7 +257,7 @@ struct SelectableRow {
 struct SelectableLayout {
     hwnd: HWND,
     items: Vec<String>,
-    item_recipe_ids: Vec<Option<u32>>,
+    item_recipe_keys: Vec<Option<RecipeExpansionKey>>,
     item_ingredient_flags: Vec<bool>,
     rows: Vec<SelectableRow>,
     recipe_scroll_rect: Option<RECT>,
@@ -276,7 +290,7 @@ struct SelectionRange {
 struct PopupSelectionState {
     layout: Option<SelectableLayout>,
     drag: Option<SelectionDrag>,
-    expanded_recipe_id: Option<u32>,
+    expanded_recipe_key: Option<RecipeExpansionKey>,
     recipe_scroll_offset_px: i32,
 }
 
@@ -358,7 +372,6 @@ pub enum HeaderButtonAction {
 pub enum PopupCursorKind {
     Arrow,
     Hand,
-    Text,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -463,6 +476,11 @@ pub fn header_button_at(
     interaction::header_button_at(hwnd, settings, x, y)
 }
 
+/// Returns the restaurant marker index under the given client-space point.
+pub fn header_marker_index_at(hwnd: HWND, settings: &Settings, x: i32, y: i32) -> Option<usize> {
+    interaction::header_marker_index_at(hwnd, settings, x, y)
+}
+
 /// Updates the currently hovered header button and returns true when it changed.
 pub fn update_hovered_header_button(hwnd: HWND, action: Option<HeaderButtonAction>) -> bool {
     animation::update_hovered_header_button(hwnd, action)
@@ -471,6 +489,9 @@ pub fn update_hovered_header_button(hwnd: HWND, action: Option<HeaderButtonActio
 /// Returns the cursor affordance for the given client-space popup point.
 pub fn cursor_kind_at(hwnd: HWND, settings: &Settings, x: i32, y: i32) -> PopupCursorKind {
     if header_button_at(hwnd, settings, x, y).is_some() {
+        return PopupCursorKind::Hand;
+    }
+    if header_marker_index_at(hwnd, settings, x, y).is_some() {
         return PopupCursorKind::Hand;
     }
     interaction::content_cursor_kind_at(hwnd, x, y).unwrap_or(PopupCursorKind::Arrow)

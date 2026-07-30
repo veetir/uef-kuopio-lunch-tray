@@ -127,10 +127,10 @@ impl App {
         let _ = save_settings(&state.settings);
     }
 
-    /// Changes the visual style used for highlighted dish-name substrings.
-    pub fn set_highlight_theme(&self, theme: HighlightTheme) {
+    /// Changes how the header communicates restaurant position.
+    pub fn set_restaurant_index_numbers(&self, show_numbers: bool) {
         let mut state = self.state.lock().unwrap();
-        state.settings.highlight_theme = theme;
+        state.settings.show_restaurant_index_numbers = show_numbers;
         let _ = save_settings(&state.settings);
     }
 

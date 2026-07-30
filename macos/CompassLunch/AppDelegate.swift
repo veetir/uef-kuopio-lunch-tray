@@ -1,6 +1,26 @@
 import AppKit
 import SwiftUI
 
+struct MenuBarReentryTracker {
+    private(set) var hasLeftMenuBar = false
+
+    mutating func panelOpened() {
+        hasLeftMenuBar = false
+    }
+
+    mutating func panelClosed() {
+        hasLeftMenuBar = false
+    }
+
+    mutating func shouldDismiss(cursorIsInMenuBar: Bool) -> Bool {
+        if cursorIsInMenuBar {
+            return hasLeftMenuBar
+        }
+        hasLeftMenuBar = true
+        return false
+    }
+}
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let appModel = AppModel.shared
@@ -12,6 +32,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var localEventMonitor: Any?
     private var globalScrollMonitor: Any?
     private var globalClickMonitor: Any?
+    private var menuBarMouseMonitor: Any?
+    private var workspaceObservers: [NSObjectProtocol] = []
+    private var menuBarReentryTracker = MenuBarReentryTracker()
     private var updateCheckTask: Task<Void, Never>?
     private var scrollAccumulator: CGFloat = 0
     private var lastRestaurantScrollAt = Date.distantPast
@@ -37,6 +60,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.statusItem = statusItem
         configurePanel()
         installEventMonitors()
+        installWorkspaceObservers()
 
         Task {
             await appModel.prepareMenusInBackground()
@@ -64,6 +88,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             positionPanel(below: button)
             button.highlight(true)
+            startMenuBarReentryTracking()
             panel.makeKeyAndOrderFront(nil)
             Task {
                 await appModel.refreshIfNeeded()
@@ -72,6 +97,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func hidePanel() {
+        stopMenuBarReentryTracking()
         panel.orderOut(nil)
         statusItem?.button?.highlight(false)
         panelState.isShowingSettings = false
@@ -89,6 +115,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let globalClickMonitor {
             NSEvent.removeMonitor(globalClickMonitor)
         }
+        stopMenuBarReentryTracking()
+        let workspaceNotificationCenter = NSWorkspace.shared.notificationCenter
+        for observer in workspaceObservers {
+            workspaceNotificationCenter.removeObserver(observer)
+        }
+        workspaceObservers.removeAll()
     }
 
     @objc private func terminateApp() {
@@ -209,9 +241,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func installEventMonitors() {
         localEventMonitor = NSEvent.addLocalMonitorForEvents(
-            matching: [.keyDown, .scrollWheel, .leftMouseDown, .rightMouseDown]
+            matching: [
+                .keyDown,
+                .scrollWheel,
+                .leftMouseDown,
+                .rightMouseDown,
+                .mouseMoved
+            ]
         ) { [weak self] event in
             guard let self else { return event }
+            if event.type == .mouseMoved {
+                self.handleMenuBarReentry()
+                return event
+            }
             if event.type == .keyDown, self.handleKeyDown(event) {
                 return nil
             }
@@ -240,6 +282,68 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Task { @MainActor in
                 self?.hidePanel()
             }
+        }
+    }
+
+    private func installWorkspaceObservers() {
+        let notificationCenter = NSWorkspace.shared.notificationCenter
+        let activeSpaceObserver = notificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.hidePanel()
+            }
+        }
+        workspaceObservers.append(activeSpaceObserver)
+    }
+
+    private func startMenuBarReentryTracking() {
+        menuBarReentryTracker.panelOpened()
+        guard menuBarMouseMonitor == nil else { return }
+        menuBarMouseMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: .mouseMoved
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.handleMenuBarReentry()
+            }
+        }
+    }
+
+    private func stopMenuBarReentryTracking() {
+        menuBarReentryTracker.panelClosed()
+        if let menuBarMouseMonitor {
+            NSEvent.removeMonitor(menuBarMouseMonitor)
+            self.menuBarMouseMonitor = nil
+        }
+    }
+
+    private func handleMenuBarReentry() {
+        guard panel.isVisible else { return }
+        if menuBarReentryTracker.shouldDismiss(
+            cursorIsInMenuBar: cursorIsInMenuBarArea()
+        ) {
+            hidePanel()
+        }
+    }
+
+    private func cursorIsInMenuBarArea() -> Bool {
+        let point = NSEvent.mouseLocation
+        guard let screen = screen(containing: point) else { return false }
+        let menuBarHeight = max(
+            NSStatusBar.system.thickness + 4,
+            screen.frame.maxY - screen.visibleFrame.maxY + 4
+        )
+        return point.y >= screen.frame.maxY - menuBarHeight
+    }
+
+    private func screen(containing point: NSPoint) -> NSScreen? {
+        NSScreen.screens.first { screen in
+            point.x >= screen.frame.minX
+                && point.x < screen.frame.maxX
+                && point.y >= screen.frame.minY
+                && point.y <= screen.frame.maxY
         }
     }
 
@@ -345,8 +449,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.hasShadow = true
         panel.isFloatingPanel = true
         panel.hidesOnDeactivate = false
+        panel.acceptsMouseMovedEvents = true
         panel.level = .popUpMenu
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
+        panel.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary, .transient]
         panel.contentViewController?.view.layoutSubtreeIfNeeded()
     }
 

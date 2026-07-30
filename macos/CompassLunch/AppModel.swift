@@ -628,6 +628,10 @@ final class AppModel: ObservableObject {
         TextHighlight.containsExact(meal, in: highlightedMeals)
     }
 
+    func hasExactIngredientHighlight(_ ingredient: String) -> Bool {
+        TextHighlight.containsExact(ingredient, in: highlightedIngredients)
+    }
+
     func toggleMealHighlight(_ meal: String) {
         let value = meal.normalizedWhitespace
         guard !value.isEmpty else { return }
@@ -652,6 +656,22 @@ final class AppModel: ObservableObject {
 
     func addIngredientHighlight(_ value: String) {
         highlightedIngredients = addingHighlight(value, to: highlightedIngredients)
+    }
+
+    func toggleIngredientHighlight(_ value: String) {
+        let normalizedValue = value.normalizedWhitespace
+        guard !normalizedValue.isEmpty else { return }
+        if hasExactIngredientHighlight(normalizedValue) {
+            highlightedIngredients = removingHighlight(
+                normalizedValue,
+                from: highlightedIngredients
+            )
+        } else {
+            highlightedIngredients = addingHighlight(
+                normalizedValue,
+                to: highlightedIngredients
+            )
+        }
     }
 
     func removeIngredientHighlight(_ value: String) {

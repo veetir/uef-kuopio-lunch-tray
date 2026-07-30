@@ -16,8 +16,7 @@ use crate::restaurant::{
     restaurant_for_shortcut_index, Provider, Restaurant,
 };
 use crate::settings::{
-    load_settings, normalize_theme, normalize_widget_scale, save_settings, settings_dir,
-    HighlightTheme, Settings,
+    load_settings, normalize_theme, normalize_widget_scale, save_settings, settings_dir, Settings,
 };
 use crate::state::{AppState, FetchStatus};
 use crate::update;

@@ -1,5 +1,56 @@
 import Foundation
 
+enum OpeningHoursStatus: Equatable {
+    case unknown
+    case open
+    case closingSoon
+    case closed
+}
+
+enum OpeningHoursClock {
+    private static let closingSoonMinutes = 15
+    private static let timePattern = try! NSRegularExpression(
+        pattern: #"(?<!\d)(\d{1,2}):(\d{2})(?!\d)"#
+    )
+
+    static func status(for hours: String, at date: Date) -> OpeningHoursStatus {
+        let times = timeTokens(in: hours)
+        guard times.count >= 2 else { return .unknown }
+
+        let opensAt = times[0]
+        let closesAt = times[1]
+        guard closesAt > opensAt else { return .unknown }
+
+        let now = helsinkiMinutes(at: date)
+        guard now >= opensAt, now < closesAt else { return .closed }
+        return closesAt - now <= closingSoonMinutes ? .closingSoon : .open
+    }
+
+    private static func timeTokens(in value: String) -> [Int] {
+        let range = NSRange(value.startIndex..<value.endIndex, in: value)
+        return timePattern.matches(in: value, range: range).compactMap { match in
+            guard
+                let hourRange = Range(match.range(at: 1), in: value),
+                let minuteRange = Range(match.range(at: 2), in: value),
+                let hour = Int(value[hourRange]),
+                let minute = Int(value[minuteRange]),
+                hour < 24,
+                minute < 60
+            else {
+                return nil
+            }
+            return hour * 60 + minute
+        }
+    }
+
+    private static func helsinkiMinutes(at date: Date) -> Int {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Europe/Helsinki")!
+        let components = calendar.dateComponents([.hour, .minute], from: date)
+        return (components.hour ?? 0) * 60 + (components.minute ?? 0)
+    }
+}
+
 enum AppLanguage: String, CaseIterable, Identifiable, Codable {
     case fi
     case en

@@ -1,5 +1,5 @@
 use super::content::invalidate_favorites_cache;
-use super::layout::{header_layout, popup_scale_for_dpi};
+use super::layout::{header_layout, header_marker_rects, popup_scale_for_dpi};
 use super::*;
 
 const CLICK_SLOP_PX: i32 = 3;
@@ -31,6 +31,28 @@ pub(super) fn header_button_at(
             return Some(HeaderButtonAction::Close);
         }
         None
+    }
+}
+
+pub(super) fn header_marker_index_at(
+    hwnd: HWND,
+    settings: &Settings,
+    x: i32,
+    y: i32,
+) -> Option<usize> {
+    unsafe {
+        let mut rect = RECT::default();
+        if GetClientRect(hwnd, &mut rect).is_err() {
+            return None;
+        }
+        let width = rect.right - rect.left;
+        let hdc = windows::Win32::Graphics::Gdi::GetDC(hwnd);
+        let dpi_y = GetDeviceCaps(hdc, LOGPIXELSY);
+        windows::Win32::Graphics::Gdi::ReleaseDC(hwnd, hdc);
+        let scale = popup_scale_for_dpi(settings, dpi_y);
+        header_marker_rects(width, settings, &scale)
+            .iter()
+            .position(|marker| point_in_rect(marker, x, y))
     }
 }
 
@@ -112,12 +134,12 @@ pub(super) fn finish_text_selection(hwnd: HWND, x: i32, y: i32) -> bool {
             {
                 None
             } else {
-                let recipe_id = layout.item_recipe_ids.get(drag.item_id).copied().flatten();
-                if let Some(recipe_id) = recipe_id {
-                    state.expanded_recipe_id = if state.expanded_recipe_id == Some(recipe_id) {
+                let recipe_key = layout.item_recipe_keys.get(drag.item_id).copied().flatten();
+                if let Some(recipe_key) = recipe_key {
+                    state.expanded_recipe_key = if state.expanded_recipe_key == Some(recipe_key) {
                         None
                     } else {
-                        Some(recipe_id)
+                        Some(recipe_key)
                     };
                     state.recipe_scroll_offset_px = 0;
                     Some(TextInteractionOutcome::ToggleRecipe)
@@ -226,7 +248,7 @@ pub(super) fn clear_selection_state(hwnd: HWND) {
         state.layout = None;
     }
     state.drag = None;
-    state.expanded_recipe_id = None;
+    state.expanded_recipe_key = None;
     state.recipe_scroll_offset_px = 0;
 }
 
@@ -252,8 +274,15 @@ pub(super) fn store_selection_layout(layout: SelectableLayout) {
     }
 }
 
-pub(in crate::popup) fn expanded_recipe_id() -> Option<u32> {
-    selection_state().lock().ok()?.expanded_recipe_id
+pub(in crate::popup) fn expanded_recipe_key() -> Option<RecipeExpansionKey> {
+    selection_state().lock().ok()?.expanded_recipe_key
+}
+
+#[cfg(test)]
+pub(in crate::popup) fn set_expanded_recipe_key_for_test(key: Option<RecipeExpansionKey>) {
+    let mut state = selection_state().lock().expect("selection state lock");
+    state.expanded_recipe_key = key;
+    state.recipe_scroll_offset_px = 0;
 }
 
 pub(in crate::popup) fn recipe_detail_scroll_offset_px() -> i32 {
@@ -312,11 +341,11 @@ pub(super) fn collapse_recipe_detail_at(hwnd: HWND, x: i32, y: i32) -> bool {
     let Some(rect) = layout.recipe_scroll_rect else {
         return false;
     };
-    if !point_in_rect(&rect, x, y) || state.expanded_recipe_id.is_none() {
+    if !point_in_rect(&rect, x, y) || state.expanded_recipe_key.is_none() {
         return false;
     }
 
-    state.expanded_recipe_id = None;
+    state.expanded_recipe_key = None;
     state.recipe_scroll_offset_px = 0;
     request_repaint(hwnd);
     true
@@ -330,7 +359,7 @@ pub(super) fn content_cursor_kind_at(hwnd: HWND, x: i32, y: i32) -> Option<Popup
     }
     let (row, _) = hit_test_row(layout, x, y)?;
     if layout
-        .item_recipe_ids
+        .item_recipe_keys
         .get(row.item_id)
         .copied()
         .flatten()
@@ -343,7 +372,7 @@ pub(super) fn content_cursor_kind_at(hwnd: HWND, x: i32, y: i32) -> Option<Popup
     {
         Some(PopupCursorKind::Hand)
     } else {
-        Some(PopupCursorKind::Text)
+        Some(PopupCursorKind::Arrow)
     }
 }
 

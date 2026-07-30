@@ -8,90 +8,6 @@ use super::text::{
 };
 use super::*;
 
-const BREITKOPF_FRAKTUR_FONT: &[u8] = include_bytes!("../../../assets/fonts/BreitkopfFraktur.ttf");
-const DIPLOMA_FONT: &[u8] = include_bytes!("../../../assets/fonts/diploma.ttf");
-static BREITKOPF_FRAKTUR_LOADED: OnceLock<bool> = OnceLock::new();
-static DIPLOMA_LOADED: OnceLock<bool> = OnceLock::new();
-
-struct HighlightFontDef {
-    bytes: &'static [u8],
-    loaded: &'static OnceLock<bool>,
-    face: &'static str,
-    point_size: i32,
-}
-
-fn highlight_font_def(
-    highlight_theme: crate::settings::HighlightTheme,
-) -> Option<HighlightFontDef> {
-    match highlight_theme {
-        crate::settings::HighlightTheme::Fraktur => Some(HighlightFontDef {
-            bytes: BREITKOPF_FRAKTUR_FONT,
-            loaded: &BREITKOPF_FRAKTUR_LOADED,
-            face: "Breitkopf Fraktur",
-            point_size: 16,
-        }),
-        crate::settings::HighlightTheme::Diploma => Some(HighlightFontDef {
-            bytes: DIPLOMA_FONT,
-            loaded: &DIPLOMA_LOADED,
-            face: "Diploma",
-            point_size: 16,
-        }),
-        crate::settings::HighlightTheme::Default => None,
-    }
-}
-
-fn ensure_highlight_font_loaded(def: &HighlightFontDef) -> bool {
-    *def.loaded.get_or_init(|| unsafe {
-        let mut font_count = 0u32;
-        let handle = AddFontMemResourceEx(
-            def.bytes.as_ptr() as *const c_void,
-            def.bytes.len() as u32,
-            None,
-            &mut font_count,
-        );
-        handle.0 != 0 && font_count > 0
-    })
-}
-
-fn create_highlight_font(
-    _hdc: HDC,
-    scale_factor: f32,
-    fallback_font: HFONT,
-    highlight_theme: crate::settings::HighlightTheme,
-) -> HFONT {
-    let Some(def) = highlight_font_def(highlight_theme) else {
-        return fallback_font;
-    };
-    if !ensure_highlight_font_loaded(&def) {
-        return fallback_font;
-    }
-    unsafe {
-        let height = -MulDiv(scale_px(def.point_size, scale_factor).max(9), BASE_DPI, 72);
-        let face = to_wstring(def.face);
-        let font = CreateFontW(
-            height,
-            0,
-            0,
-            0,
-            700,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            PCWSTR(face.as_ptr()),
-        );
-        if font.0 == 0 {
-            fallback_font
-        } else {
-            font
-        }
-    }
-}
-
 pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
     unsafe {
         let mut ps = PAINTSTRUCT::default();
@@ -126,10 +42,9 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
 
         let dpi_y = GetDeviceCaps(hdc, LOGPIXELSY);
         let scale = popup_scale_for_dpi(&state.settings, dpi_y);
-        let (normal_font, bold_font, small_font, small_bold_font) =
+        let (normal_font, bold_font, bold_italic_font, small_font, small_bold_font) =
             create_fonts(hdc, &state.settings.theme, scale.factor);
-        let highlight_font =
-            create_highlight_font(hdc, scale.factor, bold_font, state.settings.highlight_theme);
+        let highlight_font = bold_font;
         let _old_font = SelectObject(hdc, normal_font);
 
         let metrics = text_metrics(hdc, normal_font);
@@ -180,6 +95,16 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
             normal_font,
             false,
             hovered_button == Some(HeaderButtonAction::Close),
+        );
+        draw_header_marker_rail(
+            hdc,
+            width,
+            &state.settings,
+            &scale,
+            palette.header_bg_color,
+            palette.header_title_color,
+            palette.divider_color,
+            small_font,
         );
 
         let divider_rect = RECT {
@@ -241,6 +166,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                             line_height,
                             normal_font,
                             bold_font,
+                            bold_italic_font,
                             highlight_font,
                             small_font,
                             small_bold_font,
@@ -303,6 +229,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                             line_height,
                             normal_font,
                             bold_font,
+                            bold_italic_font,
                             highlight_font,
                             small_font,
                             small_bold_font,
@@ -400,6 +327,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                             line_height,
                             normal_font,
                             bold_font,
+                            bold_italic_font,
                             highlight_font,
                             small_font,
                             small_bold_font,
@@ -437,6 +365,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                             line_height,
                             normal_font,
                             bold_font,
+                            bold_italic_font,
                             highlight_font,
                             small_font,
                             small_bold_font,
@@ -485,6 +414,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                     line_height,
                     normal_font,
                     bold_font,
+                    bold_italic_font,
                     highlight_font,
                     small_font,
                     small_bold_font,
@@ -498,11 +428,9 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
         }
 
         SelectObject(hdc, _old_font);
-        if highlight_font.0 != bold_font.0 {
-            DeleteObject(highlight_font);
-        }
         DeleteObject(normal_font);
         DeleteObject(bold_font);
+        DeleteObject(bold_italic_font);
         DeleteObject(small_font);
         DeleteObject(small_bold_font);
         let _ = BitBlt(paint_hdc, 0, 0, width, height, hdc, 0, 0, SRCCOPY);
@@ -537,6 +465,7 @@ struct DrawLayerParams<'a> {
     line_height: i32,
     normal_font: HFONT,
     bold_font: HFONT,
+    bold_italic_font: HFONT,
     highlight_font: HFONT,
     small_font: HFONT,
     small_bold_font: HFONT,
@@ -604,21 +533,29 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                     }
                 }
             }
-            Line::DateTime { date, hours, stale } => {
+            Line::DateTime {
+                date,
+                hours,
+                hours_status,
+                stale,
+            } => {
                 y = draw_date_time_line(
                     hdc,
                     date,
                     hours,
+                    *hours_status,
                     y,
                     params.scale,
                     params.content_width,
                     params.line_height,
                     params.bold_font,
+                    params.bold_italic_font,
                     if *stale {
                         stale_warning_color
                     } else {
                         params.heading_color
                     },
+                    params.bg_color,
                 );
             }
             Line::Subheading {
@@ -738,7 +675,7 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                 reserve_prefix,
                 main,
                 suffix_segments,
-                recipe_id,
+                recipe_key,
                 ingredient_alert,
             } => {
                 let line_body_color = if dim_line {
@@ -786,7 +723,7 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                 let item_id = if let Some(ref mut draw_capture) = capture {
                     let id = draw_capture.layout.items.len();
                     draw_capture.layout.items.push(main.clone());
-                    draw_capture.layout.item_recipe_ids.push(*recipe_id);
+                    draw_capture.layout.item_recipe_keys.push(*recipe_key);
                     draw_capture.layout.item_ingredient_flags.push(false);
                     Some(id)
                 } else {
@@ -1251,12 +1188,15 @@ fn draw_date_time_line(
     hdc: HDC,
     date: &str,
     hours: &str,
+    hours_status: HoursStatus,
     y: i32,
     scale: PopupScale,
     content_width: i32,
     line_height: i32,
     font: HFONT,
+    italic_font: HFONT,
     color: COLORREF,
+    bg_color: COLORREF,
 ) -> i32 {
     unsafe {
         SelectObject(hdc, font);
@@ -1267,8 +1207,20 @@ fn draw_date_time_line(
     let date_width = text_width_with_font(hdc, font, date);
     let hours_width = text_width_with_font(hdc, font, hours);
     let gap_width = text_width_with_font(hdc, font, " ");
+    let hours_font = match hours_status {
+        HoursStatus::ClosingSoon => italic_font,
+        _ => font,
+    };
+    let hours_color = match hours_status {
+        HoursStatus::Closed => subtle_dim_color(bg_color, color),
+        _ => color,
+    };
 
     if date.is_empty() {
+        unsafe {
+            SelectObject(hdc, hours_font);
+            SetTextColor(hdc, hours_color);
+        }
         draw_text_line(hdc, hours, left, y);
         return y + line_height + METADATA_BOTTOM_GAP_PX;
     }
@@ -1277,13 +1229,79 @@ fn draw_date_time_line(
         return y + line_height + METADATA_BOTTOM_GAP_PX;
     }
     if date_width + gap_width + hours_width <= content_width {
+        unsafe {
+            SelectObject(hdc, font);
+            SetTextColor(hdc, color);
+        }
         draw_text_line(hdc, date, left, y);
+        unsafe {
+            SelectObject(hdc, hours_font);
+            SetTextColor(hdc, hours_color);
+        }
         draw_text_line(hdc, hours, left + date_width + gap_width, y);
         y + line_height + METADATA_BOTTOM_GAP_PX
     } else {
+        unsafe {
+            SelectObject(hdc, font);
+            SetTextColor(hdc, color);
+        }
         draw_text_line(hdc, date, left, y);
+        unsafe {
+            SelectObject(hdc, hours_font);
+            SetTextColor(hdc, hours_color);
+        }
         draw_text_line(hdc, hours, left, y + line_height);
         y + line_height * 2 + METADATA_BOTTOM_GAP_PX
+    }
+}
+
+fn draw_header_marker_rail(
+    hdc: HDC,
+    width: i32,
+    settings: &Settings,
+    scale: &PopupScale,
+    header_bg_color: COLORREF,
+    active_color: COLORREF,
+    inactive_color: COLORREF,
+    font: HFONT,
+) {
+    let restaurants = available_restaurants(settings.enable_antell_restaurants);
+    if restaurants.len() <= 1 || settings.show_restaurant_index_numbers {
+        return;
+    }
+    let active_index = restaurants
+        .iter()
+        .position(|restaurant| restaurant.code == settings.restaurant_code)
+        .unwrap_or(0);
+    let hit_rects = header_marker_rects(width, settings, scale);
+    let active_marker = "●";
+    let inactive_marker = "•";
+    let marker_height = text_metrics(hdc, font).tmHeight as i32;
+    for (idx, hit_rect) in hit_rects.iter().enumerate() {
+        let center_x = (hit_rect.left + hit_rect.right) / 2;
+        let center_y = (hit_rect.top + hit_rect.bottom) / 2;
+        let active = idx == active_index;
+        let marker = if active {
+            active_marker
+        } else {
+            inactive_marker
+        };
+        let marker_width = text_width_with_font(hdc, font, marker);
+        let color = if active {
+            active_color
+        } else {
+            lerp_color(header_bg_color, inactive_color, 0.45)
+        };
+        unsafe {
+            SelectObject(hdc, font);
+            SetTextColor(hdc, color);
+        }
+        draw_text_line(
+            hdc,
+            marker,
+            center_x - marker_width / 2,
+            center_y - marker_height / 2,
+        );
     }
 }
 
@@ -1294,6 +1312,10 @@ fn stale_dim_color(bg_color: COLORREF) -> COLORREF {
     } else {
         rgb(105, 105, 105)
     }
+}
+
+fn subtle_dim_color(bg_color: COLORREF, color: COLORREF) -> COLORREF {
+    lerp_color(color, bg_color, 0.30)
 }
 
 fn stale_warning_color(bg_color: COLORREF, _fallback: COLORREF) -> COLORREF {
@@ -1482,7 +1504,7 @@ fn draw_recipe_detail_block(
             if let Some(ref mut draw_capture) = capture {
                 let id = draw_capture.layout.items.len();
                 draw_capture.layout.items.push(layout.value.clone());
-                draw_capture.layout.item_recipe_ids.push(None);
+                draw_capture.layout.item_recipe_keys.push(None);
                 draw_capture.layout.item_ingredient_flags.push(true);
                 Some(id)
             } else {

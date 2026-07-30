@@ -189,6 +189,47 @@ function checkHelsinkiDate(ApiAdapter) {
   );
 }
 
+function checkOpeningHours(MenuFormatter) {
+  assert(
+    MenuFormatter.hoursStatusAt("10:30–14:00", 12 * 60) === "open",
+    "hours are open during service"
+  );
+  assert(
+    MenuFormatter.hoursStatusAt("Lunch 10:30–14:00", 13 * 60 + 45)
+      === "closingSoon",
+    "hours are closing soon at fifteen minutes"
+  );
+  assert(
+    MenuFormatter.hoursStatusAt("10:30–14:00", 14 * 60) === "closed",
+    "hours are closed at the closing instant"
+  );
+  assert(
+    MenuFormatter.hoursStatusAt("10-14", 12 * 60) === "unknown",
+    "ambiguous hours remain unstyled"
+  );
+  assert(
+    MenuFormatter.hoursStatus(
+      "10:30–14:00",
+      new Date("2026-07-30T10:45:00Z")
+    ) === "closingSoon",
+    "hours use Helsinki daylight-saving time"
+  );
+  const rich = MenuFormatter.dateAndTimeLineRich(
+    {
+      dateIso: "2026-07-30",
+      lunchTime: "10:30–14:00"
+    },
+    "en",
+    new Date("2026-07-30T11:00:00Z"),
+    "#202020",
+    "#ffffff"
+  );
+  assert(
+    rich.includes("<font color=") && rich.includes("10:30–14:00</font>"),
+    "closed hours are dimmed independently from the date"
+  );
+}
+
 function checkRetryBudget(ApiAdapter) {
   const date = "2026-07-24";
   const now = 1000000;
@@ -218,6 +259,26 @@ function checkRetryBudget(ApiAdapter) {
   assert(
     ApiAdapter.retrySchedule(4, date, "2026-07-25", now).failureCount === 1,
     "retry budget resets on a new day"
+  );
+  const cachedFailure = ApiAdapter.retryStateAfterFailure(
+    true,
+    3,
+    date,
+    date,
+    now
+  );
+  assert(
+    cachedFailure.failureCount === 0
+      && cachedFailure.nextRetryEpochMs === 0,
+    "cached payloads do not consume the network retry budget"
+  );
+  assert(
+    ApiAdapter.menuStateFreshForDate("ok", true, date, date),
+    "current successful menu is fresh"
+  );
+  assert(
+    !ApiAdapter.menuStateFreshForDate("stale", true, date, date),
+    "current-date stale payload still needs refresh"
   );
   assert(
     !ApiAdapter.automaticRetryDue(4, date, date, 0, now),
@@ -265,6 +326,7 @@ function main() {
   checkAudienceFiltering(ApiAdapter, MenuFormatter);
   checkServiceStates(ApiAdapter);
   checkHelsinkiDate(ApiAdapter);
+  checkOpeningHours(MenuFormatter);
   checkRetryBudget(ApiAdapter);
   process.stdout.write("Normalized API checks passed\n");
 }

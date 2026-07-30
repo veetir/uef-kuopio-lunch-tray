@@ -12,14 +12,6 @@ pub enum LunchItemDisplayMode {
     Compact,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum HighlightTheme {
-    Default,
-    Fraktur,
-    Diploma,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Persisted settings that drive fetch behavior and popup rendering.
 pub struct Settings {
@@ -34,7 +26,7 @@ pub struct Settings {
     pub lunch_item_display_mode: LunchItemDisplayMode,
     pub hide_expensive_student_meals: bool,
     pub theme: String,
-    pub highlight_theme: HighlightTheme,
+    pub show_restaurant_index_numbers: bool,
     pub widget_scale: String,
     pub show_allergens: bool,
     pub highlight_gluten_free: bool,
@@ -60,7 +52,7 @@ impl Default for Settings {
             lunch_item_display_mode: LunchItemDisplayMode::Classic,
             hide_expensive_student_meals: false,
             theme: "dark".to_string(),
-            highlight_theme: HighlightTheme::Default,
+            show_restaurant_index_numbers: false,
             widget_scale: "normal".to_string(),
             show_allergens: true,
             highlight_gluten_free: false,
@@ -116,7 +108,7 @@ struct RawSettings {
     lunch_item_display_mode: Option<String>,
     hide_expensive_student_meals: Option<bool>,
     theme: Option<String>,
-    highlight_theme: Option<String>,
+    show_restaurant_index_numbers: Option<bool>,
     widget_scale: Option<String>,
     dark_mode: Option<bool>,
     show_allergens: Option<bool>,
@@ -190,11 +182,9 @@ fn decode_settings(data: &str) -> anyhow::Result<Settings> {
             .hide_expensive_student_meals
             .unwrap_or(defaults.hide_expensive_student_meals),
         theme,
-        highlight_theme: raw
-            .highlight_theme
-            .as_deref()
-            .map(normalize_highlight_theme)
-            .unwrap_or(defaults.highlight_theme),
+        show_restaurant_index_numbers: raw
+            .show_restaurant_index_numbers
+            .unwrap_or(defaults.show_restaurant_index_numbers),
         widget_scale,
         show_allergens,
         highlight_gluten_free: raw
@@ -244,9 +234,9 @@ pub fn normalize_theme(value: &str) -> String {
 /// Normalizes user-facing scale values to the supported scale presets.
 pub fn normalize_widget_scale(value: &str) -> String {
     match value.to_ascii_lowercase().as_str() {
-        "normal" | "100" | "100%" => "normal".to_string(),
-        "125" | "125%" => "125".to_string(),
-        "150" | "150%" => "150".to_string(),
+        "small" | "100" | "100%" => "small".to_string(),
+        "normal" | "125" | "125%" => "normal".to_string(),
+        "large" | "150" | "150%" => "large".to_string(),
         _ => "normal".to_string(),
     }
 }
@@ -258,16 +248,6 @@ pub fn normalize_lunch_item_display_mode(value: &str) -> LunchItemDisplayMode {
         "compact" => LunchItemDisplayMode::Compact,
         "standard" => LunchItemDisplayMode::Standard,
         _ => LunchItemDisplayMode::Classic,
-    }
-}
-
-/// Normalizes user-facing highlight theme values to the supported presets.
-pub fn normalize_highlight_theme(value: &str) -> HighlightTheme {
-    match value.to_ascii_lowercase().as_str() {
-        "fraktur" => HighlightTheme::Fraktur,
-        "diploma" | "gta" | "gta-san-andreas" => HighlightTheme::Diploma,
-        "default" => HighlightTheme::Default,
-        _ => HighlightTheme::Default,
     }
 }
 
@@ -288,6 +268,7 @@ mod tests {
         assert!(settings.show_staff_price);
         assert!(settings.show_guest_price);
         assert!(!settings.show_price_group_names);
+        assert!(!settings.show_restaurant_index_numbers);
         assert!(settings.show_allergens);
     }
 
@@ -329,14 +310,24 @@ mod tests {
     }
 
     #[test]
-    fn highlight_theme_decodes_supported_values() {
-        let settings = decode_settings(r#"{"highlight_theme":"fraktur"}"#).unwrap();
+    fn widget_scale_decodes_named_and_legacy_percentage_values() {
+        let settings = decode_settings(r#"{"widget_scale":"small"}"#).unwrap();
+        assert_eq!(settings.widget_scale, "small");
 
-        assert_eq!(settings.highlight_theme, HighlightTheme::Fraktur);
+        let settings = decode_settings(r#"{"widget_scale":"normal"}"#).unwrap();
+        assert_eq!(settings.widget_scale, "normal");
 
-        let settings = decode_settings(r#"{"highlight_theme":"diploma"}"#).unwrap();
+        let settings = decode_settings(r#"{"widget_scale":"large"}"#).unwrap();
+        assert_eq!(settings.widget_scale, "large");
 
-        assert_eq!(settings.highlight_theme, HighlightTheme::Diploma);
+        let settings = decode_settings(r#"{"widget_scale":"100%"}"#).unwrap();
+        assert_eq!(settings.widget_scale, "small");
+
+        let settings = decode_settings(r#"{"widget_scale":"125"}"#).unwrap();
+        assert_eq!(settings.widget_scale, "normal");
+
+        let settings = decode_settings(r#"{"widget_scale":"150"}"#).unwrap();
+        assert_eq!(settings.widget_scale, "large");
     }
 
     #[test]

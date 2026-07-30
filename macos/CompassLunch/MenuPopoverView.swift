@@ -298,9 +298,10 @@ struct MenuPopoverView: View {
     private func menuMetadata(_ snapshot: MenuSnapshot) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             if let menu = snapshot.menu {
-                Text(displayDate(menu.date, lunchTime: menu.lunchTime))
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.secondary)
+                TimelineView(.periodic(from: .now, by: 60)) { context in
+                    metadataText(menu, at: context.date)
+                        .font(.system(size: 16, weight: .semibold))
+                }
             }
         }
     }
@@ -309,21 +310,41 @@ struct MenuPopoverView: View {
         appModel.language == .fi ? finnish : english
     }
 
-    private func displayDate(_ date: String, lunchTime: String) -> String {
+    private func metadataText(_ menu: LunchMenu, at date: Date) -> Text {
+        let dateText = displayDate(menu.date)
+        let hours = menu.lunchTime.normalizedWhitespace
+        let normalColor = Color(nsColor: .secondaryLabelColor)
+        var result = Text(dateText).foregroundColor(normalColor)
+
+        guard !hours.isEmpty else { return result }
+        if !dateText.isEmpty {
+            result = result + Text(" · ").foregroundColor(normalColor)
+        }
+
+        let status = OpeningHoursClock.status(for: hours, at: date)
+        var hoursText = Text(hours).foregroundColor(
+            status == .closed ? normalColor.opacity(0.7) : normalColor
+        )
+        if status == .closingSoon {
+            hoursText = hoursText.italic()
+        }
+        return result + hoursText
+    }
+
+    private func displayDate(_ date: String) -> String {
         let input = DateFormatter()
         input.calendar = Calendar(identifier: .gregorian)
         input.locale = Locale(identifier: "en_US_POSIX")
         input.dateFormat = "yyyy-MM-dd"
 
         guard let parsed = input.date(from: date) else {
-            return [date, lunchTime].filter { !$0.isEmpty }.joined(separator: " · ")
+            return date
         }
 
         let output = DateFormatter()
         output.locale = Locale(identifier: appModel.language == .fi ? "fi_FI" : "en_FI")
         output.dateStyle = .full
-        let formatted = output.string(from: parsed)
-        return [formatted, lunchTime].filter { !$0.isEmpty }.joined(separator: " · ")
+        return output.string(from: parsed)
     }
 }
 
@@ -664,15 +685,19 @@ private struct RecipeDetailView: View {
                 text: $ingredientHighlight
             )
             .textFieldStyle(.roundedBorder)
-            .onSubmit(addIngredientHighlight)
+            .onSubmit(toggleIngredientHighlight)
 
             HStack {
                 Spacer()
                 Button(localized("Cancel", "Peruuta")) {
                     isAddingIngredientHighlight = false
                 }
-                Button(localized("Add", "Lisää")) {
-                    addIngredientHighlight()
+                Button(
+                    ingredientHighlightIsSelected
+                        ? localized("Remove", "Poista")
+                        : localized("Add", "Lisää")
+                ) {
+                    toggleIngredientHighlight()
                 }
                 .keyboardShortcut(.defaultAction)
                 .disabled(ingredientHighlight.normalizedWhitespace.isEmpty)
@@ -741,10 +766,14 @@ private struct RecipeDetailView: View {
         return String(format: "%.1f", amount)
     }
 
-    private func addIngredientHighlight() {
+    private var ingredientHighlightIsSelected: Bool {
+        appModel.hasExactIngredientHighlight(ingredientHighlight)
+    }
+
+    private func toggleIngredientHighlight() {
         let value = ingredientHighlight.normalizedWhitespace
         guard !value.isEmpty else { return }
-        appModel.addIngredientHighlight(value)
+        appModel.toggleIngredientHighlight(value)
         isAddingIngredientHighlight = false
     }
 

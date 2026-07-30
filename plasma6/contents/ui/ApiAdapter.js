@@ -53,6 +53,34 @@ function retrySchedule(previousCount, previousDate, currentDate, nowMs) {
     };
 }
 
+function retryStateAfterFailure(
+    fromCache,
+    previousCount,
+    previousDate,
+    currentDate,
+    nowMs
+) {
+    if (fromCache) {
+        return {
+            failureCount: 0,
+            retryDateIso: currentDate,
+            nextRetryEpochMs: 0
+        };
+    }
+    return retrySchedule(previousCount, previousDate, currentDate, nowMs);
+}
+
+function menuStateFreshForDate(
+    status,
+    providerDateValid,
+    menuDateIso,
+    currentDateIso
+) {
+    return normalizeText(status) !== "stale"
+        && !!providerDateValid
+        && normalizeText(menuDateIso) === normalizeText(currentDateIso);
+}
+
 function automaticRetryDue(
     failureCount,
     retryDate,

@@ -42,6 +42,7 @@ Item {
     property double lastSnapshotRequestEpochMs: 0
     property int minimumSnapshotRequestIntervalMs: 60000
     property int modelVersion: 0
+    property int clockRevision: 0
     property bool initialized: false
     property string lastObservedDateIso: ""
     property int refreshProbeIntervalMs: 60000
@@ -343,7 +344,12 @@ Item {
         if (!state) {
             return false
         }
-        return !!state.providerDateValid && MenuFormatter.normalizeText(state.menuDateIso) === todayIso()
+        return ApiAdapter.menuStateFreshForDate(
+            state.status,
+            state.providerDateValid,
+            state.menuDateIso,
+            todayIso()
+        )
     }
 
     function isAllowedExternalUrl(rawUrl) {
@@ -449,13 +455,14 @@ Item {
         }
     }
 
-    function setErrorStateForCode(code, message) {
+    function setErrorStateForCode(code, message, fromCache) {
         var current = stateFor(code)
         if (current.status === "ok" && isStateFreshForToday(current)) {
             return
         }
 
-        var retry = ApiAdapter.retrySchedule(
+        var retry = ApiAdapter.retryStateAfterFailure(
+            !!fromCache,
             current.consecutiveFailures,
             current.retryDateIso,
             todayIso(),
@@ -480,7 +487,7 @@ Item {
         try {
             apiPayload = JSON.parse(payloadText)
         } catch (apiError) {
-            setErrorStateForCode(code, "Invalid JSON payload")
+            setErrorStateForCode(code, "Invalid JSON payload", fromCache)
             return false
         }
 
@@ -493,7 +500,8 @@ Item {
         if (!apiMenu || apiMenu.error) {
             setErrorStateForCode(
                 code,
-                apiMenu && apiMenu.error ? apiMenu.error : "Invalid API response"
+                apiMenu && apiMenu.error ? apiMenu.error : "Invalid API response",
+                fromCache
             )
             return false
         }
@@ -503,7 +511,8 @@ Item {
         var current = stateFor(code)
         var stale = !!apiMenu.isStale
         var retry = stale
-            ? ApiAdapter.retrySchedule(
+            ? ApiAdapter.retryStateAfterFailure(
+                !!fromCache,
                 current.consecutiveFailures,
                 current.retryDateIso,
                 todayIso(),
@@ -801,7 +810,7 @@ Item {
         activeRestaurantCode = codes[nextIdx]
 
         if (!isStateFreshForToday(stateFor(activeRestaurantCode))) {
-            evaluateFreshnessAndRefresh(false, false)
+            evaluateFreshnessAndRefresh(true, false)
         }
     }
 
@@ -840,6 +849,7 @@ Item {
     }
 
     function tooltipSubTextRich() {
+        var _clock = clockRevision
         var state = stateFor(activeRestaurantCode)
         var isCompassProvider = false
         return MenuFormatter.buildTooltipSubTextRich(
@@ -859,7 +869,10 @@ Item {
             configHighlightVeg,
             configHighlightLactoseFree,
             state.serviceState,
-            state.errorMessage
+            state.errorMessage,
+            new Date(),
+            String(PlasmaCore.Theme.textColor),
+            String(PlasmaCore.Theme.backgroundColor)
         )
     }
 
@@ -881,7 +894,7 @@ Item {
     onConfigRestaurantCodeChanged: {
         activeRestaurantCode = configRestaurantCode
         if (!isStateFreshForToday(stateFor(activeRestaurantCode))) {
-            fetchDailySnapshot(false)
+            evaluateFreshnessAndRefresh(true, false)
         }
         syncSettingsLastUpdatedDisplay()
     }
@@ -949,7 +962,10 @@ Item {
         interval: root.refreshProbeIntervalMs
         running: true
         repeat: true
-        onTriggered: root.refreshIfDateChangedOrStale()
+        onTriggered: {
+            root.clockRevision += 1
+            root.refreshIfDateChangedOrStale()
+        }
     }
 
     Timer {

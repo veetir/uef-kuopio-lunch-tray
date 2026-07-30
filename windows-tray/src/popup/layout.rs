@@ -19,8 +19,8 @@ pub(super) use text::{
     wrap_text_to_width_with_font_rows,
 };
 pub(super) use window::{
-    create_fonts, header_layout, header_title, hide_popup, resize_popup_keep_position, show_popup,
-    show_popup_at, show_popup_for_tray_icon,
+    create_fonts, header_layout, header_marker_rects, header_title, hide_popup,
+    resize_popup_keep_position, show_popup, show_popup_at, show_popup_for_tray_icon,
 };
 
 pub(super) fn scale_px(base: i32, factor: f32) -> i32 {
@@ -29,9 +29,9 @@ pub(super) fn scale_px(base: i32, factor: f32) -> i32 {
 
 fn widget_scale_factor(value: &str) -> f32 {
     match value {
-        "125" => 1.25,
-        "150" => 1.50,
-        _ => 1.0,
+        "small" => 1.0,
+        "large" => 1.50,
+        _ => 1.25,
     }
 }
 
