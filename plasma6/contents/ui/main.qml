@@ -875,8 +875,8 @@ PlasmoidItem {
             state.serviceState,
             state.errorMessage,
             new Date(),
-            String(PlasmaCore.Theme.textColor),
-            String(PlasmaCore.Theme.backgroundColor)
+            String(Kirigami.Theme.textColor),
+            String(Kirigami.Theme.backgroundColor)
         )
     }
 
@@ -1059,10 +1059,10 @@ PlasmoidItem {
 
         Rectangle {
             anchors.fill: parent
-            color: PlasmaCore.Theme.backgroundColor
+            color: Kirigami.Theme.backgroundColor
             radius: Kirigami.Units.smallSpacing * 2
             border.width: 1
-            border.color: PlasmaCore.Theme.highlightColor
+            border.color: Kirigami.Theme.highlightColor
 
             Flickable {
                 id: flick

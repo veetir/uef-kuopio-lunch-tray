@@ -318,6 +318,17 @@ function checkRetryBudget(ApiAdapter) {
   );
 }
 
+function checkPlasma6ThemeApi() {
+  const mainQml = fs.readFileSync(
+    path.join(__dirname, "../contents/ui/main.qml"),
+    "utf8"
+  );
+  assert(
+    !mainQml.includes("PlasmaCore.Theme."),
+    "Plasma 6 QML uses Kirigami theme colors"
+  );
+}
+
 function main() {
   const ApiAdapter = loadQmlLibrary("../contents/ui/ApiAdapter.js");
   const MenuFormatter = loadQmlLibrary("../contents/ui/MenuFormatter.js");
@@ -328,6 +339,7 @@ function main() {
   checkHelsinkiDate(ApiAdapter);
   checkOpeningHours(MenuFormatter);
   checkRetryBudget(ApiAdapter);
+  checkPlasma6ThemeApi();
   process.stdout.write("Normalized API checks passed\n");
 }
 
