@@ -397,7 +397,14 @@ fn parse_lunch_api_payload(
     } else {
         payload.restaurant.name.fi
     };
-    let restaurant_url = payload.restaurant.website_url.unwrap_or_default();
+    let restaurant_url = payload
+        .restaurant
+        .website_url
+        .as_deref()
+        .filter(|url| !url.trim().is_empty())
+        .or(restaurant.url)
+        .unwrap_or_default()
+        .to_string();
     if payload.service.status == "unknown" {
         return Ok(FetchOutput {
             ok: false,
@@ -882,6 +889,24 @@ mod tests {
             .expect("valid stale fixture");
         assert!(result.ok);
         assert!(result.is_stale);
+    }
+
+    #[test]
+    fn falls_back_to_local_restaurant_url_when_api_url_is_missing() {
+        let restaurant = restaurant_for_code("tietoteknia", true);
+        let mut payload: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../api/test/fixtures/contract-menu.json"
+        ))
+        .expect("menu fixture");
+        payload["restaurant"]["websiteUrl"] = serde_json::Value::Null;
+
+        let result = parse_lunch_api_payload(&payload.to_string(), restaurant, "fi")
+            .expect("valid fixture with missing URL");
+
+        assert_eq!(
+            result.restaurant_url,
+            "https://www.compass-group.fi/ravintolat-ja-ruokalistat/foodco/kaupungit/kuopio/tietoteknia/"
+        );
     }
 
     #[test]
