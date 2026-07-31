@@ -42,7 +42,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
 
         let dpi_y = GetDeviceCaps(hdc, LOGPIXELSY);
         let scale = popup_scale_for_dpi(&state.settings, dpi_y);
-        let (normal_font, bold_font, bold_italic_font, small_font, small_bold_font) =
+        let (normal_font, bullet_font, bold_font, bold_italic_font, small_font, small_bold_font) =
             create_fonts(hdc, &state.settings.theme, scale.factor);
         let highlight_font = bold_font;
         let _old_font = SelectObject(hdc, normal_font);
@@ -166,6 +166,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                             metrics: &metrics,
                             line_height,
                             normal_font,
+                            bullet_font,
                             bold_font,
                             bold_italic_font,
                             highlight_font,
@@ -230,6 +231,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                             metrics: &metrics,
                             line_height,
                             normal_font,
+                            bullet_font,
                             bold_font,
                             bold_italic_font,
                             highlight_font,
@@ -329,6 +331,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                             metrics: &metrics,
                             line_height,
                             normal_font,
+                            bullet_font,
                             bold_font,
                             bold_italic_font,
                             highlight_font,
@@ -368,6 +371,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                             metrics: &metrics,
                             line_height,
                             normal_font,
+                            bullet_font,
                             bold_font,
                             bold_italic_font,
                             highlight_font,
@@ -418,6 +422,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                     metrics: &metrics,
                     line_height,
                     normal_font,
+                    bullet_font,
                     bold_font,
                     bold_italic_font,
                     highlight_font,
@@ -434,6 +439,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
 
         SelectObject(hdc, _old_font);
         DeleteObject(normal_font);
+        DeleteObject(bullet_font);
         DeleteObject(bold_font);
         DeleteObject(bold_italic_font);
         DeleteObject(small_font);
@@ -470,6 +476,7 @@ struct DrawLayerParams<'a> {
     metrics: &'a TEXTMETRICW,
     line_height: i32,
     normal_font: HFONT,
+    bullet_font: HFONT,
     bold_font: HFONT,
     bold_italic_font: HFONT,
     highlight_font: HFONT,
@@ -498,7 +505,7 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
         ((params.scale.header_height - params.metrics.tmHeight) / 2 - 1) + params.y_offset;
     draw_text_line(hdc, &full_title, title_x, title_y);
 
-    let bullet_width = text_width_with_font(hdc, params.normal_font, BULLET_PREFIX);
+    let bullet_width = text_width_with_font(hdc, params.bullet_font, BULLET_PREFIX);
     let main_wrap_width = (params.content_width - bullet_width).max(24);
     let stale_mode = lines
         .iter()
@@ -793,7 +800,15 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                         params.highlight_font,
                     );
                     if *show_bullet {
+                        unsafe {
+                            SelectObject(hdc, params.bullet_font);
+                            SetTextColor(hdc, line_body_color);
+                        }
                         draw_text_line(hdc, BULLET_PREFIX, params.scale.padding_x, y);
+                        unsafe {
+                            SelectObject(hdc, params.normal_font);
+                            SetTextColor(hdc, line_body_color);
+                        }
                     }
                     if let Some(prefix) = price_prefix.as_deref() {
                         draw_text_line(hdc, prefix, line_x, y);
@@ -904,7 +919,15 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                         let main_x = line_x + prefix_width;
                         if idx == 0 {
                             if *show_bullet {
+                                unsafe {
+                                    SelectObject(hdc, params.bullet_font);
+                                    SetTextColor(hdc, line_body_color);
+                                }
                                 draw_text_line(hdc, BULLET_PREFIX, params.scale.padding_x, y);
+                                unsafe {
+                                    SelectObject(hdc, params.normal_font);
+                                    SetTextColor(hdc, line_body_color);
+                                }
                             }
                             if let Some(prefix) = price_prefix.as_deref() {
                                 draw_text_line(hdc, prefix, line_x, y);

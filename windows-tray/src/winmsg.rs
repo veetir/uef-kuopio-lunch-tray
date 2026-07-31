@@ -686,6 +686,13 @@ fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
                 popup::resize_popup_keep_position(app.hwnd_popup(), &state);
             }
         }
+        tray::CMD_THEME_GRANDPA => {
+            app.set_theme("grandpa");
+            if popup_is_visible(app.hwnd_popup()) {
+                let state = app.snapshot();
+                popup::resize_popup_keep_position(app.hwnd_popup(), &state);
+            }
+        }
         tray::CMD_THEME_BLUE => {
             app.set_theme("blue");
             if popup_is_visible(app.hwnd_popup()) {

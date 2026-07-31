@@ -15,6 +15,8 @@ static CUSTOM_THEMES: OnceLock<Mutex<Vec<CustomThemeDef>>> = OnceLock::new();
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CustomThemeEntry {
     pub name: String,
+    #[serde(default)]
+    pub font: Option<String>,
     pub bg_color: String,
     pub body_text_color: String,
     pub heading_color: String,
@@ -32,6 +34,7 @@ pub struct CustomThemeEntry {
 #[derive(Debug, Clone)]
 pub struct CustomThemeDef {
     pub name: String,
+    pub font: CustomThemeFont,
     pub bg_color: COLORREF,
     pub body_text_color: COLORREF,
     pub heading_color: COLORREF,
@@ -43,6 +46,37 @@ pub struct CustomThemeDef {
     pub header_bg_color: COLORREF,
     pub button_bg_color: COLORREF,
     pub divider_color: COLORREF,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CustomThemeFont {
+    Default,
+    Classic,
+    Web,
+    Terminal,
+    Rounded,
+}
+
+impl CustomThemeFont {
+    pub fn family(self) -> &'static str {
+        match self {
+            Self::Default => "Segoe UI",
+            Self::Classic => "Tahoma",
+            Self::Web => "Trebuchet MS",
+            Self::Terminal => "Consolas",
+            Self::Rounded => "Verdana",
+        }
+    }
+}
+
+fn normalize_font_preset(value: Option<&str>) -> CustomThemeFont {
+    match value.unwrap_or_default().to_ascii_lowercase().as_str() {
+        "classic" => CustomThemeFont::Classic,
+        "web" => CustomThemeFont::Web,
+        "terminal" => CustomThemeFont::Terminal,
+        "rounded" => CustomThemeFont::Rounded,
+        _ => CustomThemeFont::Default,
+    }
 }
 
 fn parse_hex_color(hex: &str) -> Option<COLORREF> {
@@ -61,6 +95,7 @@ fn parse_hex_color(hex: &str) -> Option<COLORREF> {
 fn parse_entry(entry: &CustomThemeEntry) -> Option<CustomThemeDef> {
     Some(CustomThemeDef {
         name: entry.name.clone(),
+        font: normalize_font_preset(entry.font.as_deref()),
         bg_color: parse_hex_color(&entry.bg_color)?,
         body_text_color: parse_hex_color(&entry.body_text_color)?,
         heading_color: parse_hex_color(&entry.heading_color)?,
@@ -82,6 +117,7 @@ fn themes_path() -> std::path::PathBuf {
 fn default_themes_json() -> Vec<CustomThemeEntry> {
     vec![CustomThemeEntry {
         name: "Custom1".to_string(),
+        font: Some("default".to_string()),
         bg_color: "#1a1a2e".to_string(),
         body_text_color: "#e0e0e0".to_string(),
         heading_color: "#e94560".to_string(),
@@ -140,4 +176,50 @@ pub fn find_custom_theme(name: &str) -> Option<CustomThemeDef> {
     custom_themes()
         .into_iter()
         .find(|t| t.name.to_ascii_lowercase() == lower)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn theme_entry(font: Option<&str>) -> CustomThemeEntry {
+        CustomThemeEntry {
+            name: "Test".to_string(),
+            font: font.map(str::to_string),
+            bg_color: "#000000".to_string(),
+            body_text_color: "#ffffff".to_string(),
+            heading_color: "#ffffff".to_string(),
+            header_title_color: "#ffffff".to_string(),
+            suffix_color: "#bbbbbb".to_string(),
+            suffix_highlight_color: "#ffffff".to_string(),
+            favorite_highlight_color: "#ffff00".to_string(),
+            selection_bg_color: "#333333".to_string(),
+            header_bg_color: "#111111".to_string(),
+            button_bg_color: "#222222".to_string(),
+            divider_color: "#222222".to_string(),
+        }
+    }
+
+    #[test]
+    fn custom_theme_font_defaults_to_segoe_ui() {
+        let parsed = parse_entry(&theme_entry(None)).unwrap();
+
+        assert_eq!(parsed.font, CustomThemeFont::Default);
+        assert_eq!(parsed.font.family(), "Segoe UI");
+    }
+
+    #[test]
+    fn custom_theme_font_decodes_supported_presets() {
+        let parsed = parse_entry(&theme_entry(Some("classic"))).unwrap();
+        assert_eq!(parsed.font.family(), "Tahoma");
+
+        let parsed = parse_entry(&theme_entry(Some("web"))).unwrap();
+        assert_eq!(parsed.font.family(), "Trebuchet MS");
+
+        let parsed = parse_entry(&theme_entry(Some("terminal"))).unwrap();
+        assert_eq!(parsed.font.family(), "Consolas");
+
+        let parsed = parse_entry(&theme_entry(Some("rounded"))).unwrap();
+        assert_eq!(parsed.font.family(), "Verdana");
+    }
 }

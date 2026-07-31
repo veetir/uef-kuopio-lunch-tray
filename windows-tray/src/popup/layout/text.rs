@@ -5,6 +5,7 @@ use super::*;
 pub(super) fn measure_lines_layout(
     hdc: HDC,
     normal_font: HFONT,
+    bullet_font: HFONT,
     bold_font: HFONT,
     small_font: HFONT,
     small_bold_font: HFONT,
@@ -12,7 +13,7 @@ pub(super) fn measure_lines_layout(
     wrap_content_width: i32,
 ) -> LineLayoutMetrics {
     let wrap_width = wrap_content_width.max(40);
-    let bullet_width = text_width_with_font(hdc, normal_font, BULLET_PREFIX);
+    let bullet_width = text_width_with_font(hdc, bullet_font, BULLET_PREFIX);
     let main_wrap_width = (wrap_width - bullet_width).max(24);
     let mut required_content_width = 0;
     let mut wrapped_line_count = 0usize;

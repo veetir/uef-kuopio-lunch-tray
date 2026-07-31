@@ -209,6 +209,7 @@ pub fn normalize_theme(value: &str) -> String {
     match value.to_ascii_lowercase().as_str() {
         "light" => "light".to_string(),
         "dark" => "dark".to_string(),
+        "grandpa" | "windows 95" | "win95" => "grandpa".to_string(),
         "blue" => "blue".to_string(),
         "green" => "green".to_string(),
         "amber" => "amber".to_string(),
@@ -322,6 +323,15 @@ mod tests {
 
         let settings = decode_settings(r#"{"widget_scale":"150"}"#).unwrap();
         assert_eq!(settings.widget_scale, "large");
+    }
+
+    #[test]
+    fn grandpa_theme_decodes_supported_aliases() {
+        let settings = decode_settings(r#"{"theme":"grandpa"}"#).unwrap();
+        assert_eq!(settings.theme, "grandpa");
+
+        let settings = decode_settings(r#"{"theme":"Windows 95"}"#).unwrap();
+        assert_eq!(settings.theme, "grandpa");
     }
 
     #[test]

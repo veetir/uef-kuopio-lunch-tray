@@ -189,12 +189,13 @@ fn desired_size(hwnd: HWND, state: &AppState) -> (i32, i32) {
         }
 
         let scale = popup_scale_for_dpi(&state.settings, dpi_y);
-        let (normal_font, bold_font, bold_italic_font, small_font, small_bold_font) =
+        let (normal_font, bullet_font, bold_font, bold_italic_font, small_font, small_bold_font) =
             create_fonts(hdc, &state.settings.theme, scale.factor);
         let current_lines = build_lines(state);
         let current_metrics = measure_lines_layout(
             hdc,
             normal_font,
+            bullet_font,
             bold_font,
             small_font,
             small_bold_font,
@@ -205,6 +206,7 @@ fn desired_size(hwnd: HWND, state: &AppState) -> (i32, i32) {
             state,
             hdc,
             normal_font,
+            bullet_font,
             bold_font,
             small_font,
             small_bold_font,
@@ -217,6 +219,7 @@ fn desired_size(hwnd: HWND, state: &AppState) -> (i32, i32) {
         let current_wrapped_metrics = measure_lines_layout(
             hdc,
             normal_font,
+            bullet_font,
             bold_font,
             small_font,
             small_bold_font,
@@ -254,6 +257,7 @@ fn desired_size(hwnd: HWND, state: &AppState) -> (i32, i32) {
         let max_width = max(scale.max_width, header_required_width);
         let width = width_candidate.clamp(scale.min_width, max_width);
         DeleteObject(normal_font);
+        DeleteObject(bullet_font);
         DeleteObject(bold_font);
         DeleteObject(bold_italic_font);
         DeleteObject(small_font);
@@ -275,7 +279,7 @@ pub(in crate::popup) fn create_fonts(
     _hdc: HDC,
     theme: &str,
     scale_factor: f32,
-) -> (HFONT, HFONT, HFONT, HFONT, HFONT) {
+) -> (HFONT, HFONT, HFONT, HFONT, HFONT, HFONT) {
     unsafe {
         let height_normal = -MulDiv(scale_px(12, scale_factor).max(8), BASE_DPI, 72);
         let height_small = -MulDiv(scale_px(10, scale_factor).max(7), BASE_DPI, 72);
@@ -296,6 +300,23 @@ pub(in crate::popup) fn create_fonts(
             0,
             0,
             PCWSTR(face.as_ptr()),
+        );
+        let bullet_face = to_wstring("Segoe UI Symbol");
+        let bullet = CreateFontW(
+            height_normal,
+            0,
+            0,
+            0,
+            400,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            PCWSTR(bullet_face.as_ptr()),
         );
         let bold = CreateFontW(
             height_normal,
@@ -361,7 +382,7 @@ pub(in crate::popup) fn create_fonts(
             0,
             PCWSTR(face.as_ptr()),
         );
-        (normal, bold, bold_italic, small, small_bold)
+        (normal, bullet, bold, bold_italic, small, small_bold)
     }
 }
 
