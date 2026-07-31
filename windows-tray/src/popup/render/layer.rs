@@ -145,6 +145,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                         DrawLayerParams {
                             scale,
                             width,
+                            height,
                             content_width,
                             bg_color: palette.bg_color,
                             body_text_color: layer_body_text,
@@ -208,6 +209,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                         DrawLayerParams {
                             scale,
                             width,
+                            height,
                             content_width,
                             bg_color: palette.bg_color,
                             body_text_color: layer_body_text,
@@ -306,6 +308,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                         DrawLayerParams {
                             scale,
                             width,
+                            height,
                             content_width,
                             bg_color: palette.bg_color,
                             body_text_color: old_body_text,
@@ -344,6 +347,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                         DrawLayerParams {
                             scale,
                             width,
+                            height,
                             content_width,
                             bg_color: palette.bg_color,
                             body_text_color: new_body_text,
@@ -394,6 +398,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                 DrawLayerParams {
                     scale,
                     width,
+                    height,
                     content_width,
                     bg_color: palette.bg_color,
                     body_text_color: palette.body_text_color,
@@ -445,6 +450,7 @@ struct DrawLayerParams<'a> {
     // Group render-only state so the content-layer draw path stays readable.
     scale: PopupScale,
     width: i32,
+    height: i32,
     content_width: i32,
     bg_color: COLORREF,
     body_text_color: COLORREF,
@@ -1056,6 +1062,7 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                     },
                     params.recipe_selection_text_color,
                     bullet_width,
+                    params.height - params.scale.padding_y,
                     params.selection,
                     params.favorites,
                     capture.as_deref_mut(),
@@ -1396,6 +1403,19 @@ fn draw_closure_notice_block(
     block_rect.bottom + margin_y
 }
 
+fn recipe_detail_max_viewport_height(
+    block_top: i32,
+    max_bottom: i32,
+    pad_y: i32,
+    line_height: i32,
+    ideal_viewport_height: i32,
+) -> i32 {
+    let available = max_bottom - block_top - pad_y * 2;
+    let ideal = ideal_viewport_height.max(1);
+    let minimum = line_height.max(1).min(ideal);
+    available.clamp(minimum, ideal)
+}
+
 fn draw_recipe_detail_block(
     hdc: HDC,
     rows: &[RecipeDetailRow],
@@ -1412,6 +1432,7 @@ fn draw_recipe_detail_block(
     ingredient_highlight_color: COLORREF,
     selection_text_color: COLORREF,
     bullet_width: i32,
+    max_bottom: i32,
     selection: Option<&SelectionRange>,
     favorites: &FavoritesSnapshot,
     mut capture: Option<&mut DrawCapture>,
@@ -1435,11 +1456,19 @@ fn draw_recipe_detail_block(
     let block_top = y + margin_y;
     let content_height = content_rows as i32 * line_height + gaps;
     let viewport_rows = content_rows.min(RECIPE_DETAIL_MAX_VISIBLE_ROWS).max(1);
-    let viewport_height = if content_rows <= RECIPE_DETAIL_MAX_VISIBLE_ROWS {
+    let ideal_viewport_height = if content_rows <= RECIPE_DETAIL_MAX_VISIBLE_ROWS {
         content_height
     } else {
         viewport_rows as i32 * line_height
     };
+    let max_viewport_height = recipe_detail_max_viewport_height(
+        block_top,
+        max_bottom,
+        pad_y,
+        line_height,
+        ideal_viewport_height,
+    );
+    let viewport_height = ideal_viewport_height.min(max_viewport_height);
     let max_scroll_offset = (content_height - viewport_height).max(0);
     let scroll_offset = recipe_detail_scroll_offset_px().min(max_scroll_offset);
     let block_height = pad_y * 2 + viewport_height;
@@ -1937,5 +1966,34 @@ fn draw_outline_rect(hdc: HDC, rect: &RECT, color: COLORREF) {
         FillRect(hdc, &left, brush);
         FillRect(hdc, &right, brush);
         DeleteObject(brush);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recipe_detail_viewport_caps_to_remaining_client_height() {
+        assert_eq!(
+            recipe_detail_max_viewport_height(400, 700, 10, 24, 14 * 24),
+            280
+        );
+    }
+
+    #[test]
+    fn recipe_detail_viewport_keeps_ideal_height_when_space_allows() {
+        assert_eq!(
+            recipe_detail_max_viewport_height(100, 700, 10, 24, 8 * 24),
+            8 * 24
+        );
+    }
+
+    #[test]
+    fn recipe_detail_viewport_keeps_minimum_scrollable_area() {
+        assert_eq!(
+            recipe_detail_max_viewport_height(680, 700, 10, 24, 14 * 24),
+            24
+        );
     }
 }
