@@ -25,7 +25,6 @@ enum PriceGroup {
 struct PriceEntry {
     group: PriceGroup,
     text: String,
-    value: Option<f32>,
 }
 
 /// Normalizes arbitrary text for display and matching by collapsing whitespace.
@@ -282,16 +281,6 @@ fn structured_price_text(menu: &MenuGroup, groups: PriceGroups) -> String {
         }
     }
     parts.join(" / ")
-}
-
-pub fn student_price_for_group(menu: &MenuGroup) -> Option<f32> {
-    if menu.prices.is_empty() {
-        return student_price_eur(&menu.price);
-    }
-    menu.prices
-        .iter()
-        .find(|price| price.audiences.contains(&PriceAudience::Student))
-        .and_then(|price| price.amount.replace(',', ".").parse::<f32>().ok())
 }
 
 /// Splits a rendered menu component into main text and allergen suffix.
@@ -573,15 +562,6 @@ fn clean_main_text(main: &str) -> String {
         .to_string()
 }
 
-/// Extracts the student price from a provider price string when possible.
-pub fn student_price_eur(price: &str) -> Option<f32> {
-    let entries = parse_compass_price_entries(price);
-    entries
-        .into_iter()
-        .find(|entry| entry.group == PriceGroup::Student)
-        .and_then(|entry| entry.value)
-}
-
 /// Extracts every numeric price component from display text for descending menu sorting.
 pub fn price_values_for_sort(text: &str) -> Vec<f32> {
     parse_price_values(text)
@@ -703,7 +683,6 @@ fn parse_compass_price_entries(price: &str) -> Vec<PriceEntry> {
         .into_iter()
         .map(|segment| PriceEntry {
             group: classify_compass_price_group(&segment),
-            value: parse_price_value(&segment),
             text: normalize_price_text(&segment),
         })
         .collect()
@@ -801,10 +780,6 @@ fn is_word_boundary(text: &str, start: usize, len: usize) -> bool {
         .map(|ch| !ch.is_alphabetic())
         .unwrap_or(true);
     prev_ok && next_ok
-}
-
-fn parse_price_value(text: &str) -> Option<f32> {
-    parse_price_values(text).pop()
 }
 
 fn parse_price_values(text: &str) -> Vec<f32> {

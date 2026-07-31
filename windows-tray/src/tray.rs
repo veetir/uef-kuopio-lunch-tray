@@ -46,7 +46,6 @@ pub const CMD_TOGGLE_HIGHLIGHT_L: u16 = 2205;
 pub const CMD_TOGGLE_SHOW_STUDENT_PRICE: u16 = 2206;
 pub const CMD_TOGGLE_SHOW_STAFF_PRICE: u16 = 2207;
 pub const CMD_TOGGLE_SHOW_GUEST_PRICE: u16 = 2208;
-pub const CMD_TOGGLE_HIDE_EXPENSIVE_STUDENT: u16 = 2209;
 pub const CMD_TOGGLE_PRICE_GROUP_NAMES: u16 = 2210;
 pub const CMD_THEME_LIGHT: u16 = 2211;
 pub const CMD_THEME_DARK: u16 = 2212;
@@ -570,12 +569,6 @@ fn build_context_menu(state: &AppState) -> HMENU {
             MF_POPUP,
             price_menu.0 as usize,
             PCWSTR(to_wstring("Price groups").as_ptr()),
-        );
-        append_menu_toggle(
-            menu,
-            CMD_TOGGLE_HIDE_EXPENSIVE_STUDENT,
-            "Hide expensive student meals",
-            state.settings.hide_expensive_student_meals,
         );
         append_menu_toggle(
             menu,

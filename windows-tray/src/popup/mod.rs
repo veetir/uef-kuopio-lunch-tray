@@ -9,7 +9,7 @@ use crate::favorites;
 use crate::format::{
     date_and_time_parts, menu_group_title_for_restaurant, menu_heading_for_restaurant,
     menu_price_for_restaurant_display, normalize_text, price_values_for_sort,
-    split_component_suffix, student_price_for_group, text_for, PriceGroups,
+    split_component_suffix, text_for, PriceGroups,
 };
 use crate::model::{MenuGroup, MenuGroupPresentation, RecipeInfo, TodayMenu};
 use crate::restaurant::{available_restaurants, Provider, Restaurant};
@@ -114,7 +114,6 @@ struct PopupLineBudgetKey {
     show_guest_price: bool,
     show_price_group_names: bool,
     lunch_item_display_mode: crate::settings::LunchItemDisplayMode,
-    hide_expensive_student_meals: bool,
     show_allergens: bool,
     highlight_gluten_free: bool,
     highlight_veg: bool,
@@ -162,7 +161,6 @@ struct PopupDesiredSizeKey {
     show_guest_price: bool,
     show_price_group_names: bool,
     lunch_item_display_mode: crate::settings::LunchItemDisplayMode,
-    hide_expensive_student_meals: bool,
     show_allergens: bool,
     highlight_gluten_free: bool,
     highlight_veg: bool,

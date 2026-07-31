@@ -7,7 +7,7 @@ use compass_lunch::app::App;
 #[cfg(not(all(feature = "bench", not(windows))))]
 use compass_lunch::format::{
     date_and_time_line, menu_heading_for_restaurant, normalize_text, split_component_suffix,
-    student_price_for_group, text_for, PriceGroups,
+    text_for, PriceGroups,
 };
 #[cfg(not(all(feature = "bench", not(windows))))]
 use compass_lunch::log;
@@ -273,13 +273,6 @@ fn print_today_menu_with_settings(settings: &Settings) -> anyhow::Result<()> {
         Some(menu) => {
             if !menu.menus.is_empty() {
                 for group in &menu.menus {
-                    if settings.hide_expensive_student_meals {
-                        if let Some(price) = student_price_for_group(group) {
-                            if price > 4.0 {
-                                continue;
-                            }
-                        }
-                    }
                     let heading = menu_heading_for_restaurant(
                         group,
                         &settings.restaurant_code,

@@ -105,7 +105,6 @@ fn sample_settings() -> Settings {
         show_guest_price: true,
         show_price_group_names: false,
         lunch_item_display_mode: LunchItemDisplayMode::Standard,
-        hide_expensive_student_meals: false,
         theme: "dark".to_string(),
         show_restaurant_index_numbers: false,
         widget_scale: "normal".to_string(),

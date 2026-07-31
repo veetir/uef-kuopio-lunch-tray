@@ -24,7 +24,6 @@ pub struct Settings {
     pub show_guest_price: bool,
     pub show_price_group_names: bool,
     pub lunch_item_display_mode: LunchItemDisplayMode,
-    pub hide_expensive_student_meals: bool,
     pub theme: String,
     pub show_restaurant_index_numbers: bool,
     pub widget_scale: String,
@@ -50,7 +49,6 @@ impl Default for Settings {
             show_guest_price: true,
             show_price_group_names: false,
             lunch_item_display_mode: LunchItemDisplayMode::Classic,
-            hide_expensive_student_meals: false,
             theme: "dark".to_string(),
             show_restaurant_index_numbers: false,
             widget_scale: "normal".to_string(),
@@ -106,7 +104,6 @@ struct RawSettings {
     show_guest_price: Option<bool>,
     show_price_group_names: Option<bool>,
     lunch_item_display_mode: Option<String>,
-    hide_expensive_student_meals: Option<bool>,
     theme: Option<String>,
     show_restaurant_index_numbers: Option<bool>,
     widget_scale: Option<String>,
@@ -178,9 +175,6 @@ fn decode_settings(data: &str) -> anyhow::Result<Settings> {
             .as_deref()
             .map(normalize_lunch_item_display_mode)
             .unwrap_or(LunchItemDisplayMode::Classic),
-        hide_expensive_student_meals: raw
-            .hide_expensive_student_meals
-            .unwrap_or(defaults.hide_expensive_student_meals),
         theme,
         show_restaurant_index_numbers: raw
             .show_restaurant_index_numbers

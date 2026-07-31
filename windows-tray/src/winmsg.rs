@@ -672,9 +672,6 @@ fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
             app.set_lunch_item_display_mode(LunchItemDisplayMode::Compact);
             popup::invalidate_layout_budget_cache();
         }
-        tray::CMD_TOGGLE_HIDE_EXPENSIVE_STUDENT => {
-            app.toggle_hide_expensive_student_meals();
-        }
         tray::CMD_THEME_LIGHT => {
             app.set_theme("light");
             if popup_is_visible(app.hwnd_popup()) {
