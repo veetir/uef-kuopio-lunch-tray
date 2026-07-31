@@ -45,7 +45,7 @@
         "enabled": true
       },
       "triggers": {
-        "crons": ["*/6 * * * *"]
+        "crons": ["*/6 21-23,0-12 * * *"]
       },
       "routes": [
         {
