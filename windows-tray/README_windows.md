@@ -49,11 +49,16 @@ Open settings from the tray menu and set:
 - Settings: `%LOCALAPPDATA%\compass-lunch\settings.json`
 - Cache: `%LOCALAPPDATA%\compass-lunch\cache\`
 - Favorites: `%LOCALAPPDATA%\compass-lunch\favorites.json`
+- Custom themes: `%LOCALAPPDATA%\compass-lunch\themes.json`
 
 The `settings.json` key for the menu row layout is `lunch_item_display_mode`.
 Supported values are `"classic"`, `"standard"`, and `"compact"`. New installs
 default to `"classic"` with prices shown; upgraded installs without this key keep
 the classic layout until changed from the tray menu.
+
+The app creates `themes.json` on first run. Add custom themes there to show them
+in the tray menu. Supported font presets are `"default"`, `"classic"`, `"web"`,
+`"terminal"`, and `"rounded"`.
 
 To reset the app:
 
