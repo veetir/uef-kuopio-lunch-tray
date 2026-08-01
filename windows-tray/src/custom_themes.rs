@@ -19,6 +19,12 @@ pub struct CustomThemeEntry {
     pub font: Option<String>,
     #[serde(default)]
     pub bullet: Option<String>,
+    #[serde(default)]
+    pub border: Option<String>,
+    #[serde(default)]
+    pub border_color: Option<String>,
+    #[serde(default)]
+    pub shadow: Option<bool>,
     pub bg_color: String,
     pub body_text_color: String,
     pub heading_color: String,
@@ -38,6 +44,10 @@ pub struct CustomThemeDef {
     pub name: String,
     pub font: CustomThemeFont,
     pub bullet: CustomThemeBullet,
+    pub border: CustomThemeBorder,
+    /// Falls back to `divider_color` when the theme does not name one.
+    pub border_color: COLORREF,
+    pub shadow: bool,
     pub bg_color: COLORREF,
     pub body_text_color: COLORREF,
     pub heading_color: COLORREF,
@@ -96,6 +106,37 @@ impl CustomThemeBullet {
     }
 }
 
+/// Border style preset chosen by a custom theme. Kept as a plain name here so
+/// this module stays free of popup rendering types; `popup::border` maps it to
+/// the drawn edge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CustomThemeBorder {
+    None,
+    Flat,
+    Raised,
+    Sunken,
+}
+
+impl CustomThemeBorder {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Flat => "flat",
+            Self::Raised => "raised",
+            Self::Sunken => "sunken",
+        }
+    }
+}
+
+fn normalize_border_preset(value: Option<&str>) -> CustomThemeBorder {
+    match value.unwrap_or_default().to_ascii_lowercase().as_str() {
+        "flat" => CustomThemeBorder::Flat,
+        "raised" => CustomThemeBorder::Raised,
+        "sunken" => CustomThemeBorder::Sunken,
+        _ => CustomThemeBorder::None,
+    }
+}
+
 fn normalize_bullet_preset(value: Option<&str>) -> CustomThemeBullet {
     match value.unwrap_or_default().to_ascii_lowercase().as_str() {
         "square" => CustomThemeBullet::Square,
@@ -130,10 +171,18 @@ fn parse_hex_color(hex: &str) -> Option<COLORREF> {
 }
 
 fn parse_entry(entry: &CustomThemeEntry) -> Option<CustomThemeDef> {
+    let divider_color = parse_hex_color(&entry.divider_color)?;
     Some(CustomThemeDef {
         name: entry.name.clone(),
         font: normalize_font_preset(entry.font.as_deref()),
         bullet: normalize_bullet_preset(entry.bullet.as_deref()),
+        border: normalize_border_preset(entry.border.as_deref()),
+        border_color: entry
+            .border_color
+            .as_deref()
+            .and_then(parse_hex_color)
+            .unwrap_or(divider_color),
+        shadow: entry.shadow.unwrap_or(true),
         bg_color: parse_hex_color(&entry.bg_color)?,
         body_text_color: parse_hex_color(&entry.body_text_color)?,
         heading_color: parse_hex_color(&entry.heading_color)?,
@@ -144,7 +193,7 @@ fn parse_entry(entry: &CustomThemeEntry) -> Option<CustomThemeDef> {
         selection_bg_color: parse_hex_color(&entry.selection_bg_color)?,
         header_bg_color: parse_hex_color(&entry.header_bg_color)?,
         button_bg_color: parse_hex_color(&entry.button_bg_color)?,
-        divider_color: parse_hex_color(&entry.divider_color)?,
+        divider_color,
     })
 }
 
@@ -157,6 +206,9 @@ fn default_themes_json() -> Vec<CustomThemeEntry> {
         name: "Custom1".to_string(),
         font: Some("default".to_string()),
         bullet: Some("triangle".to_string()),
+        border: Some("none".to_string()),
+        border_color: None,
+        shadow: Some(true),
         bg_color: "#1a1a2e".to_string(),
         body_text_color: "#e0e0e0".to_string(),
         heading_color: "#e94560".to_string(),
@@ -230,6 +282,9 @@ mod tests {
             name: "Test".to_string(),
             font: font.map(str::to_string),
             bullet: bullet.map(str::to_string),
+            border: None,
+            border_color: None,
+            shadow: None,
             bg_color: "#000000".to_string(),
             body_text_color: "#ffffff".to_string(),
             heading_color: "#ffffff".to_string(),

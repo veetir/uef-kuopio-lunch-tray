@@ -31,6 +31,9 @@ pub(super) struct ThemePalette {
     pub(super) header_bg_color: COLORREF,
     pub(super) button_bg_color: COLORREF,
     pub(super) divider_color: COLORREF,
+    /// Colour of a flat chrome edge. Built-in themes reuse their divider; custom
+    /// themes may name their own via `border_color` in `themes.json`.
+    pub(super) border_color: COLORREF,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -126,6 +129,7 @@ pub(super) fn theme_palette(theme: &str) -> ThemePalette {
             header_bg_color: rgb(21, 149, 181),
             button_bg_color: rgb(31, 167, 200),
             divider_color: rgb(127, 211, 226),
+            border_color: rgb(127, 211, 226),
         },
         "dark" => ThemePalette {
             bg_color: rgb(40, 42, 54),
@@ -139,6 +143,7 @@ pub(super) fn theme_palette(theme: &str) -> ThemePalette {
             header_bg_color: rgb(68, 71, 90),
             button_bg_color: rgb(59, 61, 82),
             divider_color: rgb(98, 114, 164),
+            border_color: rgb(98, 114, 164),
         },
         "grandpa" => ThemePalette {
             bg_color: rgb(192, 192, 192),
@@ -152,6 +157,7 @@ pub(super) fn theme_palette(theme: &str) -> ThemePalette {
             header_bg_color: rgb(0, 0, 128),
             button_bg_color: rgb(184, 184, 184),
             divider_color: rgb(128, 128, 128),
+            border_color: rgb(128, 128, 128),
         },
         "blue" => ThemePalette {
             bg_color: COLORREF(0x00562401),
@@ -165,6 +171,7 @@ pub(super) fn theme_palette(theme: &str) -> ThemePalette {
             header_bg_color: COLORREF(0x00733809),
             button_bg_color: COLORREF(0x00804A1A),
             divider_color: COLORREF(0x00834D1F),
+            border_color: COLORREF(0x00834D1F),
         },
         "green" => ThemePalette {
             bg_color: COLORREF(0x00000000),
@@ -178,6 +185,7 @@ pub(super) fn theme_palette(theme: &str) -> ThemePalette {
             header_bg_color: COLORREF(0x000B1A0B),
             button_bg_color: COLORREF(0x00142D14),
             divider_color: COLORREF(0x00142D14),
+            border_color: COLORREF(0x00142D14),
         },
         "amber" => ThemePalette {
             bg_color: rgb(26, 16, 6),
@@ -191,6 +199,7 @@ pub(super) fn theme_palette(theme: &str) -> ThemePalette {
             header_bg_color: rgb(56, 31, 9),
             button_bg_color: rgb(74, 42, 12),
             divider_color: rgb(110, 63, 18),
+            border_color: rgb(110, 63, 18),
         },
         "barbie" => ThemePalette {
             bg_color: rgb(255, 243, 248),
@@ -204,6 +213,7 @@ pub(super) fn theme_palette(theme: &str) -> ThemePalette {
             header_bg_color: rgb(236, 74, 168),
             button_bg_color: rgb(240, 98, 179),
             divider_color: rgb(245, 163, 204),
+            border_color: rgb(245, 163, 204),
         },
         "teletext1" => ThemePalette {
             bg_color: rgb(0, 0, 0),
@@ -217,6 +227,7 @@ pub(super) fn theme_palette(theme: &str) -> ThemePalette {
             header_bg_color: rgb(0, 0, 180),
             button_bg_color: rgb(0, 0, 140),
             divider_color: rgb(255, 0, 0),
+            border_color: rgb(255, 0, 0),
         },
         "teletext2" => ThemePalette {
             bg_color: rgb(0, 0, 0),
@@ -230,6 +241,7 @@ pub(super) fn theme_palette(theme: &str) -> ThemePalette {
             header_bg_color: rgb(0, 215, 0),
             button_bg_color: rgb(0, 145, 0),
             divider_color: rgb(255, 0, 255),
+            border_color: rgb(255, 0, 255),
         },
         _ => {
             if let Some(custom) = crate::custom_themes::find_custom_theme(theme) {
@@ -245,6 +257,7 @@ pub(super) fn theme_palette(theme: &str) -> ThemePalette {
                     header_bg_color: custom.header_bg_color,
                     button_bg_color: custom.button_bg_color,
                     divider_color: custom.divider_color,
+                    border_color: custom.divider_color,
                 }
             } else {
                 ThemePalette {
@@ -259,6 +272,7 @@ pub(super) fn theme_palette(theme: &str) -> ThemePalette {
                     header_bg_color: COLORREF(0x00101010),
                     button_bg_color: COLORREF(0x00202020),
                     divider_color: COLORREF(0x00202020),
+                    border_color: COLORREF(0x00202020),
                 }
             }
         }

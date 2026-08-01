@@ -21,6 +21,10 @@ use std::sync::{Arc, Mutex, OnceLock};
 use time::OffsetDateTime;
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{COLORREF, HWND, POINT, RECT};
+use windows::Win32::Graphics::Dwm::{
+    DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE, DWMWA_WINDOW_CORNER_PREFERENCE,
+    DWMWCP_DONOTROUND,
+};
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW, CreateSolidBrush,
     DeleteDC, DeleteObject, EndPaint, FillRect, GetDeviceCaps, GetMonitorInfoW,
@@ -29,8 +33,10 @@ use windows::Win32::Graphics::Gdi::{
     MONITORINFO, MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, SRCCOPY, TEXTMETRICW, TRANSPARENT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetClientRect, GetCursorPos, GetWindowRect, KillTimer, SetTimer, SetWindowPos, ShowWindow,
-    HWND_TOPMOST, SWP_SHOWWINDOW, SW_HIDE,
+    GetClientRect, GetCursorPos, GetWindowLongPtrW, GetWindowRect, KillTimer, SetTimer,
+    SetWindowLongPtrW, SetWindowPos, ShowWindow, GWL_STYLE, HWND_TOPMOST, SWP_FRAMECHANGED,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE, WS_CAPTION,
+    WS_THICKFRAME,
 };
 
 const PADDING_X: i32 = 12;
@@ -392,6 +398,7 @@ struct HeaderButtonHover {
 }
 
 mod animation;
+mod border;
 mod bullet;
 mod content;
 mod interaction;

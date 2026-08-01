@@ -447,16 +447,20 @@ pub(super) fn draw_header_button(
     font: HFONT,
     pressed: bool,
     hovered: bool,
+    edge: ChromeEdge,
 ) {
     let mut button_rect = *rect;
-    let bg = if pressed {
+    let bg = if pressed && edge.style.press_darkens_fill() {
         lerp_color(bg_color, rgb(0, 0, 0), 0.28)
     } else if hovered {
         lerp_color(bg_color, text_color, 0.14)
     } else {
         bg_color
     };
+    // Bevel themes signal the press with the edge flip alone, the way a real
+    // push button does; only the flat vocabulary shrinks the fill.
     if pressed
+        && edge.style.press_darkens_fill()
         && button_rect.right - button_rect.left > 4
         && button_rect.bottom - button_rect.top > 4
     {
@@ -469,6 +473,9 @@ pub(super) fn draw_header_button(
         let brush = CreateSolidBrush(bg);
         FillRect(hdc, &button_rect, brush);
         DeleteObject(brush);
+    }
+    draw_edge(hdc, &button_rect, edge.button(pressed), bg);
+    unsafe {
         SelectObject(hdc, font);
         SetTextColor(hdc, text_color);
     }

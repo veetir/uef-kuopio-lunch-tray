@@ -36,7 +36,7 @@ use windows::Win32::System::Threading::{CreateMutexW, OpenMutexW, MUTEX_ALL_ACCE
 #[cfg(not(all(feature = "bench", not(windows))))]
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DispatchMessageW, GetMessageW, TranslateMessage, MSG, SW_HIDE,
-    WS_EX_TOOLWINDOW, WS_OVERLAPPEDWINDOW, WS_POPUP,
+    WS_EX_TOOLWINDOW, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_THICKFRAME,
 };
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, PostMessageW};
@@ -89,10 +89,14 @@ fn main() -> anyhow::Result<()> {
         );
 
         let popup_class = to_wstring(winmsg::POPUP_WND_CLASS);
+        // WS_THICKFRAME is what makes DWM treat the popup as a window worth
+        // shadowing. The popup window procedure hands the whole frame back to
+        // the client area and suppresses the resize edges it would otherwise
+        // bring, so the style costs nothing visually.
         let popup_style = if no_tray {
             WS_OVERLAPPEDWINDOW
         } else {
-            WS_POPUP
+            WS_POPUP | WS_THICKFRAME
         };
         let popup_ex_style = if no_tray {
             Default::default()

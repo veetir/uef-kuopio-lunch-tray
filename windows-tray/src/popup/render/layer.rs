@@ -46,6 +46,10 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
             create_fonts(hdc, &state.settings.theme, scale.factor);
         let bullet_style = bullet_style_for_theme(&state.settings.theme);
         let bullet_base_color = bullet_color(bullet_style, &palette);
+        let border_edge = ChromeEdge {
+            style: border_style_for_theme(&state.settings.theme),
+            color: palette.border_color,
+        };
         let highlight_font = bold_font;
         let _old_font = SelectObject(hdc, normal_font);
 
@@ -77,6 +81,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
             normal_font,
             pressed_button == Some(HeaderButtonAction::Prev),
             hovered_button == Some(HeaderButtonAction::Prev),
+            border_edge,
         );
         draw_header_button(
             hdc,
@@ -87,6 +92,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
             normal_font,
             pressed_button == Some(HeaderButtonAction::Next),
             hovered_button == Some(HeaderButtonAction::Next),
+            border_edge,
         );
         draw_header_button(
             hdc,
@@ -97,6 +103,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
             normal_font,
             false,
             hovered_button == Some(HeaderButtonAction::Close),
+            border_edge,
         );
         draw_header_marker_rail(
             hdc,
@@ -174,6 +181,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                             highlight_font,
                             small_font,
                             small_bold_font,
+                            border_edge,
                             bullet_style,
                             bullet_color: layer_bullet,
                             favorites: &favorites,
@@ -242,6 +250,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                             highlight_font,
                             small_font,
                             small_bold_font,
+                            border_edge,
                             bullet_style,
                             bullet_color: layer_bullet,
                             favorites: &favorites,
@@ -346,6 +355,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                             highlight_font,
                             small_font,
                             small_bold_font,
+                            border_edge,
                             bullet_style,
                             bullet_color: old_bullet,
                             favorites: &favorites,
@@ -387,6 +397,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                             highlight_font,
                             small_font,
                             small_bold_font,
+                            border_edge,
                             bullet_style,
                             bullet_color: new_bullet,
                             favorites: &favorites,
@@ -439,6 +450,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                     highlight_font,
                     small_font,
                     small_bold_font,
+                    border_edge,
                     bullet_style,
                     bullet_color: bullet_base_color,
                     favorites: &favorites,
@@ -449,6 +461,15 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
             );
             store_selection_layout(capture.layout);
         }
+
+        // Frame last, over the header fill and content, so the edge is unbroken.
+        let frame_rect = RECT {
+            left: rect.left,
+            top: rect.top,
+            right: rect.right,
+            bottom: rect.bottom,
+        };
+        draw_edge(hdc, &frame_rect, border_edge, palette.bg_color);
 
         SelectObject(hdc, _old_font);
         DeleteObject(normal_font);
@@ -495,6 +516,7 @@ struct DrawLayerParams<'a> {
     small_bold_font: HFONT,
     bullet_style: BulletStyle,
     bullet_color: COLORREF,
+    border_edge: ChromeEdge,
     favorites: &'a FavoritesSnapshot,
     selection: Option<&'a SelectionRange>,
     capture: Option<&'a mut DrawCapture>,
@@ -687,12 +709,15 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                     if dim_line {
                         stale_dim_color
                     } else {
-                        params.recipe_border_color
-                    },
-                    if dim_line {
-                        stale_dim_color
-                    } else {
                         params.body_text_color
+                    },
+                    ChromeEdge {
+                        style: params.border_edge.style,
+                        color: if dim_line {
+                            stale_dim_color
+                        } else {
+                            params.recipe_border_color
+                        },
                     },
                 );
             }
@@ -1096,11 +1121,6 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                     if dim_line {
                         stale_dim_color
                     } else {
-                        params.recipe_border_color
-                    },
-                    if dim_line {
-                        stale_dim_color
-                    } else {
                         params.recipe_label_color
                     },
                     if dim_line {
@@ -1114,6 +1134,14 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                         params.recipe_ingredient_highlight_color
                     },
                     params.recipe_selection_text_color,
+                    ChromeEdge {
+                        style: params.border_edge.style,
+                        color: if dim_line {
+                            stale_dim_color
+                        } else {
+                            params.recipe_border_color
+                        },
+                    },
                     bullet_width,
                     params.height - params.scale.padding_y,
                     params.selection,
@@ -1414,8 +1442,8 @@ fn draw_closure_notice_block(
     line_height: i32,
     font: HFONT,
     bg_color: COLORREF,
-    border_color: COLORREF,
     text_color: COLORREF,
+    edge: ChromeEdge,
 ) -> i32 {
     let pad_x = scale_px(NOTICE_PAD_X, scale.factor);
     let pad_y = scale_px(NOTICE_PAD_Y, scale.factor);
@@ -1441,7 +1469,7 @@ fn draw_closure_notice_block(
         SelectObject(hdc, font);
         SetTextColor(hdc, text_color);
     }
-    draw_outline_rect(hdc, &block_rect, border_color);
+    draw_edge(hdc, &block_rect, edge.panel(), bg_color);
 
     let mut text_y = block_top + pad_y;
     if wrapped.is_empty() {
@@ -1479,11 +1507,11 @@ fn draw_recipe_detail_block(
     normal_font: HFONT,
     label_font: HFONT,
     bg_color: COLORREF,
-    border_color: COLORREF,
     label_color: COLORREF,
     text_color: COLORREF,
     ingredient_highlight_color: COLORREF,
     selection_text_color: COLORREF,
+    edge: ChromeEdge,
     bullet_width: i32,
     max_bottom: i32,
     selection: Option<&SelectionRange>,
@@ -1537,7 +1565,7 @@ fn draw_recipe_detail_block(
         FillRect(hdc, &block_rect, brush);
         DeleteObject(brush);
     }
-    draw_recipe_detail_border(hdc, &block_rect, border_color);
+    draw_recipe_detail_border(hdc, &block_rect, edge, bg_color);
     if let Some(ref mut draw_capture) = capture {
         draw_capture.layout.recipe_scroll_rect = Some(block_rect);
         draw_capture.layout.recipe_scroll_max_offset_px = max_scroll_offset;
@@ -1553,7 +1581,7 @@ fn draw_recipe_detail_block(
             max_scroll_offset,
             viewport_height,
             content_height,
-            border_color,
+            edge.color,
             label_color,
         );
     }
@@ -1983,8 +2011,8 @@ fn recipe_detail_row_layouts(
     out
 }
 
-fn draw_recipe_detail_border(hdc: HDC, rect: &RECT, color: COLORREF) {
-    draw_outline_rect(hdc, rect, color);
+fn draw_recipe_detail_border(hdc: HDC, rect: &RECT, edge: ChromeEdge, face: COLORREF) {
+    draw_edge(hdc, rect, edge.panel(), face);
 }
 
 fn draw_outline_rect(hdc: HDC, rect: &RECT, color: COLORREF) {

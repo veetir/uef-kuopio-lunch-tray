@@ -20,11 +20,12 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent, TME_LEAVE, TR
 use windows::Win32::UI::WindowsAndMessaging::{
     DefWindowProcW, DestroyWindow, GetCursorPos, GetWindowLongPtrW, GetWindowRect, KillTimer,
     LoadCursorW, MessageBoxW, PostQuitMessage, RegisterClassExW, SetCursor, SetForegroundWindow,
-    SetTimer, SetWindowLongPtrW, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, IDC_ARROW,
-    IDC_HAND, IDYES, MB_DEFBUTTON2, MB_ICONINFORMATION, MB_ICONWARNING, MB_YESNO, WM_ACTIVATE,
-    WM_APP, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_KEYDOWN,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_PAINT,
-    WM_RBUTTONUP, WM_SETTINGCHANGE, WM_THEMECHANGED, WM_TIMER, WNDCLASSEXW,
+    SetTimer, SetWindowLongPtrW, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, GWL_STYLE,
+    HTCLIENT, IDC_ARROW, IDC_HAND, IDYES, MB_DEFBUTTON2, MB_ICONINFORMATION, MB_ICONWARNING,
+    MB_YESNO, WM_ACTIVATE, WM_APP, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_DPICHANGED,
+    WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONUP, WM_MOUSEMOVE,
+    WM_MOUSEWHEEL, WM_NCCALCSIZE, WM_NCCREATE, WM_NCHITTEST, WM_PAINT, WM_RBUTTONUP,
+    WM_SETTINGCHANGE, WM_THEMECHANGED, WM_TIMER, WNDCLASSEXW, WS_CAPTION,
 };
 
 pub const TRAY_WND_CLASS: &str = "CompassLunchTrayWindow";
@@ -285,6 +286,12 @@ pub unsafe extern "system" fn tray_wndproc(
 }
 
 /// Window procedure for the visible popup window.
+/// True for the tray popup, false for the captioned window `--no-tray` creates.
+unsafe fn popup_is_frameless(hwnd: HWND) -> bool {
+    let style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
+    style & WS_CAPTION.0 == 0
+}
+
 pub unsafe extern "system" fn popup_wndproc(
     hwnd: HWND,
     msg: u32,
@@ -307,6 +314,14 @@ pub unsafe extern "system" fn popup_wndproc(
             LRESULT(0)
         }
         WM_ERASEBKGND => LRESULT(1),
+        // The popup carries WS_THICKFRAME only so DWM gives it a real window
+        // shadow. Claiming the whole window rect as client area keeps the frame
+        // itself invisible, and reporting every hit as client suppresses the
+        // resize edges that style would otherwise put around the popup. Skipped
+        // in `--no-tray` mode, where the popup is a normal captioned window and
+        // both overrides would strip its title bar.
+        WM_NCCALCSIZE if wparam.0 != 0 && popup_is_frameless(hwnd) => LRESULT(0),
+        WM_NCHITTEST if popup_is_frameless(hwnd) => LRESULT(HTCLIENT as isize),
         WM_DPICHANGED => {
             let app = app_from_hwnd(hwnd);
             if !app.is_null() {

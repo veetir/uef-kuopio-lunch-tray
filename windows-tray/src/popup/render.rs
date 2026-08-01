@@ -1,6 +1,7 @@
 //! Popup painting and text rendering helpers.
 
 use super::animation::{current_animation_frame, hovered_header_button, pressed_header_button};
+use super::border::{border_style_for_theme, draw_edge, ChromeEdge};
 use super::bullet::{
     bullet_color, bullet_column_width, bullet_style_for_theme, draw_bullet, BulletStyle,
 };

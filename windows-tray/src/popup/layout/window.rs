@@ -1,5 +1,6 @@
 //! Window placement, popup sizing, and font creation helpers.
 
+use super::super::border::theme_shadow_enabled;
 use super::cache::{
     cached_desired_size, desired_size_cache_key, popup_cached_layout_budget,
     update_desired_size_cache,
@@ -7,8 +8,75 @@ use super::cache::{
 use super::text::{measure_lines_layout, text_metrics, text_width_with_font};
 use super::*;
 
+/// Turns the popup's drop shadow on or off to match the active theme.
+///
+/// This is the real DWM window shadow, the same one every ordinary window on the
+/// desktop casts, rather than the small fixed `CS_DROPSHADOW` tooltip shadow.
+/// DWM shadows any window that carries a sizing frame, so the shadow is toggled
+/// by adding and removing `WS_THICKFRAME`. The frame itself never shows:
+/// `WM_NCCALCSIZE` hands the whole window rect back to the client area and
+/// `WM_NCHITTEST` suppresses the resize edges.
+///
+/// Deliberately *not* done with `DwmExtendFrameIntoClientArea`: that asks DWM to
+/// composite a glass band at the window edge, and GDI drawing leaves zero alpha
+/// behind, so the band shows through as a pale rim instead of popup content.
+///
+/// The shadow is composited by DWM out of process, so it costs the app no
+/// bitmap, no extra window, and nothing on the paint path.
+fn apply_popup_shadow(hwnd: HWND, theme: &str) {
+    unsafe {
+        let style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
+        if style & WS_CAPTION.0 != 0 {
+            // `--no-tray` builds a normal captioned window; leave its frame be.
+            return;
+        }
+
+        // A sizing frame otherwise earns a 1px system border along every edge,
+        // drawn in the accent colour. Windows 11 lets us decline it; on Windows
+        // 10 the call fails harmlessly and the line stays.
+        let border = DWMWA_COLOR_NONE;
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_BORDER_COLOR,
+            &border as *const _ as *const _,
+            std::mem::size_of_val(&border) as u32,
+        );
+
+        // Windows 11 rounds the corners of any window with a sizing frame,
+        // which would be badly wrong on the retro themes.
+        let corner = DWMWCP_DONOTROUND;
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_WINDOW_CORNER_PREFERENCE,
+            &corner as *const _ as *const _,
+            std::mem::size_of_val(&corner) as u32,
+        );
+
+        let wanted = theme_shadow_enabled(theme);
+        if wanted == (style & WS_THICKFRAME.0 != 0) {
+            return;
+        }
+        let updated = if wanted {
+            style | WS_THICKFRAME.0
+        } else {
+            style & !WS_THICKFRAME.0
+        };
+        SetWindowLongPtrW(hwnd, GWL_STYLE, updated as isize);
+        let _ = SetWindowPos(
+            hwnd,
+            HWND(0),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+        );
+    }
+}
+
 pub(in crate::popup) fn show_popup(hwnd: HWND, state: &AppState) {
     unsafe {
+        apply_popup_shadow(hwnd, &state.settings.theme);
         let (width, height) = desired_size(hwnd, state);
         let mut cursor = POINT::default();
         let _ = GetCursorPos(&mut cursor);
@@ -22,6 +90,7 @@ pub(in crate::popup) fn show_popup(hwnd: HWND, state: &AppState) {
 
 pub(in crate::popup) fn show_popup_at(hwnd: HWND, state: &AppState, anchor: POINT) {
     unsafe {
+        apply_popup_shadow(hwnd, &state.settings.theme);
         let (width, height) = desired_size(hwnd, state);
         let (width, height) = constrain_size_to_work_area_near_point(width, height, anchor);
         let (x, y) = position_near_point(width, height, anchor);
@@ -33,6 +102,7 @@ pub(in crate::popup) fn show_popup_at(hwnd: HWND, state: &AppState, anchor: POIN
 
 pub(in crate::popup) fn show_popup_for_tray_icon(hwnd: HWND, state: &AppState, tray_rect: RECT) {
     unsafe {
+        apply_popup_shadow(hwnd, &state.settings.theme);
         let (width, height) = desired_size(hwnd, state);
         let hdc = windows::Win32::Graphics::Gdi::GetDC(hwnd);
         let dpi_y = GetDeviceCaps(hdc, LOGPIXELSY);
