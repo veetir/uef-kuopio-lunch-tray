@@ -1,6 +1,7 @@
 //! Popup sizing, wrapping, cache, and placement helpers.
 
 use super::animation::{begin_open_animation, clear_animation_state, clear_header_button_press};
+use super::bullet::{bullet_column_width, bullet_style_for_theme};
 use super::content::build_lines;
 use super::interaction::clear_selection_state;
 use super::theme::theme_font_family;
@@ -99,7 +100,10 @@ mod tests {
 
     #[test]
     fn group_caption_gap_separates_following_groups() {
-        let lines = vec![caption("Salad buffet"), Line::Text("next group".to_string())];
+        let lines = vec![
+            caption("Salad buffet"),
+            Line::Text("next group".to_string()),
+        ];
 
         assert_eq!(
             group_caption_bottom_gap(&lines, 0),

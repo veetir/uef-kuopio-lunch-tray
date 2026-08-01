@@ -56,7 +56,6 @@ const HEADER_MARKER_GAP: i32 = 8;
 const HEADER_MARKER_HIT_SIZE: i32 = 16;
 const FAVORITES_RELOAD_INTERVAL_MS: i64 = 1000;
 const POPUP_DESIRED_SIZE_CACHE_LIMIT: usize = 32;
-const BULLET_PREFIX: &str = "▸ ";
 const HEADER_TITLE_BUTTON_MARGIN: i32 = 12;
 const RECIPE_DETAIL_PAD_X: i32 = 8;
 const RECIPE_DETAIL_PAD_Y: i32 = 5;
@@ -393,6 +392,7 @@ struct HeaderButtonHover {
 }
 
 mod animation;
+mod bullet;
 mod content;
 mod interaction;
 mod layout;

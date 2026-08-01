@@ -1,0 +1,18 @@
+[
+  {
+    "name": "Custom1",
+    "font": "default",
+    "bullet": "triangle",
+    "bg_color": "#1a1a2e",
+    "body_text_color": "#e0e0e0",
+    "heading_color": "#e94560",
+    "header_title_color": "#ffffff",
+    "suffix_color": "#7a7a9e",
+    "suffix_highlight_color": "#e94560",
+    "favorite_highlight_color": "#f5c518",
+    "selection_bg_color": "#16213e",
+    "header_bg_color": "#0f3460",
+    "button_bg_color": "#16213e",
+    "divider_color": "#533483"
+  }
+]

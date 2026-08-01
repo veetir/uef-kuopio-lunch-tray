@@ -42,8 +42,10 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
 
         let dpi_y = GetDeviceCaps(hdc, LOGPIXELSY);
         let scale = popup_scale_for_dpi(&state.settings, dpi_y);
-        let (normal_font, bullet_font, bold_font, bold_italic_font, small_font, small_bold_font) =
+        let (normal_font, bold_font, bold_italic_font, small_font, small_bold_font) =
             create_fonts(hdc, &state.settings.theme, scale.factor);
+        let bullet_style = bullet_style_for_theme(&state.settings.theme);
+        let bullet_base_color = bullet_color(bullet_style, &palette);
         let highlight_font = bold_font;
         let _old_font = SelectObject(hdc, normal_font);
 
@@ -138,6 +140,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                         lerp_color(palette.bg_color, palette.suffix_highlight_color, progress);
                     let layer_favorites =
                         lerp_color(palette.bg_color, palette.favorite_highlight_color, progress);
+                    let layer_bullet = lerp_color(palette.bg_color, bullet_base_color, progress);
                     draw_content_layer(
                         hdc,
                         &title,
@@ -166,12 +169,13 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                             metrics: &metrics,
                             line_height,
                             normal_font,
-                            bullet_font,
                             bold_font,
                             bold_italic_font,
                             highlight_font,
                             small_font,
                             small_bold_font,
+                            bullet_style,
+                            bullet_color: layer_bullet,
                             favorites: &favorites,
                             selection: None,
                             capture: None,
@@ -203,6 +207,8 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                         palette.favorite_highlight_color,
                         1.0 - progress,
                     );
+                    let layer_bullet =
+                        lerp_color(palette.bg_color, bullet_base_color, 1.0 - progress);
                     draw_content_layer(
                         hdc,
                         &title,
@@ -231,12 +237,13 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                             metrics: &metrics,
                             line_height,
                             normal_font,
-                            bullet_font,
                             bold_font,
                             bold_italic_font,
                             highlight_font,
                             small_font,
                             small_bold_font,
+                            bullet_style,
+                            bullet_color: layer_bullet,
                             favorites: &favorites,
                             selection: None,
                             capture: None,
@@ -293,6 +300,8 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                         palette.favorite_highlight_color,
                         1.0 - old_fade_progress,
                     );
+                    let old_bullet =
+                        lerp_color(palette.bg_color, bullet_base_color, 1.0 - old_fade_progress);
                     let new_body_text =
                         lerp_color(palette.bg_color, palette.body_text_color, progress);
                     let new_heading = lerp_color(palette.bg_color, palette.heading_color, progress);
@@ -303,6 +312,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                         lerp_color(palette.bg_color, palette.suffix_highlight_color, progress);
                     let new_favorites =
                         lerp_color(palette.bg_color, palette.favorite_highlight_color, progress);
+                    let new_bullet = lerp_color(palette.bg_color, bullet_base_color, progress);
                     draw_content_layer(
                         hdc,
                         &old_title,
@@ -331,12 +341,13 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                             metrics: &metrics,
                             line_height,
                             normal_font,
-                            bullet_font,
                             bold_font,
                             bold_italic_font,
                             highlight_font,
                             small_font,
                             small_bold_font,
+                            bullet_style,
+                            bullet_color: old_bullet,
                             favorites: &favorites,
                             selection: None,
                             capture: None,
@@ -371,12 +382,13 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                             metrics: &metrics,
                             line_height,
                             normal_font,
-                            bullet_font,
                             bold_font,
                             bold_italic_font,
                             highlight_font,
                             small_font,
                             small_bold_font,
+                            bullet_style,
+                            bullet_color: new_bullet,
                             favorites: &favorites,
                             selection: None,
                             capture: None,
@@ -422,12 +434,13 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                     metrics: &metrics,
                     line_height,
                     normal_font,
-                    bullet_font,
                     bold_font,
                     bold_italic_font,
                     highlight_font,
                     small_font,
                     small_bold_font,
+                    bullet_style,
+                    bullet_color: bullet_base_color,
                     favorites: &favorites,
                     selection: selection.as_ref(),
                     capture: Some(&mut capture),
@@ -439,7 +452,6 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
 
         SelectObject(hdc, _old_font);
         DeleteObject(normal_font);
-        DeleteObject(bullet_font);
         DeleteObject(bold_font);
         DeleteObject(bold_italic_font);
         DeleteObject(small_font);
@@ -476,12 +488,13 @@ struct DrawLayerParams<'a> {
     metrics: &'a TEXTMETRICW,
     line_height: i32,
     normal_font: HFONT,
-    bullet_font: HFONT,
     bold_font: HFONT,
     bold_italic_font: HFONT,
     highlight_font: HFONT,
     small_font: HFONT,
     small_bold_font: HFONT,
+    bullet_style: BulletStyle,
+    bullet_color: COLORREF,
     favorites: &'a FavoritesSnapshot,
     selection: Option<&'a SelectionRange>,
     capture: Option<&'a mut DrawCapture>,
@@ -505,7 +518,7 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
         ((params.scale.header_height - params.metrics.tmHeight) / 2 - 1) + params.y_offset;
     draw_text_line(hdc, &full_title, title_x, title_y);
 
-    let bullet_width = text_width_with_font(hdc, params.bullet_font, BULLET_PREFIX);
+    let bullet_width = bullet_column_width(hdc, params.normal_font, params.bullet_style);
     let main_wrap_width = (params.content_width - bullet_width).max(24);
     let stale_mode = lines
         .iter()
@@ -717,6 +730,11 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                 } else {
                     params.recipe_border_color
                 };
+                let line_bullet_color = if dim_line {
+                    stale_dim_color
+                } else {
+                    params.bullet_color
+                };
                 unsafe {
                     SelectObject(hdc, params.normal_font);
                     SetTextColor(hdc, line_body_color);
@@ -805,11 +823,14 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                         params.highlight_font,
                     );
                     if *show_bullet {
-                        unsafe {
-                            SelectObject(hdc, params.bullet_font);
-                            SetTextColor(hdc, line_body_color);
-                        }
-                        draw_text_line(hdc, BULLET_PREFIX, params.scale.padding_x, y);
+                        draw_bullet(
+                            hdc,
+                            params.bullet_style,
+                            params.scale.padding_x,
+                            y,
+                            params.metrics.tmHeight as i32,
+                            line_bullet_color,
+                        );
                         unsafe {
                             SelectObject(hdc, params.normal_font);
                             SetTextColor(hdc, line_body_color);
@@ -925,11 +946,14 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                         let main_x = line_x + prefix_width;
                         if idx == 0 {
                             if *show_bullet {
-                                unsafe {
-                                    SelectObject(hdc, params.bullet_font);
-                                    SetTextColor(hdc, line_body_color);
-                                }
-                                draw_text_line(hdc, BULLET_PREFIX, params.scale.padding_x, y);
+                                draw_bullet(
+                                    hdc,
+                                    params.bullet_style,
+                                    params.scale.padding_x,
+                                    y,
+                                    params.metrics.tmHeight as i32,
+                                    line_bullet_color,
+                                );
                                 unsafe {
                                     SelectObject(hdc, params.normal_font);
                                     SetTextColor(hdc, line_body_color);

@@ -1,6 +1,9 @@
 //! Popup painting and text rendering helpers.
 
 use super::animation::{current_animation_frame, hovered_header_button, pressed_header_button};
+use super::bullet::{
+    bullet_color, bullet_column_width, bullet_style_for_theme, draw_bullet, BulletStyle,
+};
 use super::content::{build_lines, current_favorites_snapshot};
 use super::interaction::{
     clear_selection_layout, current_selection_range, recipe_detail_scroll_offset_px,

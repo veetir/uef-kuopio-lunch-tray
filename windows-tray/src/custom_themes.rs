@@ -17,6 +17,8 @@ pub struct CustomThemeEntry {
     pub name: String,
     #[serde(default)]
     pub font: Option<String>,
+    #[serde(default)]
+    pub bullet: Option<String>,
     pub bg_color: String,
     pub body_text_color: String,
     pub heading_color: String,
@@ -35,6 +37,7 @@ pub struct CustomThemeEntry {
 pub struct CustomThemeDef {
     pub name: String,
     pub font: CustomThemeFont,
+    pub bullet: CustomThemeBullet,
     pub bg_color: COLORREF,
     pub body_text_color: COLORREF,
     pub heading_color: COLORREF,
@@ -69,6 +72,40 @@ impl CustomThemeFont {
     }
 }
 
+/// Bullet shape preset chosen by a custom theme. Kept as a plain name here so
+/// this module stays free of popup rendering types; `popup::bullet` maps it to
+/// the drawn shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CustomThemeBullet {
+    Triangle,
+    Square,
+    Diamond,
+    Bevel,
+    None,
+}
+
+impl CustomThemeBullet {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Triangle => "triangle",
+            Self::Square => "square",
+            Self::Diamond => "diamond",
+            Self::Bevel => "bevel",
+            Self::None => "none",
+        }
+    }
+}
+
+fn normalize_bullet_preset(value: Option<&str>) -> CustomThemeBullet {
+    match value.unwrap_or_default().to_ascii_lowercase().as_str() {
+        "square" => CustomThemeBullet::Square,
+        "diamond" => CustomThemeBullet::Diamond,
+        "bevel" | "win95" | "win95square" => CustomThemeBullet::Bevel,
+        "none" => CustomThemeBullet::None,
+        _ => CustomThemeBullet::Triangle,
+    }
+}
+
 fn normalize_font_preset(value: Option<&str>) -> CustomThemeFont {
     match value.unwrap_or_default().to_ascii_lowercase().as_str() {
         "classic" => CustomThemeFont::Classic,
@@ -96,6 +133,7 @@ fn parse_entry(entry: &CustomThemeEntry) -> Option<CustomThemeDef> {
     Some(CustomThemeDef {
         name: entry.name.clone(),
         font: normalize_font_preset(entry.font.as_deref()),
+        bullet: normalize_bullet_preset(entry.bullet.as_deref()),
         bg_color: parse_hex_color(&entry.bg_color)?,
         body_text_color: parse_hex_color(&entry.body_text_color)?,
         heading_color: parse_hex_color(&entry.heading_color)?,
@@ -118,6 +156,7 @@ fn default_themes_json() -> Vec<CustomThemeEntry> {
     vec![CustomThemeEntry {
         name: "Custom1".to_string(),
         font: Some("default".to_string()),
+        bullet: Some("triangle".to_string()),
         bg_color: "#1a1a2e".to_string(),
         body_text_color: "#e0e0e0".to_string(),
         heading_color: "#e94560".to_string(),
@@ -183,9 +222,14 @@ mod tests {
     use super::*;
 
     fn theme_entry(font: Option<&str>) -> CustomThemeEntry {
+        bullet_theme_entry(font, None)
+    }
+
+    fn bullet_theme_entry(font: Option<&str>, bullet: Option<&str>) -> CustomThemeEntry {
         CustomThemeEntry {
             name: "Test".to_string(),
             font: font.map(str::to_string),
+            bullet: bullet.map(str::to_string),
             bg_color: "#000000".to_string(),
             body_text_color: "#ffffff".to_string(),
             heading_color: "#ffffff".to_string(),
@@ -221,5 +265,33 @@ mod tests {
 
         let parsed = parse_entry(&theme_entry(Some("rounded"))).unwrap();
         assert_eq!(parsed.font.family(), "Verdana");
+    }
+
+    #[test]
+    fn custom_theme_bullet_defaults_to_triangle() {
+        let parsed = parse_entry(&theme_entry(None)).unwrap();
+
+        assert_eq!(parsed.bullet, CustomThemeBullet::Triangle);
+    }
+
+    #[test]
+    fn custom_theme_bullet_decodes_supported_presets() {
+        for (value, expected) in [
+            ("square", CustomThemeBullet::Square),
+            ("diamond", CustomThemeBullet::Diamond),
+            ("bevel", CustomThemeBullet::Bevel),
+            ("win95square", CustomThemeBullet::Bevel),
+            ("none", CustomThemeBullet::None),
+        ] {
+            let parsed = parse_entry(&bullet_theme_entry(None, Some(value))).unwrap();
+            assert_eq!(parsed.bullet, expected, "bullet preset {value}");
+        }
+    }
+
+    #[test]
+    fn custom_theme_bullet_falls_back_on_unknown_preset() {
+        let parsed = parse_entry(&bullet_theme_entry(None, Some("wobble"))).unwrap();
+
+        assert_eq!(parsed.bullet, CustomThemeBullet::Triangle);
     }
 }
