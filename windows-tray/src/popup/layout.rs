@@ -37,8 +37,9 @@ pub(super) use text::{
     wrap_text_to_width_with_font_rows,
 };
 pub(super) use window::{
-    create_fonts, header_layout, header_marker_rects, header_title, hide_popup,
-    resize_popup_keep_position, show_popup, show_popup_at, show_popup_for_tray_icon,
+    create_fonts, header_layout, header_marker_rects, header_marker_sizes, header_rail_top,
+    header_title, header_title_y, hide_popup, resize_popup_keep_position, show_popup,
+    show_popup_at, show_popup_for_tray_icon,
 };
 
 pub(super) fn scale_px(base: i32, factor: f32) -> i32 {

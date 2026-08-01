@@ -438,29 +438,150 @@ pub(super) fn fit_text_to_width(hdc: HDC, text: &str, max_width: i32) -> String 
     trimmed
 }
 
+/// Fill for a pressed button under the flat vocabulary.
+///
+/// Darkening is the usual move, but it does nothing to an already-black face.
+/// Near-black faces brighten instead, so the press always registers.
+fn pressed_fill(face: COLORREF) -> COLORREF {
+    if contrast_ratio(face, rgb(0, 0, 0)) < 2.0 {
+        lerp_color(face, rgb(255, 255, 255), 0.22)
+    } else {
+        lerp_color(face, rgb(0, 0, 0), 0.28)
+    }
+}
+
+/// The mark on a header button.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum HeaderGlyph {
+    Prev,
+    Next,
+    Close,
+}
+
+/// Stroke width of the close cross, scaled from the button it sits in.
+fn cross_stroke(button_size: i32) -> i32 {
+    // Falls to a single pixel on the smallest buttons, which is what the
+    // original title-bar cross used at that size.
+    (button_size / 14).max(1)
+}
+
+fn fill_rect(hdc: HDC, left: i32, top: i32, right: i32, bottom: i32, color: COLORREF) {
+    if right <= left || bottom <= top {
+        return;
+    }
+    unsafe {
+        let brush = CreateSolidBrush(color);
+        FillRect(
+            hdc,
+            &RECT {
+                left,
+                top,
+                right,
+                bottom,
+            },
+            brush,
+        );
+        DeleteObject(brush);
+    }
+}
+
+/// Solid navigation arrow, built one scanline at a time.
+///
+/// The same construction as a scrollbar arrow: a flat back edge and a single
+/// apex pixel, with each row one pixel narrower than the last. Solid shapes read
+/// as deliberate at this size in a way strokes do not — a chevron thick enough
+/// to be visible in a 33px button is also thick enough to look clumsy.
+fn draw_nav_arrow(hdc: HDC, rect: &RECT, point_left: bool, color: COLORREF) {
+    let button_size = (rect.right - rect.left).min(rect.bottom - rect.top);
+    // 40% looked right on Teletext's low-contrast white-on-blue and far too
+    // heavy in black-on-grey. Perceived weight is area times contrast, so the
+    // proportion has to suit the theme that renders it hardest.
+    let mut height = (button_size * 32 / 100).max(5);
+    if height % 2 == 0 {
+        // Odd, so the apex lands on a whole pixel instead of straddling two.
+        height += 1;
+    }
+    let half = height / 2;
+    let width = half + 1;
+    let left = (rect.left + rect.right) / 2 - width / 2;
+    let top = (rect.top + rect.bottom) / 2 - half;
+
+    for row in 0..height {
+        let run = width - (row - half).abs();
+        if run <= 0 {
+            continue;
+        }
+        let (x0, x1) = if point_left {
+            (left + width - run, left + width)
+        } else {
+            (left, left + run)
+        };
+        fill_rect(hdc, x0, top + row, x1, top + row + 1, color);
+    }
+}
+
+/// Close cross, drawn the way a bitmap font would: one horizontal run per row,
+/// stepping across by a pixel each time.
+///
+/// Keeps the diagonals thin and even. Stamping a square per step instead gives
+/// a staircase whose perpendicular thickness is about 1.4x the nominal stroke,
+/// which is how the first attempt ended up looking hand-drawn.
+fn draw_close_cross(hdc: HDC, rect: &RECT, color: COLORREF) {
+    let button_size = (rect.right - rect.left).min(rect.bottom - rect.top);
+    let stroke = cross_stroke(button_size);
+    let span = (button_size * 38 / 100).max(stroke * 3 + 1);
+    let rows = span - stroke + 1;
+    let left = (rect.left + rect.right) / 2 - span / 2;
+    let top = (rect.top + rect.bottom) / 2 - rows / 2;
+
+    for row in 0..rows {
+        let y = top + row;
+        let down_right = left + row;
+        fill_rect(hdc, down_right, y, down_right + stroke, y + 1, color);
+        let down_left = left + span - stroke - row;
+        fill_rect(hdc, down_left, y, down_left + stroke, y + 1, color);
+    }
+}
+
+/// Draws a header button's mark, centred in `rect`.
+///
+/// Drawn rather than typed for the same reason the bullets and rail markers
+/// are: as font glyphs, `X` was a capital letter and the chevrons were
+/// punctuation, so the mark filled whatever share of the button the theme's
+/// font happened to give it, and which share depended on the family.
+pub(super) fn draw_header_glyph(hdc: HDC, glyph: HeaderGlyph, rect: &RECT, color: COLORREF) {
+    if (rect.right - rect.left).min(rect.bottom - rect.top) < 6 {
+        return;
+    }
+    match glyph {
+        HeaderGlyph::Prev => draw_nav_arrow(hdc, rect, true, color),
+        HeaderGlyph::Next => draw_nav_arrow(hdc, rect, false, color),
+        HeaderGlyph::Close => draw_close_cross(hdc, rect, color),
+    }
+}
+
 pub(super) fn draw_header_button(
     hdc: HDC,
     rect: &RECT,
-    label: &str,
+    glyph: HeaderGlyph,
     bg_color: COLORREF,
-    text_color: COLORREF,
-    font: HFONT,
+    glyph_color: COLORREF,
     pressed: bool,
     hovered: bool,
     edge: ChromeEdge,
 ) {
     let mut button_rect = *rect;
-    let bg = if pressed && edge.style.press_darkens_fill() {
-        lerp_color(bg_color, rgb(0, 0, 0), 0.28)
+    let bg = if pressed && edge.style.press_shifts_fill() {
+        pressed_fill(bg_color)
     } else if hovered {
-        lerp_color(bg_color, text_color, 0.14)
+        lerp_color(bg_color, glyph_color, 0.14)
     } else {
         bg_color
     };
     // Bevel themes signal the press with the edge flip alone, the way a real
     // push button does; only the flat vocabulary shrinks the fill.
     if pressed
-        && edge.style.press_darkens_fill()
+        && edge.style.press_shifts_fill()
         && button_rect.right - button_rect.left > 4
         && button_rect.bottom - button_rect.top > 4
     {
@@ -475,24 +596,62 @@ pub(super) fn draw_header_button(
         DeleteObject(brush);
     }
     draw_edge(hdc, &button_rect, edge.button(pressed), bg);
-    unsafe {
-        SelectObject(hdc, font);
-        SetTextColor(hdc, text_color);
-    }
-    let label_width = text_width(hdc, label);
-    let metrics = text_metrics(hdc, font);
-    let x = button_rect.left
-        + ((button_rect.right - button_rect.left - label_width) / 2).max(0)
-        + if pressed { 1 } else { 0 };
-    let y = button_rect.top
-        + ((button_rect.bottom - button_rect.top - metrics.tmHeight as i32) / 2).max(0)
-        + if pressed { 1 } else { 0 };
-    draw_text_line(hdc, label, x, y);
+    let nudge = if pressed { 1 } else { 0 };
+    let glyph_rect = RECT {
+        left: button_rect.left + nudge,
+        top: button_rect.top + nudge,
+        right: button_rect.right + nudge,
+        bottom: button_rect.bottom + nudge,
+    };
+    draw_header_glyph(hdc, glyph, &glyph_rect, glyph_color);
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{favorite_match_ranges, ranges_overlap, segments_for_row};
+    use super::{
+        cross_stroke, favorite_match_ranges, pressed_fill, ranges_overlap, segments_for_row,
+    };
+    use crate::popup::theme::{contrast_ratio, rgb};
+
+    #[test]
+    fn cross_stroke_stays_thin_at_every_button_size() {
+        // Smallest button the scale can produce, up through a 4x DPI one.
+        for button_size in 18..=130 {
+            let stroke = cross_stroke(button_size);
+            let span = (button_size * 38 / 100).max(stroke * 3 + 1);
+            assert!(stroke >= 1, "button {button_size} lost its stroke");
+            assert!(
+                stroke * 4 <= span,
+                "button {button_size} stroke {stroke} is heavy for a {span} span"
+            );
+        }
+    }
+
+    #[test]
+    fn cross_stroke_grows_with_the_button() {
+        assert!(cross_stroke(96) > cross_stroke(32));
+    }
+
+    #[test]
+    fn pressed_fill_brightens_a_black_button_face() {
+        let black = rgb(0, 0, 0);
+        let pressed = pressed_fill(black);
+
+        assert!(
+            contrast_ratio(pressed, black) > 1.5,
+            "a black face must visibly change when pressed"
+        );
+    }
+
+    #[test]
+    fn pressed_fill_darkens_a_light_button_face() {
+        let face = rgb(200, 200, 200);
+        let pressed = pressed_fill(face);
+
+        assert!(contrast_ratio(pressed, face) > 1.2);
+        assert!(pressed.0 < face.0, "a light face darkens under the press");
+    }
+
     use crate::popup::FavoritesSnapshot;
 
     #[test]

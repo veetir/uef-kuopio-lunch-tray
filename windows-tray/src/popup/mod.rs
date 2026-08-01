@@ -45,8 +45,8 @@ const LINE_GAP: i32 = 2;
 const ANCHOR_GAP: i32 = 0;
 const POPUP_MAX_WIDTH: i32 = 525;
 const POPUP_MIN_WIDTH: i32 = 320;
-const HEADER_HEIGHT: i32 = 46;
-const HEADER_BUTTON_SIZE: i32 = 30;
+const HEADER_HEIGHT: i32 = 44;
+const HEADER_BUTTON_SIZE: i32 = 26;
 const HEADER_BUTTON_GAP: i32 = 8;
 const LOADING_HINT_DELAY_MS: i64 = 250;
 const MAX_DYNAMIC_LINES: usize = 35;
@@ -60,6 +60,10 @@ const POPUP_SWITCH_OFFSET_PX: i32 = 6;
 const HEADER_MARKER_DOT_SIZE: i32 = 5;
 const HEADER_MARKER_GAP: i32 = 8;
 const HEADER_MARKER_HIT_SIZE: i32 = 16;
+/// Distance from the header's bottom edge to the top of the marker rail. Sets
+/// how much room is left above the rail for the title to sit on the button
+/// midline instead of being pushed up off it.
+const HEADER_MARKER_BOTTOM_GAP: i32 = 9;
 const FAVORITES_RELOAD_INTERVAL_MS: i64 = 1000;
 const POPUP_DESIRED_SIZE_CACHE_LIMIT: usize = 32;
 const HEADER_TITLE_BUTTON_MARGIN: i32 = 12;
@@ -156,6 +160,11 @@ struct PopupDesiredSizeKey {
     stale_date: bool,
     expanded_recipe_key: Option<RecipeExpansionKey>,
     enable_antell_restaurants: bool,
+    /// Index numbers append " (n/total)" to every title, which widens the
+    /// header and so the popup. Without it in the key, sizes cached before the
+    /// setting was toggled are served alongside freshly computed ones and the
+    /// popup resizes as the user scrolls between restaurants.
+    show_restaurant_index_numbers: bool,
     language: String,
     theme: String,
     widget_scale: String,

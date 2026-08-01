@@ -62,11 +62,11 @@ impl BorderStyle {
         }
     }
 
-    /// Whether a pressed button should darken its fill.
+    /// Whether a pressed button should shift its fill.
     ///
     /// Bevel themes signal the press by flipping the edge, the way a real
-    /// push button does, so darkening on top of that reads as muddy.
-    pub(super) fn press_darkens_fill(self) -> bool {
+    /// push button does, so shifting the fill on top of that reads as muddy.
+    pub(super) fn press_shifts_fill(self) -> bool {
         !matches!(self, Self::Raised | Self::Sunken)
     }
 }
@@ -274,8 +274,8 @@ mod tests {
             "pressed bevel button sinks"
         );
         assert_eq!(BorderStyle::Raised.button_style(false), BorderStyle::Raised);
-        assert!(!BorderStyle::Raised.press_darkens_fill());
-        assert!(BorderStyle::Flat.press_darkens_fill());
+        assert!(!BorderStyle::Raised.press_shifts_fill());
+        assert!(BorderStyle::Flat.press_shifts_fill());
     }
 
     #[test]

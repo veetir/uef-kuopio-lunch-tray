@@ -60,7 +60,7 @@ pub(super) fn recipe_detail_palette(theme: &str, palette: &ThemePalette) -> Reci
             bg_color: rgb(0, 0, 130),
             border_color: rgb(255, 0, 255),
             label_color: rgb(255, 255, 0),
-            text_color: rgb(225, 255, 225),
+            text_color: rgb(255, 255, 255),
             ingredient_highlight_color: rgb(255, 0, 255),
             selection_text_color: rgb(0, 0, 0),
         },
@@ -125,6 +125,73 @@ pub(super) fn recipe_detail_palette(theme: &str, palette: &ThemePalette) -> Reci
             selection_text_color: rgb(0, 0, 0),
         },
     }
+}
+
+/// Minimum contrast between an inactive rail marker and the header behind it.
+///
+/// The markers carry count and position, which makes them meaningful non-text
+/// graphics, and 3:1 is the WCAG 1.4.11 threshold for those. Enforced as a floor
+/// rather than a target: the derivation below aims a little above it, and this
+/// catches the palettes where that lands short.
+pub(super) const MARKER_MIN_CONTRAST: f32 = 3.0;
+
+fn relative_luminance(color: COLORREF) -> f32 {
+    fn channel(value: u8) -> f32 {
+        let c = value as f32 / 255.0;
+        if c <= 0.03928 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    }
+    let (r, g, b) = color_channels(color);
+    0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+}
+
+/// WCAG contrast ratio between two colors, from 1.0 to 21.0.
+pub(super) fn contrast_ratio(a: COLORREF, b: COLORREF) -> f32 {
+    let la = relative_luminance(a);
+    let lb = relative_luminance(b);
+    let (hi, lo) = if la >= lb { (la, lb) } else { (lb, la) };
+    (hi + 0.05) / (lo + 0.05)
+}
+
+/// Pushes `fg` toward white or black, whichever gains contrast against `bg`,
+/// until it clears `min_ratio`. Returns `fg` untouched when it already does.
+pub(super) fn ensure_min_contrast(fg: COLORREF, bg: COLORREF, min_ratio: f32) -> COLORREF {
+    if contrast_ratio(fg, bg) >= min_ratio {
+        return fg;
+    }
+    // Measure both directions rather than guessing from luminance: a
+    // mid-luminance background like Teletext 2's green sits just under 0.5 yet
+    // gains far more contrast from black (10.7:1) than from white (2.0:1).
+    let white = rgb(255, 255, 255);
+    let black = rgb(0, 0, 0);
+    let target = if contrast_ratio(white, bg) >= contrast_ratio(black, bg) {
+        white
+    } else {
+        black
+    };
+    let steps = 24;
+    let mut adjusted = fg;
+    for step in 1..=steps {
+        adjusted = lerp_color(fg, target, step as f32 / steps as f32);
+        if contrast_ratio(adjusted, bg) >= min_ratio {
+            break;
+        }
+    }
+    adjusted
+}
+
+/// Color of the inactive markers in the header restaurant rail.
+///
+/// Mixed from the header background toward the header's own title color rather
+/// than from `divider_color`: the rail lives in the header, so its palette
+/// should come from there. The old divider mix produced maroon markers on
+/// Teletext's blue header and a near-invisible pink on Grandma's.
+pub(super) fn marker_inactive_color(palette: &ThemePalette) -> COLORREF {
+    let mixed = lerp_color(palette.header_bg_color, palette.header_title_color, 0.45);
+    ensure_min_contrast(mixed, palette.header_bg_color, MARKER_MIN_CONTRAST)
 }
 
 pub(super) fn theme_palette(theme: &str) -> ThemePalette {
@@ -241,16 +308,22 @@ pub(super) fn theme_palette(theme: &str) -> ThemePalette {
             favorite_highlight_color: rgb(255, 255, 0),
             selection_bg_color: rgb(0, 0, 180),
             header_bg_color: rgb(0, 0, 180),
-            button_bg_color: rgb(0, 0, 140),
+            // Lighter than the header bar, not darker: a face darker than its
+            // bar reads as recessed, and pure black read as a hole punched
+            // through to the page, which is black in this theme.
+            button_bg_color: rgb(48, 48, 208),
             divider_color: rgb(255, 0, 0),
             border_color: rgb(255, 0, 0),
         },
         "teletext2" => ThemePalette {
             bg_color: rgb(0, 0, 0),
-            body_text_color: rgb(225, 255, 225),
+            body_text_color: rgb(255, 255, 255),
             heading_color: rgb(255, 0, 255),
-            header_title_color: rgb(0, 96, 255),
-            suffix_color: rgb(0, 255, 150),
+            // Level 1 teletext only ever used the eight full-saturation RGB
+            // corners, so every text role here is one of them. The previous
+            // #0060FF title also sat at 2.6:1 on this theme's green header.
+            header_title_color: rgb(0, 0, 255),
+            suffix_color: rgb(0, 255, 0),
             suffix_highlight_color: rgb(255, 255, 0),
             favorite_highlight_color: rgb(0, 255, 255),
             selection_bg_color: rgb(0, 96, 255),
@@ -306,5 +379,76 @@ pub(super) fn theme_font_family(theme: &str) -> &'static str {
         _ => crate::custom_themes::find_custom_theme(theme)
             .map(|custom| custom.font.family())
             .unwrap_or("Segoe UI"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every theme offered in the tray menu.
+    const BUILT_IN_THEMES: &[&str] = &[
+        "light",
+        "dark",
+        "blue",
+        "green",
+        "amber",
+        "teletext1",
+        "teletext2",
+        "grandpa",
+        "grandma",
+    ];
+
+    #[test]
+    fn contrast_ratio_spans_the_full_range() {
+        let white = rgb(255, 255, 255);
+        let black = rgb(0, 0, 0);
+
+        assert!((contrast_ratio(white, black) - 21.0).abs() < 0.01);
+        assert!((contrast_ratio(white, white) - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn ensure_min_contrast_lifts_a_failing_pair() {
+        let bg = rgb(168, 20, 104);
+        let fg = rgb(162, 61, 117);
+        assert!(contrast_ratio(fg, bg) < MARKER_MIN_CONTRAST);
+
+        let fixed = ensure_min_contrast(fg, bg, MARKER_MIN_CONTRAST);
+        assert!(contrast_ratio(fixed, bg) >= MARKER_MIN_CONTRAST);
+    }
+
+    #[test]
+    fn ensure_min_contrast_leaves_a_passing_pair_alone() {
+        let bg = rgb(0, 0, 0);
+        let fg = rgb(255, 255, 255);
+
+        assert_eq!(ensure_min_contrast(fg, bg, MARKER_MIN_CONTRAST).0, fg.0);
+    }
+
+    /// Guards the rail against a palette edit quietly making the inactive
+    /// markers unreadable again, which is how Grandma shipped the first time.
+    #[test]
+    fn every_built_in_theme_keeps_its_rail_markers_visible() {
+        for theme in BUILT_IN_THEMES {
+            let palette = theme_palette(theme);
+            let ratio = contrast_ratio(marker_inactive_color(&palette), palette.header_bg_color);
+            assert!(
+                ratio >= MARKER_MIN_CONTRAST,
+                "{theme} inactive markers sit at {ratio:.2}:1"
+            );
+        }
+    }
+
+    #[test]
+    fn active_rail_markers_stay_readable_too() {
+        for theme in BUILT_IN_THEMES {
+            let palette = theme_palette(theme);
+            let ratio = contrast_ratio(palette.header_title_color, palette.header_bg_color);
+            assert!(
+                ratio >= MARKER_MIN_CONTRAST,
+                "{theme} active marker sits at {ratio:.2}:1"
+            );
+        }
     }
 }

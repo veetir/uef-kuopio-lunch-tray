@@ -162,6 +162,7 @@ pub(super) fn desired_size_cache_key(
         stale_date: state.stale_date,
         expanded_recipe_key,
         enable_antell_restaurants: state.settings.enable_antell_restaurants,
+        show_restaurant_index_numbers: state.settings.show_restaurant_index_numbers,
         language: state.settings.language.clone(),
         theme: state.settings.theme.clone(),
         widget_scale: state.settings.widget_scale.clone(),
@@ -368,6 +369,24 @@ mod tests {
         error.status = FetchStatus::Error;
         error.error_message = "provider failed".to_string();
         assert_ne!(base_key, desired_size_cache_key(&error, 96, None).unwrap());
+    }
+
+    /// Index numbers append " (n/total)" to every title, widening the header
+    /// and so the popup. Left out of the key, sizes cached before the toggle
+    /// were served next to freshly computed ones and the popup resized as the
+    /// user scrolled between restaurants.
+    #[test]
+    fn desired_size_key_tracks_restaurant_index_numbers() {
+        let base = test_state();
+        let base_key = desired_size_cache_key(&base, 96, None).unwrap();
+
+        let mut numbered = base.clone();
+        numbered.settings.show_restaurant_index_numbers = true;
+
+        assert_ne!(
+            base_key,
+            desired_size_cache_key(&numbered, 96, None).unwrap()
+        );
     }
 
     fn test_state() -> AppState {

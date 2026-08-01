@@ -12,11 +12,14 @@ use super::interaction::{
 };
 use super::layout::{
     create_fonts, flatten_suffix_segments, group_caption_bottom_gap, header_layout,
-    header_marker_rects, header_title, popup_scale_for_dpi, scale_px, suffix_gap_width,
-    text_metrics, text_width, text_width_with_font, text_with_suffix_width, wrap_text_to_width,
-    wrap_text_to_width_with_font, wrap_text_to_width_with_font_rows, METADATA_BOTTOM_GAP_PX,
+    header_marker_rects, header_marker_sizes, header_rail_top, header_title, header_title_y,
+    popup_scale_for_dpi, scale_px, suffix_gap_width, text_metrics, text_width,
+    text_width_with_font, text_with_suffix_width, wrap_text_to_width, wrap_text_to_width_with_font,
+    wrap_text_to_width_with_font_rows, METADATA_BOTTOM_GAP_PX,
 };
-use super::theme::{lerp_color, recipe_detail_palette, rgb, theme_palette};
+use super::theme::{
+    contrast_ratio, lerp_color, marker_inactive_color, recipe_detail_palette, rgb, theme_palette,
+};
 use super::*;
 
 mod layer;

@@ -195,7 +195,7 @@ pub(in crate::popup) fn header_marker_rects(
     let hit = scale_px(HEADER_MARKER_HIT_SIZE, scale.factor).max(dot + 6);
     let rail_width = count as i32 * dot + (count.saturating_sub(1) as i32 * gap);
     let start_x = (width - rail_width) / 2;
-    let dot_top = scale.header_height - scale_px(10, scale.factor).max(8);
+    let dot_top = scale.header_height - scale_px(HEADER_MARKER_BOTTOM_GAP, scale.factor).max(7);
     let center_y = dot_top + dot / 2;
 
     (0..count)
@@ -210,6 +210,52 @@ pub(in crate::popup) fn header_marker_rects(
             }
         })
         .collect()
+}
+
+/// Drawn sizes of the rail markers: inactive first, then active.
+pub(in crate::popup) fn header_marker_sizes(scale: &PopupScale) -> (i32, i32) {
+    let inactive = scale_px(HEADER_MARKER_DOT_SIZE, scale.factor).max(3);
+    let active = (inactive * 8 / 5).max(inactive + 2);
+    (inactive, active)
+}
+
+/// Top edge of the marker rail, if one is drawn.
+///
+/// The title has to clear this. `None` when there is no rail at all, which is
+/// the single-restaurant and index-number cases.
+pub(in crate::popup) fn header_rail_top(
+    width: i32,
+    settings: &Settings,
+    scale: &PopupScale,
+) -> Option<i32> {
+    let rects = header_marker_rects(width, settings, scale);
+    let first = rects.first()?;
+    let (_, active) = header_marker_sizes(scale);
+    Some((first.top + first.bottom) / 2 - active / 2)
+}
+
+/// Vertical position of the header title.
+///
+/// Aligned to the centre of the nav buttons, because they are the heaviest
+/// things in the header and the eye reads their centre as the bar's midline —
+/// a title floating off that line looks wrong even when it is centred on
+/// something defensible. It only lifts off that line when the marker rail would
+/// otherwise crowd it, and then only by as much as it must.
+pub(in crate::popup) fn header_title_y(
+    button_center_y: i32,
+    text_height: i32,
+    rail_top: Option<i32>,
+    scale: &PopupScale,
+) -> i32 {
+    let aligned = button_center_y - text_height / 2;
+    let min_gap = scale_px(4, scale.factor).max(3);
+    let top_margin = scale_px(2, scale.factor).max(1);
+    match rail_top {
+        Some(rail_top) if aligned + text_height + min_gap > rail_top => {
+            (rail_top - min_gap - text_height).max(top_margin)
+        }
+        _ => aligned.max(top_margin),
+    }
 }
 
 pub(in crate::popup) fn header_title(state: &AppState) -> String {
@@ -555,5 +601,69 @@ unsafe fn work_area_for_monitor(monitor: windows::Win32::Graphics::Gdi::HMONITOR
         info.rcWork
     } else {
         RECT::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scale() -> PopupScale {
+        popup_scale_for_dpi(&Settings::default(), BASE_DPI)
+    }
+
+    #[test]
+    fn marker_active_size_exceeds_inactive() {
+        let (inactive, active) = header_marker_sizes(&scale());
+
+        assert!(
+            active > inactive,
+            "the active marker must carry more weight"
+        );
+    }
+
+    #[test]
+    fn title_sits_on_the_button_midline_when_it_fits() {
+        let scale = scale();
+        let text_height = 24;
+        let button_center = 27;
+
+        let y = header_title_y(button_center, text_height, Some(200), &scale);
+
+        assert_eq!(y, button_center - text_height / 2);
+    }
+
+    /// The title used to centre on the whole header and ended up almost
+    /// touching the rail.
+    #[test]
+    fn title_lifts_off_the_midline_only_to_clear_the_rail() {
+        let scale = scale();
+        let text_height = 24;
+        let button_center = 27;
+        let rail_top = 36;
+
+        let y = header_title_y(button_center, text_height, Some(rail_top), &scale);
+
+        assert!(y < button_center - text_height / 2, "should lift");
+        assert!(y + text_height < rail_top, "should clear the rail");
+    }
+
+    #[test]
+    fn title_stays_on_the_midline_without_a_rail() {
+        let scale = scale();
+        let text_height = 24;
+        let button_center = 27;
+
+        assert_eq!(
+            header_title_y(button_center, text_height, None, &scale),
+            button_center - text_height / 2
+        );
+    }
+
+    #[test]
+    fn title_never_leaves_the_header() {
+        let scale = scale();
+
+        assert!(header_title_y(10, 40, Some(12), &scale) >= 1);
     }
 }

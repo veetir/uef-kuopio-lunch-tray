@@ -3,8 +3,9 @@
 use super::text::{
     add_selectable_row, add_selectable_segmented_row, draw_header_button, draw_main_segments,
     draw_selection_bg_for_row, draw_selection_bg_for_segments, draw_text_line, draw_text_segments,
-    favorite_match_ranges, fit_text_to_width, segments_for_row, text_segments_width, LinePlacement,
-    RowBounds, RowCaptureContext, SegmentColors, SegmentFonts, SegmentStyle, SelectionOverlay,
+    favorite_match_ranges, fit_text_to_width, segments_for_row, text_segments_width, HeaderGlyph,
+    LinePlacement, RowBounds, RowCaptureContext, SegmentColors, SegmentFonts, SegmentStyle,
+    SelectionOverlay,
 };
 use super::*;
 
@@ -70,15 +71,15 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
         DeleteObject(header_brush);
 
         let layout = header_layout(width, &scale);
+        let rail_top = header_rail_top(width, &state.settings, &scale);
         let pressed_button = pressed_header_button(hwnd);
         let hovered_button = hovered_header_button(hwnd);
         draw_header_button(
             hdc,
             &layout.prev,
-            "‹",
+            HeaderGlyph::Prev,
             palette.button_bg_color,
             palette.body_text_color,
-            normal_font,
             pressed_button == Some(HeaderButtonAction::Prev),
             hovered_button == Some(HeaderButtonAction::Prev),
             border_edge,
@@ -86,10 +87,9 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
         draw_header_button(
             hdc,
             &layout.next,
-            "›",
+            HeaderGlyph::Next,
             palette.button_bg_color,
             palette.body_text_color,
-            normal_font,
             pressed_button == Some(HeaderButtonAction::Next),
             hovered_button == Some(HeaderButtonAction::Next),
             border_edge,
@@ -97,10 +97,9 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
         draw_header_button(
             hdc,
             &layout.close,
-            "X",
+            HeaderGlyph::Close,
             palette.button_bg_color,
             palette.body_text_color,
-            normal_font,
             false,
             hovered_button == Some(HeaderButtonAction::Close),
             border_edge,
@@ -110,10 +109,8 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
             width,
             &state.settings,
             &scale,
-            palette.header_bg_color,
             palette.header_title_color,
-            palette.divider_color,
-            small_font,
+            marker_inactive_color(&palette),
         );
 
         let divider_rect = RECT {
@@ -173,6 +170,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                                 .ingredient_highlight_color,
                             recipe_selection_text_color: recipe_palette.selection_text_color,
                             layout: &layout,
+                            rail_top,
                             metrics: &metrics,
                             line_height,
                             normal_font,
@@ -242,6 +240,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                                 .ingredient_highlight_color,
                             recipe_selection_text_color: recipe_palette.selection_text_color,
                             layout: &layout,
+                            rail_top,
                             metrics: &metrics,
                             line_height,
                             normal_font,
@@ -347,6 +346,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                                 .ingredient_highlight_color,
                             recipe_selection_text_color: recipe_palette.selection_text_color,
                             layout: &layout,
+                            rail_top,
                             metrics: &metrics,
                             line_height,
                             normal_font,
@@ -389,6 +389,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                                 .ingredient_highlight_color,
                             recipe_selection_text_color: recipe_palette.selection_text_color,
                             layout: &layout,
+                            rail_top,
                             metrics: &metrics,
                             line_height,
                             normal_font,
@@ -442,6 +443,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                     recipe_ingredient_highlight_color: recipe_palette.ingredient_highlight_color,
                     recipe_selection_text_color: recipe_palette.selection_text_color,
                     layout: &layout,
+                    rail_top,
                     metrics: &metrics,
                     line_height,
                     normal_font,
@@ -506,6 +508,7 @@ struct DrawLayerParams<'a> {
     recipe_ingredient_highlight_color: COLORREF,
     recipe_selection_text_color: COLORREF,
     layout: &'a HeaderLayout,
+    rail_top: Option<i32>,
     metrics: &'a TEXTMETRICW,
     line_height: i32,
     normal_font: HFONT,
@@ -536,8 +539,13 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
     let max_title_x =
         (params.layout.close.left - title_width - title_button_margin).max(min_title_x);
     let title_x = ((params.width - title_width) / 2).clamp(min_title_x, max_title_x);
-    let title_y =
-        ((params.scale.header_height - params.metrics.tmHeight) / 2 - 1) + params.y_offset;
+    let button_center_y = (params.layout.prev.top + params.layout.prev.bottom) / 2;
+    let title_y = header_title_y(
+        button_center_y,
+        params.metrics.tmHeight,
+        params.rail_top,
+        &params.scale,
+    ) + params.y_offset;
     draw_text_line(hdc, &full_title, title_x, title_y);
 
     let bullet_width = bullet_column_width(hdc, params.normal_font, params.bullet_style);
@@ -1343,15 +1351,26 @@ fn draw_date_time_line(
     }
 }
 
+/// Draws the restaurant position rail under the header title.
+///
+/// The markers are drawn rather than typed. As glyphs their sizes came from
+/// whichever font family the theme picked, so the rail looked different in
+/// Segoe UI, Tahoma and Consolas, and the active/inactive size ratio was
+/// whatever those two codepoints happened to be — while the spacing and hit
+/// rects were meanwhile computed from `HEADER_MARKER_DOT_SIZE`. Drawing squares
+/// makes that constant true and keeps the rail identical everywhere.
+///
+/// Position is carried by three weak signals rather than one strong one: fill,
+/// size, and colour. That lets the inactive markers clear a readability floor
+/// without ten of them competing with the one that matters, since an outline
+/// carries far less ink than a solid mark at the same contrast.
 fn draw_header_marker_rail(
     hdc: HDC,
     width: i32,
     settings: &Settings,
     scale: &PopupScale,
-    header_bg_color: COLORREF,
     active_color: COLORREF,
     inactive_color: COLORREF,
-    font: HFONT,
 ) {
     let restaurants = available_restaurants(settings.enable_antell_restaurants);
     if restaurants.len() <= 1 || settings.show_restaurant_index_numbers {
@@ -1362,34 +1381,30 @@ fn draw_header_marker_rail(
         .position(|restaurant| restaurant.code == settings.restaurant_code)
         .unwrap_or(0);
     let hit_rects = header_marker_rects(width, settings, scale);
-    let active_marker = "●";
-    let inactive_marker = "•";
-    let marker_height = text_metrics(hdc, font).tmHeight as i32;
+    let (inactive_size, active_size) = header_marker_sizes(scale);
+
     for (idx, hit_rect) in hit_rects.iter().enumerate() {
         let center_x = (hit_rect.left + hit_rect.right) / 2;
         let center_y = (hit_rect.top + hit_rect.bottom) / 2;
         let active = idx == active_index;
-        let marker = if active {
-            active_marker
-        } else {
-            inactive_marker
+        let size = if active { active_size } else { inactive_size };
+        let left = center_x - size / 2;
+        let top = center_y - size / 2;
+        let marker_rect = RECT {
+            left,
+            top,
+            right: left + size,
+            bottom: top + size,
         };
-        let marker_width = text_width_with_font(hdc, font, marker);
-        let color = if active {
-            active_color
+        if active {
+            unsafe {
+                let brush = CreateSolidBrush(active_color);
+                FillRect(hdc, &marker_rect, brush);
+                DeleteObject(brush);
+            }
         } else {
-            lerp_color(header_bg_color, inactive_color, 0.45)
-        };
-        unsafe {
-            SelectObject(hdc, font);
-            SetTextColor(hdc, color);
+            draw_outline_rect(hdc, &marker_rect, inactive_color);
         }
-        draw_text_line(
-            hdc,
-            marker,
-            center_x - marker_width / 2,
-            center_y - marker_height / 2,
-        );
     }
 }
 
