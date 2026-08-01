@@ -32,11 +32,54 @@ $restaurants = @(
   @{ id = 'tietoteknia'; order = 4; fi = 'Tietoteknia'; en = 'Tietoteknia'; url = 'https://www.compass-group.fi/ravintolat-ja-ruokalistat/foodco/kaupungit/kuopio/tietoteknia/'; status = 'serving'; hours = '10:30-14:00' },
   @{ id = 'hyva-huomen-bioteknia'; order = 5; fi = 'Hyva Huomen Bioteknia'; en = 'Hyva Huomen Bioteknia'; url = 'https://hyvahuomen.fi/bioteknia/'; status = 'serving'; hours = '10:30-13:00' },
   @{ id = 'antell-round'; order = 6; fi = 'Antell Round'; en = 'Antell Round'; url = 'https://antell.fi/lounas/kuopio/round/'; status = 'serving'; hours = '10:30-13:30' },
-  @{ id = 'antell-highway'; order = 7; fi = 'Antell Highway'; en = 'Antell Highway'; url = 'https://antell.fi/lounas/kuopio/highway/'; status = 'closed'; hours = ''; closureDays = 2 },
+  @{ id = 'antell-highway'; order = 7; fi = 'Antell Highway'; en = 'Antell Highway'; url = 'https://antell.fi/lounas/kuopio/highway/'; status = 'noMenu'; hours = '' },
   @{ id = 'mediteknia'; order = 8; fi = 'Mediteknia'; en = 'Mediteknia'; url = 'https://www.compass-group.fi/ravintolat-ja-ruokalistat/foodco/kaupungit/kuopio/ita-suomen-yliopisto-mediteknia/'; status = 'serving'; hours = '10:30-13:30' },
   @{ id = 'pranzeria-sorrento'; order = 9; fi = 'Pranzeria Sorrento'; en = 'Pranzeria Sorrento'; url = 'https://www.sorrento.fi/pranzeria/'; status = 'serving'; hours = '10:30-14:00' },
   @{ id = 'caari'; order = 10; fi = 'Caari'; en = 'Caari'; url = 'https://www.compass-group.fi/ravintolat-ja-ruokalistat/foodco/kaupungit/kuopio/caari/'; status = 'serving'; hours = '10:30-13:30' }
 )
+
+$mockDishes = @{
+  'snellmania' = @{
+    fi = @{ main = 'Sitruunainen kirjolohipasta'; veg = 'Mausteinen tofu-kasviswokki'; side = 'Paahdetut perunat'; salad1 = 'Caesarsalaatti'; salad2 = 'Tomaatti-kurkkusalaatti'; dessert = 'Mustikkapiirakka' }
+    en = @{ main = 'Lemon rainbow trout pasta'; veg = 'Spicy tofu vegetable wok'; side = 'Roasted potatoes'; salad1 = 'Caesar salad'; salad2 = 'Tomato cucumber salad'; dessert = 'Blueberry pie' }
+    ingredients = @{ main = 'rainbow trout, pasta (WHEAT), cream, lemon juice, dill, onion, vegetable stock, rapeseed oil, iodized salt, black pepper'; veg = 'tofu (SOY), broccoli, carrot, bell pepper, ginger, garlic, sesame oil, soy sauce, chili, coriander, water, rice vinegar, modified corn starch'; dessert = 'blueberry, oat, WHEAT flour, sugar, margarine, cardamom, vanilla sugar, iodized salt' }
+  }
+  'cafe-snellari' = @{
+    fi = @{ main = 'Broileria tomaatti-basilikakastikkeessa'; veg = 'Linssi-kookoscurry'; side = 'Yrttiohratto'; salad1 = 'Kreikkalainen salaatti'; salad2 = 'Punakaali-porkkanasalaatti'; dessert = 'Omenapaistos' }
+    en = @{ main = 'Chicken in tomato basil sauce'; veg = 'Lentil coconut curry'; side = 'Herb barley risotto'; salad1 = 'Greek salad'; salad2 = 'Red cabbage carrot salad'; dessert = 'Apple crumble' }
+    ingredients = @{ main = 'chicken, tomato, basil, onion, garlic, cream, vegetable stock, rapeseed oil, iodized salt'; veg = 'red lentils, coconut milk, tomato, ginger, garlic, coriander, cumin, turmeric, chili, lime juice'; dessert = 'apple, oat flakes, WHEAT flour, sugar, cinnamon, margarine, vanilla' }
+  }
+  'tietoteknia' = @{
+    fi = @{ main = 'Savupaprika-possupata'; veg = 'Mifu gochujang-kastikkeessa'; side = 'Perunamuusi'; salad1 = 'Vihersalaatti ja siemeniä'; salad2 = 'Kurpitsa-papusalaatti'; dessert = 'Pannacotta ja marjakastike' }
+    en = @{ main = 'Smoked paprika pork stew'; veg = 'Mifu in gochujang sauce'; side = 'Mashed potatoes'; salad1 = 'Green salad with seeds'; salad2 = 'Pumpkin bean salad'; dessert = 'Panna cotta with berry sauce' }
+    ingredients = @{ main = 'pork, smoked paprika, tomato paste, onion, garlic, carrot, beef stock, thyme, rapeseed oil, iodized salt'; veg = 'MIFU milk protein, gochujang paste (SOY, WHEAT), onion, bell pepper, ginger, garlic, sesame seed, water'; dessert = 'cream, milk, sugar, gelatin, vanilla, raspberry, blackcurrant, lemon juice' }
+  }
+  'hyva-huomen-bioteknia' = @{
+    fi = @{ main = 'Naudanlihapullat ja pippurikastike'; veg = 'Paahdettu kukkakaali-tahinikulho'; side = 'Valkosipuliriisi'; salad1 = 'Avokadosalaatti'; salad2 = 'Punajuurihummus'; dessert = 'Suklaamousse' }
+    en = @{ main = 'Beef meatballs with pepper sauce'; veg = 'Roasted cauliflower tahini bowl'; side = 'Garlic rice'; salad1 = 'Avocado salad'; salad2 = 'Beetroot hummus'; dessert = 'Chocolate mousse' }
+    ingredients = @{ main = 'beef, breadcrumbs (WHEAT), egg, onion, black pepper, cream, beef stock, mustard, iodized salt'; veg = 'cauliflower, chickpea, tahini (SESAME), lemon, garlic, parsley, cumin, olive oil, salt'; dessert = 'dark chocolate, cream, sugar, cocoa powder, vanilla, salt' }
+  }
+  'antell-round' = @{
+    fi = @{ main = 'Ylikypsa naudan brisket'; veg = 'Falafel ja minttujogurtti'; side = 'Bataattiranskalaiset'; salad1 = 'Tabbouleh'; salad2 = 'Paahdettu paprika'; dessert = 'Sitruunapiirakka' }
+    en = @{ main = 'Slow cooked beef brisket'; veg = 'Falafel with mint yoghurt'; side = 'Sweet potato fries'; salad1 = 'Tabbouleh'; salad2 = 'Roasted pepper salad'; dessert = 'Lemon tart' }
+    ingredients = @{ main = 'beef brisket, barbecue sauce, tomato, onion, garlic, molasses, vinegar, mustard, black pepper'; veg = 'chickpea, parsley, coriander, cumin, garlic, onion, yoghurt, mint, lemon juice'; dessert = 'lemon juice, egg, sugar, butter, WHEAT flour, cream, vanilla' }
+  }
+  'mediteknia' = @{
+    fi = @{ main = 'Seesami-lohi ja limedippi'; veg = 'Munakoiso-tomaattivuoka'; side = 'Jasmiiniriisi'; salad1 = 'Nuudelisalaatti'; salad2 = 'Edamame-papusalaatti'; dessert = 'Mangorahka' }
+    en = @{ main = 'Sesame salmon with lime dip'; veg = 'Aubergine tomato bake'; side = 'Jasmine rice'; salad1 = 'Noodle salad'; salad2 = 'Edamame bean salad'; dessert = 'Mango quark' }
+    ingredients = @{ main = 'salmon, sesame seed, lime, yoghurt, dill, rapeseed oil, iodized salt, white pepper'; veg = 'aubergine, tomato, mozzarella, basil, garlic, onion, olive oil, black pepper'; dessert = 'quark, mango puree, cream, sugar, vanilla, lemon juice' }
+  }
+  'pranzeria-sorrento' = @{
+    fi = @{ main = 'Pasta arrabbiata ja pecorino'; veg = 'Sienirisotto'; side = 'Focaccia'; salad1 = 'Rucola-parmesansalaatti'; salad2 = 'Marinoidut oliivit'; dessert = 'Tiramisu' }
+    en = @{ main = 'Pasta arrabbiata with pecorino'; veg = 'Mushroom risotto'; side = 'Focaccia'; salad1 = 'Rocket parmesan salad'; salad2 = 'Marinated olives'; dessert = 'Tiramisu' }
+    ingredients = @{ main = 'pasta (WHEAT), tomato, chili, garlic, pecorino cheese, olive oil, basil, black pepper'; veg = 'risotto rice, mushroom, white wine, parmesan, onion, garlic, vegetable stock, butter'; dessert = 'mascarpone, coffee, ladyfinger biscuit (WHEAT), cocoa, egg, sugar' }
+  }
+  'caari' = @{
+    fi = @{ main = 'Kalkkunaleike ja rosmariinikastike'; veg = 'Hernepihvit ja kaurafraiche'; side = 'Uunijuurekset'; salad1 = 'Kaali-omenasalaatti'; salad2 = 'Linssisalaatti'; dessert = 'Mansikkakiisseli' }
+    en = @{ main = 'Turkey cutlet with rosemary sauce'; veg = 'Pea patties with oat fraiche'; side = 'Oven roasted root vegetables'; salad1 = 'Cabbage apple salad'; salad2 = 'Lentil salad'; dessert = 'Strawberry soup' }
+    ingredients = @{ main = 'turkey, rosemary, cream, chicken stock, onion, rapeseed oil, iodized salt, white pepper'; veg = 'pea, oat fraiche, potato starch, onion, parsley, rapeseed oil, lemon juice, salt'; dessert = 'strawberry, water, sugar, potato starch, vanilla' }
+  }
+}
 
 function New-Price {
   param([string]$Amount, [string[]]$Audiences)
@@ -80,24 +123,34 @@ function New-LunchItem {
 function New-ServingMenu {
   param([hashtable]$Restaurant, [string]$Language)
 
+  $dishSet = $mockDishes[$Restaurant.id]
+  if ($null -eq $dishSet) {
+    $dishSet = $mockDishes['snellmania']
+  }
+  $dishes = $dishSet[$Language]
+  if ($null -eq $dishes) {
+    $dishes = $dishSet['en']
+  }
+  $ingredients = $dishSet['ingredients']
+
   $mainTitle = if ($Language -eq 'fi') { 'Paaruoka' } else { 'Main course' }
   $vegTitle = if ($Language -eq 'fi') { 'Kasvislounas' } else { 'Vegetarian lunch' }
   $dessertTitle = if ($Language -eq 'fi') { 'Jalkiruoka' } else { 'Dessert' }
   $saladTitle = if ($Language -eq 'fi') { 'Salaattibuffet' } else { 'Salad buffet' }
 
   $riceName = if ($Language -eq 'fi') { 'Riisi' } else { 'Rice' }
-  $potatoName = if ($Language -eq 'fi') { 'Paahdetut perunat' } else { 'Roasted potatoes' }
-  $mainDishName = if ($Language -eq 'fi') { 'Sitruunainen kirjolohipasta' } else { 'Lemon rainbow trout pasta' }
-  $vegDishName = if ($Language -eq 'fi') { 'Mausteinen tofu-kasviswokki' } else { 'Spicy tofu vegetable wok' }
-  $saladOneName = if ($Language -eq 'fi') { 'Caesarsalaatti' } else { 'Caesar salad' }
-  $saladTwoName = if ($Language -eq 'fi') { 'Tomaatti-kurkkusalaatti' } else { 'Tomato cucumber salad' }
-  $dessertName = if ($Language -eq 'fi') { 'Mustikkapiirakka' } else { 'Blueberry pie' }
+  $sideName = $dishes.side
+  $mainDishName = $dishes.main
+  $vegDishName = $dishes.veg
+  $saladOneName = $dishes.salad1
+  $saladTwoName = $dishes.salad2
+  $dessertName = $dishes.dessert
 
-  $mainRecipe = New-Recipe -Id "$($Restaurant.id)-recipe-main-1" -Name 'trout pasta' -Ingredients 'rainbow trout, pasta (WHEAT), cream, lemon juice, dill, onion, vegetable stock, rapeseed oil, iodized salt, black pepper' -Diets @('A', 'L')
+  $mainRecipe = New-Recipe -Id "$($Restaurant.id)-recipe-main-1" -Name $mainDishName -Ingredients $ingredients.main -Diets @('A', 'L')
   $mainRiceRecipe = New-Recipe -Id "$($Restaurant.id)-recipe-rice-main" -Name $riceName -Ingredients 'rice, water, iodized salt, rapeseed oil' -Diets @('G', 'L', 'M', 'Veg')
-  $vegRecipe = New-Recipe -Id "$($Restaurant.id)-recipe-veg-1" -Name 'tofu wok' -Ingredients 'tofu (SOY), broccoli, carrot, bell pepper, ginger, garlic, sesame oil, soy sauce, chili, coriander, water, rice vinegar, modified corn starch' -Diets @('G', 'L', 'M', 'Veg', 'VS')
+  $vegRecipe = New-Recipe -Id "$($Restaurant.id)-recipe-veg-1" -Name $vegDishName -Ingredients $ingredients.veg -Diets @('G', 'L', 'M', 'Veg', 'VS')
   $vegRiceRecipe = New-Recipe -Id "$($Restaurant.id)-recipe-rice-veg" -Name $riceName -Ingredients 'rice, water, iodized salt' -Diets @('G', 'L', 'M', 'Veg')
-  $dessertRecipe = New-Recipe -Id "$($Restaurant.id)-recipe-dessert-1" -Name 'blueberry pie' -Ingredients 'blueberry, oat, WHEAT flour, sugar, margarine, cardamom, vanilla sugar, iodized salt' -Diets @('A', 'L', 'M')
+  $dessertRecipe = New-Recipe -Id "$($Restaurant.id)-recipe-dessert-1" -Name $dessertName -Ingredients $ingredients.dessert -Diets @('A', 'L', 'M')
 
   @(
     [ordered]@{
@@ -111,7 +164,7 @@ function New-ServingMenu {
       items = @(
         (New-LunchItem -Id "$($Restaurant.id)-main-1" -Name $mainDishName -Tags @('A', 'L') -Recipe $mainRecipe)
         (New-LunchItem -Id "$($Restaurant.id)-main-2" -Name $riceName -Tags @('G', 'L', 'M', 'Veg') -Recipe $mainRiceRecipe)
-        (New-LunchItem -Id "$($Restaurant.id)-main-3" -Name $potatoName -Tags @('G', 'L', 'M', 'Veg') -Recipe $null)
+        (New-LunchItem -Id "$($Restaurant.id)-main-3" -Name $sideName -Tags @('G', 'L', 'M', 'Veg') -Recipe $null)
       )
       sortOrder = 1
     },
