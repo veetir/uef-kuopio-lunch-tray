@@ -80,8 +80,8 @@ impl BorderStyle {
 /// need an outline regardless of what the frame does.
 pub(super) fn border_style_for_theme(theme: &str) -> BorderStyle {
     match theme {
-        "grandpa" => BorderStyle::Raised,
-        "light" | "dark" | "barbie" | "blue" | "teletext1" | "teletext2" | "amber" | "green" => {
+        "grandpa" | "grandma" => BorderStyle::Raised,
+        "light" | "dark" | "blue" | "teletext1" | "teletext2" | "amber" | "green" => {
             BorderStyle::None
         }
         _ => crate::custom_themes::find_custom_theme(theme)
@@ -96,7 +96,7 @@ pub(super) fn border_style_for_theme(theme: &str) -> BorderStyle {
 /// menus, so one there would be the single most anachronistic thing on screen.
 pub(super) fn theme_shadow_enabled(theme: &str) -> bool {
     match theme {
-        "grandpa" => false,
+        "grandpa" | "grandma" => false,
         _ => crate::custom_themes::find_custom_theme(theme)
             .map(|custom| custom.shadow)
             .unwrap_or(true),
@@ -279,12 +279,12 @@ mod tests {
     }
 
     #[test]
-    fn grandpa_is_the_only_built_in_with_a_frame() {
+    fn only_the_bevel_themes_have_a_frame() {
         assert_eq!(border_style_for_theme("grandpa"), BorderStyle::Raised);
+        assert_eq!(border_style_for_theme("grandma"), BorderStyle::Raised);
         for theme in [
             "light",
             "dark",
-            "barbie",
             "blue",
             "teletext1",
             "teletext2",
@@ -308,9 +308,10 @@ mod tests {
     }
 
     #[test]
-    fn grandpa_is_the_only_built_in_without_a_shadow() {
+    fn only_the_bevel_themes_skip_the_shadow() {
         assert!(!theme_shadow_enabled("grandpa"));
-        for theme in ["light", "dark", "barbie", "teletext1", "amber", "green"] {
+        assert!(!theme_shadow_enabled("grandma"));
+        for theme in ["light", "dark", "blue", "teletext1", "amber", "green"] {
             assert!(theme_shadow_enabled(theme), "{theme} should cast a shadow");
         }
     }

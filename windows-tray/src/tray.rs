@@ -52,8 +52,8 @@ pub const CMD_THEME_DARK: u16 = 2212;
 pub const CMD_THEME_BLUE: u16 = 2213;
 pub const CMD_THEME_GREEN: u16 = 2214;
 pub const CMD_THEME_AMBER: u16 = 2220;
-pub const CMD_THEME_BARBIE: u16 = 2221;
 pub const CMD_THEME_GRANDPA: u16 = 2222;
+pub const CMD_THEME_GRANDMA: u16 = 2223;
 pub const CMD_TOGGLE_STARTUP: u16 = 2215;
 pub const CMD_TOGGLE_LOGGING: u16 = 2216;
 pub const CMD_OPEN_APPDATA_DIR: u16 = 2217;
@@ -408,12 +408,6 @@ fn build_context_menu(state: &AppState) -> HMENU {
         );
         append_menu_item(
             theme_menu,
-            CMD_THEME_BARBIE,
-            "Barbie",
-            state.settings.theme == "barbie",
-        );
-        append_menu_item(
-            theme_menu,
             CMD_THEME_TELETEXT1,
             "Teletext 1",
             state.settings.theme == "teletext1",
@@ -429,6 +423,12 @@ fn build_context_menu(state: &AppState) -> HMENU {
             CMD_THEME_GRANDPA,
             "Grandpa",
             state.settings.theme == "grandpa",
+        );
+        append_menu_item(
+            theme_menu,
+            CMD_THEME_GRANDMA,
+            "Grandma",
+            state.settings.theme == "grandma",
         );
         let custom_themes = crate::custom_themes::custom_themes();
         if !custom_themes.is_empty() {

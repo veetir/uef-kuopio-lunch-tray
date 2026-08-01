@@ -708,6 +708,13 @@ fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
                 popup::resize_popup_keep_position(app.hwnd_popup(), &state);
             }
         }
+        tray::CMD_THEME_GRANDMA => {
+            app.set_theme("grandma");
+            if popup_is_visible(app.hwnd_popup()) {
+                let state = app.snapshot();
+                popup::resize_popup_keep_position(app.hwnd_popup(), &state);
+            }
+        }
         tray::CMD_THEME_BLUE => {
             app.set_theme("blue");
             if popup_is_visible(app.hwnd_popup()) {
@@ -724,13 +731,6 @@ fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
         }
         tray::CMD_THEME_AMBER => {
             app.set_theme("amber");
-            if popup_is_visible(app.hwnd_popup()) {
-                let state = app.snapshot();
-                popup::resize_popup_keep_position(app.hwnd_popup(), &state);
-            }
-        }
-        tray::CMD_THEME_BARBIE => {
-            app.set_theme("barbie");
             if popup_is_visible(app.hwnd_popup()) {
                 let state = app.snapshot();
                 popup::resize_popup_keep_position(app.hwnd_popup(), &state);

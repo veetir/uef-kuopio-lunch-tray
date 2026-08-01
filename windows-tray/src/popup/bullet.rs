@@ -43,7 +43,7 @@ impl BulletStyle {
 /// Built-in theme defaults. Custom themes override this via `themes.json`.
 pub(super) fn bullet_style_for_theme(theme: &str) -> BulletStyle {
     match theme {
-        "grandpa" => BulletStyle::Bevel,
+        "grandpa" | "grandma" => BulletStyle::Bevel,
         "teletext1" | "teletext2" => BulletStyle::Square,
         "amber" | "green" => BulletStyle::Diamond,
         _ => crate::custom_themes::find_custom_theme(theme)
@@ -255,6 +255,7 @@ mod tests {
     #[test]
     fn built_in_theme_defaults_cover_each_family() {
         assert_eq!(bullet_style_for_theme("grandpa"), BulletStyle::Bevel);
+        assert_eq!(bullet_style_for_theme("grandma"), BulletStyle::Bevel);
         assert_eq!(bullet_style_for_theme("teletext1"), BulletStyle::Square);
         assert_eq!(bullet_style_for_theme("amber"), BulletStyle::Diamond);
         assert_eq!(bullet_style_for_theme("light"), BulletStyle::Triangle);

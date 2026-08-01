@@ -88,20 +88,32 @@ pub(super) fn recipe_detail_palette(theme: &str, palette: &ThemePalette) -> Reci
             ingredient_highlight_color: rgb(255, 246, 166),
             selection_text_color: rgb(0, 0, 0),
         },
+        "grandpa" => RecipeDetailPalette {
+            bg_color: rgb(255, 255, 255),
+            border_color: palette.divider_color,
+            label_color: palette.heading_color,
+            text_color: palette.body_text_color,
+            ingredient_highlight_color: palette.favorite_highlight_color,
+            selection_text_color: rgb(255, 255, 255),
+        },
+        // Tinted rather than white: the classic idiom fills a well with the
+        // lightest tone available, but that was a small control on a grey page.
+        // Here the panel is the largest block on screen, so pure white glares
+        // against the pink face instead of reading as a recessed well.
+        "grandma" => RecipeDetailPalette {
+            bg_color: rgb(248, 233, 242),
+            border_color: palette.divider_color,
+            label_color: palette.heading_color,
+            text_color: palette.body_text_color,
+            ingredient_highlight_color: palette.favorite_highlight_color,
+            selection_text_color: rgb(255, 255, 255),
+        },
         "light" => RecipeDetailPalette {
             bg_color: lerp_color(palette.bg_color, palette.selection_bg_color, 0.38),
             border_color: palette.divider_color,
             label_color: palette.heading_color,
             text_color: palette.body_text_color,
             ingredient_highlight_color: rgb(32, 92, 176),
-            selection_text_color: rgb(255, 255, 255),
-        },
-        "barbie" => RecipeDetailPalette {
-            bg_color: lerp_color(palette.bg_color, palette.selection_bg_color, 0.38),
-            border_color: palette.divider_color,
-            label_color: palette.heading_color,
-            text_color: palette.body_text_color,
-            ingredient_highlight_color: rgb(210, 40, 135),
             selection_text_color: rgb(255, 255, 255),
         },
         _ => RecipeDetailPalette {
@@ -159,6 +171,24 @@ pub(super) fn theme_palette(theme: &str) -> ThemePalette {
             divider_color: rgb(128, 128, 128),
             border_color: rgb(128, 128, 128),
         },
+        // Grandpa's structure in pink. The face is deliberately mid-toned
+        // rather than the near-white pink it would otherwise want: a raised
+        // bevel needs room for both a white highlight and a black shadow, which
+        // is exactly why the original face grey sat at 192.
+        "grandma" => ThemePalette {
+            bg_color: rgb(231, 188, 212),
+            body_text_color: rgb(52, 16, 38),
+            heading_color: rgb(158, 16, 96),
+            header_title_color: rgb(255, 255, 255),
+            suffix_color: rgb(122, 78, 100),
+            suffix_highlight_color: rgb(158, 16, 96),
+            favorite_highlight_color: rgb(104, 34, 148),
+            selection_bg_color: rgb(246, 214, 230),
+            header_bg_color: rgb(168, 20, 104),
+            button_bg_color: rgb(223, 178, 203),
+            divider_color: rgb(154, 112, 133),
+            border_color: rgb(154, 112, 133),
+        },
         "blue" => ThemePalette {
             bg_color: COLORREF(0x00562401),
             body_text_color: COLORREF(0x00FFFFFF),
@@ -200,20 +230,6 @@ pub(super) fn theme_palette(theme: &str) -> ThemePalette {
             button_bg_color: rgb(74, 42, 12),
             divider_color: rgb(110, 63, 18),
             border_color: rgb(110, 63, 18),
-        },
-        "barbie" => ThemePalette {
-            bg_color: rgb(255, 243, 248),
-            body_text_color: rgb(90, 45, 73),
-            heading_color: rgb(216, 27, 138),
-            header_title_color: rgb(255, 255, 255),
-            suffix_color: rgb(168, 107, 145),
-            suffix_highlight_color: rgb(194, 24, 91),
-            favorite_highlight_color: rgb(255, 105, 180),
-            selection_bg_color: rgb(255, 217, 235),
-            header_bg_color: rgb(236, 74, 168),
-            button_bg_color: rgb(240, 98, 179),
-            divider_color: rgb(245, 163, 204),
-            border_color: rgb(245, 163, 204),
         },
         "teletext1" => ThemePalette {
             bg_color: rgb(0, 0, 0),
@@ -286,7 +302,7 @@ pub(super) fn rgb(r: u8, g: u8, b: u8) -> COLORREF {
 pub(super) fn theme_font_family(theme: &str) -> &'static str {
     match theme {
         "amber" | "teletext1" | "teletext2" => "Consolas",
-        "grandpa" => "Tahoma",
+        "grandpa" | "grandma" => "Tahoma",
         _ => crate::custom_themes::find_custom_theme(theme)
             .map(|custom| custom.font.family())
             .unwrap_or("Segoe UI"),

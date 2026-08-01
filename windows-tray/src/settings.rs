@@ -210,10 +210,15 @@ pub fn normalize_theme(value: &str) -> String {
         "light" => "light".to_string(),
         "dark" => "dark".to_string(),
         "grandpa" | "windows 95" | "win95" => "grandpa".to_string(),
+        "grandma" => "grandma".to_string(),
         "blue" => "blue".to_string(),
         "green" => "green".to_string(),
         "amber" => "amber".to_string(),
-        "barbie" => "barbie".to_string(),
+        // Barbie was retired in favour of Grandma, which covers the same hues
+        // with a referent the other themes share. Kept as an alias so existing
+        // `settings.json` files do not fall through to the unknown-theme
+        // default and silently land on Dark.
+        "barbie" => "grandma".to_string(),
         "teletext1" => "teletext1".to_string(),
         "teletext2" => "teletext2".to_string(),
         _ => {
@@ -323,6 +328,18 @@ mod tests {
 
         let settings = decode_settings(r#"{"widget_scale":"150"}"#).unwrap();
         assert_eq!(settings.widget_scale, "large");
+    }
+
+    #[test]
+    fn grandma_theme_decodes() {
+        let settings = decode_settings(r#"{"theme":"Grandma"}"#).unwrap();
+        assert_eq!(settings.theme, "grandma");
+    }
+
+    #[test]
+    fn retired_barbie_theme_migrates_to_grandma() {
+        let settings = decode_settings(r#"{"theme":"barbie"}"#).unwrap();
+        assert_eq!(settings.theme, "grandma");
     }
 
     #[test]
