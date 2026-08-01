@@ -11,6 +11,23 @@ mod text;
 mod window;
 
 pub(super) const METADATA_BOTTOM_GAP_PX: i32 = 4;
+pub(super) const GROUP_CAPTION_BOTTOM_GAP_PX: i32 = 6;
+
+/// Extra space below a group caption in the standard/compact layouts.
+///
+/// The caption names the items *above* it, so without a break after it the
+/// caption sits equidistant from its own items and the next group's price line
+/// and grouping becomes ambiguous. Skipped on a trailing caption so the popup
+/// does not grow a few pixels of dead space at the bottom.
+///
+/// Measurement and rendering both call this so their heights cannot drift.
+pub(super) fn group_caption_bottom_gap(lines: &[Line], index: usize) -> i32 {
+    if index + 1 < lines.len() {
+        GROUP_CAPTION_BOTTOM_GAP_PX
+    } else {
+        0
+    }
+}
 
 pub(super) use cache::invalidate_layout_budget_cache;
 pub(super) use text::{
@@ -67,6 +84,35 @@ pub(super) struct CachedLayoutBudget {
     max_wrapped_lines: Option<usize>,
     max_content_width_px: Option<i32>,
     max_extra_height_px: Option<i32>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn caption(text: &str) -> Line {
+        Line::Subheading {
+            text: text.to_string(),
+            reserve_prefix: None,
+        }
+    }
+
+    #[test]
+    fn group_caption_gap_separates_following_groups() {
+        let lines = vec![caption("Salad buffet"), Line::Text("next group".to_string())];
+
+        assert_eq!(
+            group_caption_bottom_gap(&lines, 0),
+            GROUP_CAPTION_BOTTOM_GAP_PX
+        );
+    }
+
+    #[test]
+    fn group_caption_gap_omitted_on_trailing_caption() {
+        let lines = vec![Line::Text("item".to_string()), caption("Dessert")];
+
+        assert_eq!(group_caption_bottom_gap(&lines, 1), 0);
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

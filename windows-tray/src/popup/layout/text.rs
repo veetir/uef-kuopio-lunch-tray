@@ -19,7 +19,7 @@ pub(super) fn measure_lines_layout(
     let mut wrapped_line_count = 0usize;
     let mut extra_height_px = 0;
 
-    for line in lines {
+    for (line_index, line) in lines.iter().enumerate() {
         match line {
             Line::Heading(text) => {
                 let width = text_width_with_font(hdc, bold_font, text);
@@ -63,6 +63,7 @@ pub(super) fn measure_lines_layout(
                     (main_wrap_width - prefix_width).max(24),
                 );
                 wrapped_line_count += rows.max(1);
+                extra_height_px += group_caption_bottom_gap(lines, line_index);
             }
             Line::Text(text) => {
                 let width = text_width_with_font(hdc, normal_font, text);

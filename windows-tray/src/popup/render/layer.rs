@@ -607,6 +607,7 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                         y += params.line_height;
                     }
                 }
+                y += group_caption_bottom_gap(lines, line_index);
             }
             Line::Text(text) => {
                 unsafe {
