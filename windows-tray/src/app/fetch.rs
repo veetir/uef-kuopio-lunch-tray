@@ -258,6 +258,11 @@ impl App {
             (settings, target, is_current)
         };
 
+        if cache::mock_cache_mode_enabled() {
+            log_probe_skip("fetch", &target, "mock_cache_mode");
+            return false;
+        }
+
         {
             let mut request_states = self.request_states.lock().unwrap();
             let entry = request_states.entry(target.key.clone()).or_default();
@@ -342,6 +347,12 @@ impl App {
         bypass_recent_prefetch: bool,
     ) -> bool {
         let now = now_epoch_ms();
+        if cache::mock_cache_mode_enabled() {
+            let target = self.current_target();
+            log_probe_skip("snapshot", &target, "mock_cache_mode");
+            return false;
+        }
+
         if !bypass_recent_prefetch {
             let last_prefetch = self.last_prefetch_ms.lock().unwrap();
             if now.saturating_sub(*last_prefetch) < 5 * 60_000 {
