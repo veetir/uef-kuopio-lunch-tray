@@ -417,6 +417,16 @@ pub(in crate::popup) fn text_width_with_font(hdc: HDC, font: HFONT, text: &str) 
     }
 }
 
+/// Horizontal gap kept between an item's main text and its inline suffix.
+///
+/// Derived from the body font so it tracks font size and DPI without threading
+/// the popup scale through the measurement helpers. Two spaces reads as a
+/// deliberate separation rather than a missing space, since the suffix is set in
+/// a smaller font than the text it follows.
+pub(in crate::popup) fn suffix_gap_width(hdc: HDC, normal_font: HFONT) -> i32 {
+    text_width_with_font(hdc, normal_font, "  ").max(8)
+}
+
 pub(in crate::popup) fn text_with_suffix_width(
     hdc: HDC,
     normal_font: HFONT,
@@ -436,7 +446,7 @@ pub(in crate::popup) fn text_with_suffix_width(
         let font = if *bold { small_bold_font } else { small_font };
         suffix_width += text_width_with_font(hdc, font, segment);
     }
-    bullet_width + main_width + suffix_width + 4
+    bullet_width + main_width + suffix_width + suffix_gap_width(hdc, normal_font)
 }
 
 pub(in crate::popup) fn flatten_suffix_segments(segments: &[(String, bool)]) -> String {

@@ -14,7 +14,7 @@ pub(super) const METADATA_BOTTOM_GAP_PX: i32 = 4;
 
 pub(super) use cache::invalidate_layout_budget_cache;
 pub(super) use text::{
-    flatten_suffix_segments, text_metrics, text_width, text_width_with_font,
+    flatten_suffix_segments, suffix_gap_width, text_metrics, text_width, text_width_with_font,
     text_with_suffix_width, wrap_text_to_width, wrap_text_to_width_with_font,
     wrap_text_to_width_with_font_rows,
 };

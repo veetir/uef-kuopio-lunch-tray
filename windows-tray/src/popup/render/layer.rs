@@ -772,9 +772,13 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                         }
                         suffix_width += text_width(hdc, segment);
                     }
-                    let max_main =
-                        (params.content_width - bullet_width - prefix_width - suffix_width - 4)
-                            .max(24);
+                    let suffix_gap = suffix_gap_width(hdc, params.normal_font);
+                    let max_main = (params.content_width
+                        - bullet_width
+                        - prefix_width
+                        - suffix_width
+                        - suffix_gap)
+                        .max(24);
                     unsafe {
                         SelectObject(hdc, params.normal_font);
                         SetTextColor(hdc, line_body_color);
@@ -874,8 +878,9 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                         );
                     }
                     if !suffix_segments.is_empty() {
-                        let tight_suffix_x = main_x + main_width + 4;
-                        let aligned_suffix_x = aligned_main_width.map(|width| main_x + width + 4);
+                        let tight_suffix_x = main_x + main_width + suffix_gap;
+                        let aligned_suffix_x =
+                            aligned_main_width.map(|width| main_x + width + suffix_gap);
                         let right_edge = params.scale.padding_x + params.content_width;
                         let suffix_x = aligned_suffix_x
                             .filter(|x| *x + suffix_width <= right_edge)
