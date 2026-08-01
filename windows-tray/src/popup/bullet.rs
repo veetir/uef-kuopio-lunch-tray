@@ -46,6 +46,7 @@ pub(super) fn bullet_style_for_theme(theme: &str) -> BulletStyle {
         "grandpa" | "grandma" => BulletStyle::Bevel,
         "teletext1" | "teletext2" => BulletStyle::Square,
         "amber" | "green" => BulletStyle::Diamond,
+        "light" => BulletStyle::Square,
         _ => crate::custom_themes::find_custom_theme(theme)
             .and_then(|custom| BulletStyle::from_name(custom.bullet.name()))
             .unwrap_or(BulletStyle::Triangle),
@@ -177,7 +178,17 @@ fn draw_square(hdc: HDC, left: i32, top: i32, size: i32, color: COLORREF) {
     );
 }
 
+/// Inset to roughly the triangle's ink, not the full mark box.
+///
+/// A diamond filling the whole box carries about 64% more ink than the triangle
+/// at the same nominal size, and the themes that use it render it in bright
+/// phosphor on black, where perceived weight runs highest. Area scales with the
+/// square of the width, so 0.7x the size is the parity point.
 fn draw_diamond(hdc: HDC, left: i32, top: i32, size: i32, color: COLORREF) {
+    let inset = (size - 1 - ((size * 7 / 10) | 1)).max(0) / 2;
+    let left = left + inset;
+    let top = top + inset;
+    let size = (size * 7 / 10) | 1;
     let half = size / 2;
     let center_x = left + half;
     unsafe {
@@ -252,13 +263,37 @@ mod tests {
         assert!(mark_size(40) > mark_size(20));
     }
 
+    /// Ink area, not nominal size, is what the eye weighs. A diamond filling
+    /// the full mark box carried far more of it than the triangle it sits
+    /// beside in other themes.
+    #[test]
+    fn diamond_ink_stays_near_the_triangle() {
+        for tm_height in 20..=80 {
+            let size = mark_size(tm_height);
+            let half = size / 2;
+            let triangle: i32 = (0..size).map(|row| half + 1 - (row - half).abs()).sum();
+
+            let d = (size * 7 / 10) | 1;
+            let dh = d / 2;
+            let diamond: i32 = (0..d).map(|row| 2 * (dh - (row - dh).abs()) + 1).sum();
+
+            // Within a few percent; forcing an odd width means the two
+            // cannot land on exactly the same area at every size. The defect
+            // this guards against was 64% heavier.
+            assert!(
+                diamond * 20 <= triangle * 21,
+                "tm_height {tm_height}: diamond {diamond}px^2 vs triangle {triangle}px^2"
+            );
+        }
+    }
+
     #[test]
     fn built_in_theme_defaults_cover_each_family() {
         assert_eq!(bullet_style_for_theme("grandpa"), BulletStyle::Bevel);
         assert_eq!(bullet_style_for_theme("grandma"), BulletStyle::Bevel);
         assert_eq!(bullet_style_for_theme("teletext1"), BulletStyle::Square);
         assert_eq!(bullet_style_for_theme("amber"), BulletStyle::Diamond);
-        assert_eq!(bullet_style_for_theme("light"), BulletStyle::Triangle);
+        assert_eq!(bullet_style_for_theme("light"), BulletStyle::Square);
         assert_eq!(bullet_style_for_theme("dark"), BulletStyle::Triangle);
     }
 }

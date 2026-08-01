@@ -147,8 +147,12 @@ pub(super) fn measure_lines_layout(
                     } else {
                         label_width + 6 + value_width
                     };
-                    required_content_width = required_content_width
-                        .max(bullet_width + RECIPE_DETAIL_PAD_X * 2 + same_line_width);
+                    // Deliberately does *not* raise `required_content_width`.
+                    // An expanded panel wraps to whatever width it is given, so
+                    // letting a long ingredient run widen the popup made opening
+                    // the details resize the window diagonally rather than just
+                    // taller. It showed up first in a wide serif face, where the
+                    // ingredient line outruns the menu lines that set the width.
                     if same_line_width <= block_wrap_width {
                         block_row_count += 1;
                     } else {

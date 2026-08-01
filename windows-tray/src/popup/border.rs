@@ -81,9 +81,9 @@ impl BorderStyle {
 pub(super) fn border_style_for_theme(theme: &str) -> BorderStyle {
     match theme {
         "grandpa" | "grandma" => BorderStyle::Raised,
-        "light" | "dark" | "blue" | "teletext1" | "teletext2" | "amber" | "green" => {
-            BorderStyle::None
-        }
+        // Ledger stock is ruled; the flat frame is the sheet edge.
+        "light" => BorderStyle::Flat,
+        "dark" | "blue" | "teletext1" | "teletext2" | "amber" | "green" => BorderStyle::None,
         _ => crate::custom_themes::find_custom_theme(theme)
             .and_then(|custom| BorderStyle::from_name(custom.border.name()))
             .unwrap_or(BorderStyle::None),
@@ -279,18 +279,12 @@ mod tests {
     }
 
     #[test]
-    fn only_the_bevel_themes_have_a_frame() {
+    fn each_theme_keeps_the_frame_its_referent_calls_for() {
         assert_eq!(border_style_for_theme("grandpa"), BorderStyle::Raised);
         assert_eq!(border_style_for_theme("grandma"), BorderStyle::Raised);
-        for theme in [
-            "light",
-            "dark",
-            "blue",
-            "teletext1",
-            "teletext2",
-            "amber",
-            "green",
-        ] {
+        // Ledger stock is ruled, so Light is the one flat frame.
+        assert_eq!(border_style_for_theme("light"), BorderStyle::Flat);
+        for theme in ["dark", "blue", "teletext1", "teletext2", "amber", "green"] {
             assert_eq!(
                 border_style_for_theme(theme),
                 BorderStyle::None,

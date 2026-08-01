@@ -35,6 +35,8 @@ pub struct CustomThemeEntry {
     pub selection_bg_color: String,
     pub header_bg_color: String,
     pub button_bg_color: String,
+    #[serde(default)]
+    pub button_text_color: Option<String>,
     pub divider_color: String,
 }
 
@@ -58,6 +60,9 @@ pub struct CustomThemeDef {
     pub selection_bg_color: COLORREF,
     pub header_bg_color: COLORREF,
     pub button_bg_color: COLORREF,
+    /// Falls back to `body_text_color`, which is what the header glyphs used
+    /// before this was themeable.
+    pub button_text_color: COLORREF,
     pub divider_color: COLORREF,
 }
 
@@ -68,6 +73,7 @@ pub enum CustomThemeFont {
     Web,
     Terminal,
     Rounded,
+    Serif,
 }
 
 impl CustomThemeFont {
@@ -78,6 +84,9 @@ impl CustomThemeFont {
             Self::Web => "Trebuchet MS",
             Self::Terminal => "Consolas",
             Self::Rounded => "Verdana",
+            // Ships with every Windows install, and the only face here that
+            // suits a theme derived from print rather than from a screen.
+            Self::Serif => "Georgia",
         }
     }
 }
@@ -153,6 +162,7 @@ fn normalize_font_preset(value: Option<&str>) -> CustomThemeFont {
         "web" => CustomThemeFont::Web,
         "terminal" => CustomThemeFont::Terminal,
         "rounded" => CustomThemeFont::Rounded,
+        "serif" => CustomThemeFont::Serif,
         _ => CustomThemeFont::Default,
     }
 }
@@ -172,6 +182,7 @@ fn parse_hex_color(hex: &str) -> Option<COLORREF> {
 
 fn parse_entry(entry: &CustomThemeEntry) -> Option<CustomThemeDef> {
     let divider_color = parse_hex_color(&entry.divider_color)?;
+    let body_text_color = parse_hex_color(&entry.body_text_color)?;
     Some(CustomThemeDef {
         name: entry.name.clone(),
         font: normalize_font_preset(entry.font.as_deref()),
@@ -184,7 +195,7 @@ fn parse_entry(entry: &CustomThemeEntry) -> Option<CustomThemeDef> {
             .unwrap_or(divider_color),
         shadow: entry.shadow.unwrap_or(true),
         bg_color: parse_hex_color(&entry.bg_color)?,
-        body_text_color: parse_hex_color(&entry.body_text_color)?,
+        body_text_color,
         heading_color: parse_hex_color(&entry.heading_color)?,
         header_title_color: parse_hex_color(&entry.header_title_color)?,
         suffix_color: parse_hex_color(&entry.suffix_color)?,
@@ -193,6 +204,11 @@ fn parse_entry(entry: &CustomThemeEntry) -> Option<CustomThemeDef> {
         selection_bg_color: parse_hex_color(&entry.selection_bg_color)?,
         header_bg_color: parse_hex_color(&entry.header_bg_color)?,
         button_bg_color: parse_hex_color(&entry.button_bg_color)?,
+        button_text_color: entry
+            .button_text_color
+            .as_deref()
+            .and_then(parse_hex_color)
+            .unwrap_or(body_text_color),
         divider_color,
     })
 }
@@ -219,6 +235,7 @@ fn default_themes_json() -> Vec<CustomThemeEntry> {
         selection_bg_color: "#16213e".to_string(),
         header_bg_color: "#0f3460".to_string(),
         button_bg_color: "#16213e".to_string(),
+        button_text_color: None,
         divider_color: "#533483".to_string(),
     }]
 }
@@ -295,6 +312,7 @@ mod tests {
             selection_bg_color: "#333333".to_string(),
             header_bg_color: "#111111".to_string(),
             button_bg_color: "#222222".to_string(),
+            button_text_color: None,
             divider_color: "#222222".to_string(),
         }
     }
@@ -320,6 +338,9 @@ mod tests {
 
         let parsed = parse_entry(&theme_entry(Some("rounded"))).unwrap();
         assert_eq!(parsed.font.family(), "Verdana");
+
+        let parsed = parse_entry(&theme_entry(Some("serif"))).unwrap();
+        assert_eq!(parsed.font.family(), "Georgia");
     }
 
     #[test]

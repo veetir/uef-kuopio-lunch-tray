@@ -57,8 +57,9 @@ default to `"classic"` with prices shown; upgraded installs without this key kee
 the classic layout until changed from the tray menu.
 
 The app creates `themes.json` on first run. Add custom themes there to show them
-in the tray menu. Supported font presets are `"default"`, `"classic"`, `"web"`,
-`"terminal"`, and `"rounded"`. Bullet shapes are `"triangle"` (default),
+in the tray menu. Supported font presets are `"default"` (Segoe UI), `"classic"` (Tahoma),
+`"web"` (Trebuchet MS), `"terminal"` (Consolas), `"rounded"` (Verdana), and
+`"serif"` (Georgia). Bullet shapes are `"triangle"` (default),
 `"square"`, `"diamond"`, `"bevel"`, and `"none"`.
 
 Each theme also chooses how its edges are drawn:
@@ -67,6 +68,8 @@ Each theme also chooses how its edges are drawn:
   applies to the popup frame and the header buttons together. Panels such as the
   ingredient details keep an outline under every style.
 - `"border_color"`: hex color for `"flat"` borders. Defaults to `divider_color`.
+- `"button_text_color"`: hex color for the header arrows and close mark.
+  Defaults to `body_text_color`.
 - `"shadow"`: `true` (default) or `false`.
 
 To reset the app:

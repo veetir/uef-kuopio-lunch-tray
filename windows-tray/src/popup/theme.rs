@@ -30,6 +30,9 @@ pub(super) struct ThemePalette {
     pub(super) selection_bg_color: COLORREF,
     pub(super) header_bg_color: COLORREF,
     pub(super) button_bg_color: COLORREF,
+    /// Colour of the drawn header glyphs. Separate from `body_text_color`,
+    /// which is the *content* ink and only coincidentally worked on the header.
+    pub(super) button_text_color: COLORREF,
     pub(super) divider_color: COLORREF,
     /// Colour of a flat chrome edge. Built-in themes reuse their divider; custom
     /// themes may name their own via `border_color` in `themes.json`.
@@ -64,21 +67,23 @@ pub(super) fn recipe_detail_palette(theme: &str, palette: &ThemePalette) -> Reci
             ingredient_highlight_color: rgb(255, 0, 255),
             selection_text_color: rgb(0, 0, 0),
         },
+        // A nested console window: a shade below the page, ruled in the same
+        // blue, with Cyan carrying the ingredient matches.
         "blue" => RecipeDetailPalette {
-            bg_color: lerp_color(palette.bg_color, palette.selection_bg_color, 0.55),
-            border_color: palette.divider_color,
+            bg_color: rgb(1, 24, 64),
+            border_color: rgb(31, 77, 131),
             label_color: palette.heading_color,
             text_color: palette.body_text_color,
-            ingredient_highlight_color: rgb(255, 211, 80),
-            selection_text_color: rgb(0, 0, 0),
+            ingredient_highlight_color: rgb(0, 255, 255),
+            selection_text_color: rgb(1, 36, 86),
         },
         "green" => RecipeDetailPalette {
-            bg_color: lerp_color(palette.bg_color, palette.selection_bg_color, 0.55),
+            bg_color: rgb(4, 30, 4),
             border_color: palette.divider_color,
             label_color: palette.heading_color,
             text_color: palette.body_text_color,
-            ingredient_highlight_color: rgb(255, 255, 0),
-            selection_text_color: rgb(0, 0, 0),
+            ingredient_highlight_color: rgb(192, 255, 192),
+            selection_text_color: rgb(0, 18, 0),
         },
         "amber" => RecipeDetailPalette {
             bg_color: lerp_color(palette.bg_color, palette.selection_bg_color, 0.55),
@@ -87,6 +92,17 @@ pub(super) fn recipe_detail_palette(theme: &str, palette: &ThemePalette) -> Reci
             text_color: palette.body_text_color,
             ingredient_highlight_color: rgb(255, 246, 166),
             selection_text_color: rgb(0, 0, 0),
+        },
+        // An editor's input well: darker than the page, with the comment colour
+        // as its rule. Ingredient matches take Dracula yellow, which leaves the
+        // pink free to mean "favourite" and nothing else.
+        "dark" => RecipeDetailPalette {
+            bg_color: rgb(33, 34, 44),
+            border_color: rgb(98, 114, 164),
+            label_color: palette.heading_color,
+            text_color: palette.body_text_color,
+            ingredient_highlight_color: rgb(241, 250, 140),
+            selection_text_color: rgb(40, 42, 54),
         },
         "grandpa" => RecipeDetailPalette {
             bg_color: rgb(255, 255, 255),
@@ -108,12 +124,13 @@ pub(super) fn recipe_detail_palette(theme: &str, palette: &ThemePalette) -> Reci
             ingredient_highlight_color: palette.favorite_highlight_color,
             selection_text_color: rgb(255, 255, 255),
         },
+        // A ruled white slip on the ledger sheet.
         "light" => RecipeDetailPalette {
-            bg_color: lerp_color(palette.bg_color, palette.selection_bg_color, 0.38),
-            border_color: palette.divider_color,
+            bg_color: rgb(250, 251, 253),
+            border_color: rgb(188, 199, 210),
             label_color: palette.heading_color,
             text_color: palette.body_text_color,
-            ingredient_highlight_color: rgb(32, 92, 176),
+            ingredient_highlight_color: palette.favorite_highlight_color,
             selection_text_color: rgb(255, 255, 255),
         },
         _ => RecipeDetailPalette {
@@ -196,20 +213,30 @@ pub(super) fn marker_inactive_color(palette: &ThemePalette) -> COLORREF {
 
 pub(super) fn theme_palette(theme: &str) -> ThemePalette {
     match theme {
+        // An accountant's ledger: pale ruled stock, navy ink, and the one
+        // palette here whose accents carry meaning — green for credits on the
+        // diet tags, red for debits on the favourites. Georgia because the
+        // referent is print, not a screen.
         "light" => ThemePalette {
-            bg_color: rgb(245, 251, 252),
-            body_text_color: rgb(31, 41, 51),
-            heading_color: rgb(31, 167, 200),
-            header_title_color: rgb(255, 255, 255),
-            suffix_color: rgb(107, 124, 133),
-            suffix_highlight_color: rgb(21, 149, 181),
-            favorite_highlight_color: rgb(39, 196, 216),
-            selection_bg_color: rgb(217, 243, 248),
-            header_bg_color: rgb(21, 149, 181),
-            button_bg_color: rgb(31, 167, 200),
-            divider_color: rgb(127, 211, 226),
-            border_color: rgb(127, 211, 226),
+            bg_color: rgb(233, 237, 242),
+            body_text_color: rgb(35, 43, 51),
+            heading_color: rgb(27, 58, 107),
+            header_title_color: rgb(233, 237, 242),
+            suffix_color: rgb(94, 107, 120),
+            suffix_highlight_color: rgb(20, 90, 50),
+            favorite_highlight_color: rgb(155, 27, 27),
+            selection_bg_color: rgb(219, 227, 236),
+            header_bg_color: rgb(27, 58, 107),
+            button_bg_color: rgb(46, 84, 144),
+            button_text_color: rgb(233, 237, 242),
+            divider_color: rgb(188, 199, 210),
+            border_color: rgb(188, 199, 210),
         },
+        // Dracula. Every value is from the published palette: the syntax
+        // colours for text, and Dracula's own UI tokens for the chrome —
+        // #21222C is its title bar, #44475A its button face, #191A21 its status
+        // bar. The header sits darker than the page exactly as an editor's
+        // title bar does.
         "dark" => ThemePalette {
             bg_color: rgb(40, 42, 54),
             body_text_color: rgb(248, 248, 242),
@@ -219,10 +246,11 @@ pub(super) fn theme_palette(theme: &str) -> ThemePalette {
             suffix_highlight_color: rgb(139, 233, 253),
             favorite_highlight_color: rgb(255, 121, 198),
             selection_bg_color: rgb(68, 71, 90),
-            header_bg_color: rgb(68, 71, 90),
-            button_bg_color: rgb(59, 61, 82),
-            divider_color: rgb(98, 114, 164),
-            border_color: rgb(98, 114, 164),
+            header_bg_color: rgb(33, 34, 44),
+            button_bg_color: rgb(68, 71, 90),
+            button_text_color: rgb(248, 248, 242),
+            divider_color: rgb(25, 26, 33),
+            border_color: rgb(25, 26, 33),
         },
         "grandpa" => ThemePalette {
             bg_color: rgb(192, 192, 192),
@@ -235,6 +263,7 @@ pub(super) fn theme_palette(theme: &str) -> ThemePalette {
             selection_bg_color: rgb(212, 208, 200),
             header_bg_color: rgb(0, 0, 128),
             button_bg_color: rgb(184, 184, 184),
+            button_text_color: rgb(0, 0, 0),
             divider_color: rgb(128, 128, 128),
             border_color: rgb(128, 128, 128),
         },
@@ -253,36 +282,52 @@ pub(super) fn theme_palette(theme: &str) -> ThemePalette {
             selection_bg_color: rgb(246, 214, 230),
             header_bg_color: rgb(168, 20, 104),
             button_bg_color: rgb(223, 178, 203),
+            button_text_color: rgb(52, 16, 38),
             divider_color: rgb(154, 112, 133),
             border_color: rgb(154, 112, 133),
         },
+        // Windows PowerShell console. The background is the exact value the
+        // PowerShell shortcut remaps DarkMagenta to, and the text roles map onto
+        // PSReadLine's own semantics: Yellow for commands, Cyan for emphasis,
+        // Green for variables, DarkGray for parameters. Previously the heading
+        // and the body were both white and the suffix and its highlight were
+        // both the same blue, so neither distinction rendered at all. Surfaces
+        // are derived, since a console has no widgets to borrow from.
         "blue" => ThemePalette {
-            bg_color: COLORREF(0x00562401),
-            body_text_color: COLORREF(0x00FFFFFF),
-            heading_color: COLORREF(0x00FFFFFF),
-            header_title_color: COLORREF(0x00FFFFFF),
-            suffix_color: COLORREF(0x00E7C7A7),
-            suffix_highlight_color: COLORREF(0x00E7C7A7),
-            favorite_highlight_color: COLORREF(0x0000D6FF),
-            selection_bg_color: COLORREF(0x003E2B1A),
-            header_bg_color: COLORREF(0x00733809),
-            button_bg_color: COLORREF(0x00804A1A),
-            divider_color: COLORREF(0x00834D1F),
-            border_color: COLORREF(0x00834D1F),
+            bg_color: rgb(1, 36, 86),
+            body_text_color: rgb(238, 237, 240),
+            heading_color: rgb(255, 255, 0),
+            header_title_color: rgb(238, 237, 240),
+            suffix_color: rgb(128, 128, 128),
+            suffix_highlight_color: rgb(0, 255, 255),
+            favorite_highlight_color: rgb(0, 255, 0),
+            selection_bg_color: rgb(11, 61, 128),
+            header_bg_color: rgb(1, 24, 58),
+            button_bg_color: rgb(11, 61, 128),
+            button_text_color: rgb(238, 237, 240),
+            divider_color: rgb(31, 77, 131),
+            border_color: rgb(31, 77, 131),
         },
+        // Green phosphor terminal. A monochrome CRT has exactly one hue, so
+        // every role is a brightness step on it, the way Amber below already
+        // worked. Previously the heading matched the body and the suffix
+        // highlight matched the body too, so neither read as emphasis, and the
+        // favourite was yellow — a colour a green phosphor cannot physically
+        // produce.
         "green" => ThemePalette {
-            bg_color: COLORREF(0x00000000),
-            body_text_color: COLORREF(0x0000D000),
-            heading_color: COLORREF(0x0000D000),
-            header_title_color: COLORREF(0x0000D000),
-            suffix_color: COLORREF(0x00009000),
-            suffix_highlight_color: COLORREF(0x0000D000),
-            favorite_highlight_color: COLORREF(0x0000FFFF),
-            selection_bg_color: COLORREF(0x001A2F1A),
-            header_bg_color: COLORREF(0x000B1A0B),
-            button_bg_color: COLORREF(0x00142D14),
-            divider_color: COLORREF(0x00142D14),
-            border_color: COLORREF(0x00142D14),
+            bg_color: rgb(0, 18, 0),
+            body_text_color: rgb(0, 212, 0),
+            heading_color: rgb(51, 255, 51),
+            header_title_color: rgb(51, 255, 51),
+            suffix_color: rgb(0, 154, 0),
+            suffix_highlight_color: rgb(51, 255, 51),
+            favorite_highlight_color: rgb(192, 255, 192),
+            selection_bg_color: rgb(10, 58, 10),
+            header_bg_color: rgb(5, 41, 5),
+            button_bg_color: rgb(11, 74, 11),
+            button_text_color: rgb(0, 212, 0),
+            divider_color: rgb(31, 110, 31),
+            border_color: rgb(31, 110, 31),
         },
         "amber" => ThemePalette {
             bg_color: rgb(26, 16, 6),
@@ -294,7 +339,9 @@ pub(super) fn theme_palette(theme: &str) -> ThemePalette {
             favorite_highlight_color: rgb(255, 246, 166),
             selection_bg_color: rgb(82, 45, 8),
             header_bg_color: rgb(56, 31, 9),
-            button_bg_color: rgb(74, 42, 12),
+            // Was rgb(74, 42, 12), which sat at 1.19:1 against its own header.
+            button_bg_color: rgb(110, 63, 18),
+            button_text_color: rgb(255, 180, 24),
             divider_color: rgb(110, 63, 18),
             border_color: rgb(110, 63, 18),
         },
@@ -312,6 +359,7 @@ pub(super) fn theme_palette(theme: &str) -> ThemePalette {
             // bar reads as recessed, and pure black read as a hole punched
             // through to the page, which is black in this theme.
             button_bg_color: rgb(48, 48, 208),
+            button_text_color: rgb(255, 255, 255),
             divider_color: rgb(255, 0, 0),
             border_color: rgb(255, 0, 0),
         },
@@ -329,6 +377,7 @@ pub(super) fn theme_palette(theme: &str) -> ThemePalette {
             selection_bg_color: rgb(0, 96, 255),
             header_bg_color: rgb(0, 215, 0),
             button_bg_color: rgb(0, 145, 0),
+            button_text_color: rgb(255, 255, 255),
             divider_color: rgb(255, 0, 255),
             border_color: rgb(255, 0, 255),
         },
@@ -345,6 +394,7 @@ pub(super) fn theme_palette(theme: &str) -> ThemePalette {
                     selection_bg_color: custom.selection_bg_color,
                     header_bg_color: custom.header_bg_color,
                     button_bg_color: custom.button_bg_color,
+                    button_text_color: custom.button_text_color,
                     divider_color: custom.divider_color,
                     border_color: custom.divider_color,
                 }
@@ -360,6 +410,7 @@ pub(super) fn theme_palette(theme: &str) -> ThemePalette {
                     selection_bg_color: COLORREF(0x00303030),
                     header_bg_color: COLORREF(0x00101010),
                     button_bg_color: COLORREF(0x00202020),
+                    button_text_color: COLORREF(0x00FFFFFF),
                     divider_color: COLORREF(0x00202020),
                     border_color: COLORREF(0x00202020),
                 }
@@ -374,8 +425,9 @@ pub(super) fn rgb(r: u8, g: u8, b: u8) -> COLORREF {
 
 pub(super) fn theme_font_family(theme: &str) -> &'static str {
     match theme {
-        "amber" | "teletext1" | "teletext2" => "Consolas",
+        "amber" | "teletext1" | "teletext2" | "dark" | "blue" => "Consolas",
         "grandpa" | "grandma" => "Tahoma",
+        "light" => "Georgia",
         _ => crate::custom_themes::find_custom_theme(theme)
             .map(|custom| custom.font.family())
             .unwrap_or("Segoe UI"),
@@ -398,6 +450,54 @@ mod tests {
         "grandpa",
         "grandma",
     ];
+
+    /// Text roles have to clear their contrast floors on their own background:
+    /// 4.5:1 for body-size text, 3:1 for the large bold headings. Light shipped
+    /// with a heading at 2.7:1 and a favourite highlight at 2.0:1 before this
+    /// was checked.
+    #[test]
+    fn every_built_in_theme_keeps_its_text_readable() {
+        for theme in BUILT_IN_THEMES {
+            let p = theme_palette(theme);
+            for (role, color, floor) in [
+                ("body", p.body_text_color, 4.5),
+                ("heading", p.heading_color, 3.0),
+                // Secondary metadata: allergen codes and group captions, both
+                // of which restate something the layout already shows. Held to
+                // the 3:1 large-text floor rather than 4.5 so Dracula can keep
+                // its own Comment colour, which is recessive by design.
+                ("caption", p.suffix_color, 3.0),
+                ("suffix highlight", p.suffix_highlight_color, 4.5),
+                ("favorite", p.favorite_highlight_color, 4.5),
+            ] {
+                let ratio = contrast_ratio(color, p.bg_color);
+                assert!(
+                    ratio >= floor,
+                    "{theme} {role} sits at {ratio:.2}:1, needs {floor}"
+                );
+            }
+            let glyph = contrast_ratio(p.button_text_color, p.button_bg_color);
+            assert!(
+                glyph >= 3.0,
+                "{theme} header glyphs sit at {glyph:.2}:1 on their button"
+            );
+        }
+    }
+
+    /// A control that barely differs from the bar it sits on is what an
+    /// unstyled widget looks like. Light shipped at 1.37:1 and read as broken;
+    /// Amber, Green and Blue were worse still.
+    #[test]
+    fn every_built_in_theme_separates_its_buttons_from_the_header() {
+        for theme in BUILT_IN_THEMES {
+            let p = theme_palette(theme);
+            let ratio = contrast_ratio(p.button_bg_color, p.header_bg_color);
+            assert!(
+                ratio >= 1.4,
+                "{theme} buttons sit at {ratio:.2}:1 against their own header"
+            );
+        }
+    }
 
     #[test]
     fn contrast_ratio_spans_the_full_range() {
