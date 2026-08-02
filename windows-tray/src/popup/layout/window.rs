@@ -305,7 +305,7 @@ fn desired_size(hwnd: HWND, state: &AppState) -> (i32, i32) {
         }
 
         let scale = popup_scale_for_dpi(&state.settings, dpi_y);
-        let (normal_font, bold_font, bold_italic_font, small_font, small_bold_font) =
+        let (normal_font, bold_font, _bold_italic_font, small_font, small_bold_font) =
             create_fonts(hdc, &state.settings.theme, scale.factor);
         let bullet_width = bullet_column_width(
             hdc,
@@ -377,11 +377,7 @@ fn desired_size(hwnd: HWND, state: &AppState) -> (i32, i32) {
         );
         let max_width = max(scale.max_width, header_required_width);
         let width = width_candidate.clamp(scale.min_width, max_width);
-        DeleteObject(normal_font);
-        DeleteObject(bold_font);
-        DeleteObject(bold_italic_font);
-        DeleteObject(small_font);
-        DeleteObject(small_bold_font);
+        // The fonts are shared and outlive this call; see `create_fonts`.
         windows::Win32::Graphics::Gdi::ReleaseDC(hwnd, hdc);
 
         let size = (
@@ -395,15 +391,88 @@ fn desired_size(hwnd: HWND, state: &AppState) -> (i32, i32) {
     }
 }
 
+/// The popup's five fonts, kept for the life of the process.
+///
+/// Fonts used to be created and destroyed on every paint and every size
+/// calculation, which is ten GDI calls a frame for handles that almost never
+/// change. More importantly it made font handles meaningless as cache keys,
+/// because a new paint produced new handles for identical fonts.
+///
+/// **These handles are deliberately never deleted.** That is what makes them
+/// stable identifiers, which `row_boundaries` relies on to memoise per-character
+/// selection geometry. Deleting them would both undo the saving and silently
+/// corrupt that cache by letting GDI reissue a handle value for a different font.
+///
+/// Because they are never freed, every set built has to be *kept and reused*. An
+/// earlier version held a single set and replaced it on each theme change, which
+/// orphaned five handles every time the font family changed and grew without
+/// bound if the user alternated between two themes.
+struct CachedFonts {
+    height_normal: i32,
+    height_small: i32,
+    face: String,
+    fonts: (HFONT, HFONT, HFONT, HFONT, HFONT),
+}
+
+/// Distinct font sets worth keeping. One per (size, face), so the ceiling is the
+/// few font families the themes use times the widget scales and DPIs a session
+/// visits. Past it, fonts are created uncached rather than evicted: a handle that
+/// might be reissued cannot be a cache key, and both the text-width and row
+/// geometry caches key on these.
+const POPUP_FONT_CACHE_LIMIT: usize = 48;
+
+thread_local! {
+    static POPUP_FONTS: std::cell::RefCell<Vec<CachedFonts>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
 pub(in crate::popup) fn create_fonts(
-    _hdc: HDC,
+    hdc: HDC,
     theme: &str,
     scale_factor: f32,
 ) -> (HFONT, HFONT, HFONT, HFONT, HFONT) {
+    let height_normal = -MulDiv(scale_px(12, scale_factor).max(8), BASE_DPI, 72);
+    let height_small = -MulDiv(scale_px(10, scale_factor).max(7), BASE_DPI, 72);
+    let face = theme_font_family(theme);
+
+    let cached = POPUP_FONTS.with(|cache| {
+        cache
+            .borrow()
+            .iter()
+            .find(|entry| {
+                entry.height_normal == height_normal
+                    && entry.height_small == height_small
+                    && entry.face == face
+            })
+            .map(|entry| entry.fonts)
+    });
+    if let Some(fonts) = cached {
+        return fonts;
+    }
+
+    let fonts = build_fonts(hdc, height_normal, height_small, face);
+    POPUP_FONTS.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.len() < POPUP_FONT_CACHE_LIMIT {
+            cache.push(CachedFonts {
+                height_normal,
+                height_small,
+                face: face.to_string(),
+                fonts,
+            });
+        }
+    });
+    fonts
+}
+
+fn build_fonts(
+    _hdc: HDC,
+    height_normal: i32,
+    height_small: i32,
+    face: &str,
+) -> (HFONT, HFONT, HFONT, HFONT, HFONT) {
     unsafe {
-        let height_normal = -MulDiv(scale_px(12, scale_factor).max(8), BASE_DPI, 72);
-        let height_small = -MulDiv(scale_px(10, scale_factor).max(7), BASE_DPI, 72);
-        let face = to_wstring(theme_font_family(theme));
+        let face = to_wstring(face);
 
         let normal = CreateFontW(
             height_normal,

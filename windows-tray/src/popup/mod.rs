@@ -26,11 +26,8 @@ use windows::Win32::Graphics::Dwm::{
     DWMWCP_DONOTROUND,
 };
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW, CreateSolidBrush,
-    DeleteDC, DeleteObject, EndPaint, FillRect, GetDeviceCaps, GetMonitorInfoW,
-    GetTextExtentPoint32W, GetTextMetricsW, IntersectClipRect, InvalidateRect, MonitorFromPoint,
-    RestoreDC, SaveDC, SelectObject, SetBkMode, SetTextColor, TextOutW, HDC, HFONT, LOGPIXELSY,
-    MONITORINFO, MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, SRCCOPY, TEXTMETRICW, TRANSPARENT,
+    GetMonitorInfoW, InvalidateRect, MonitorFromPoint, HDC, HFONT, LOGPIXELSY, MONITORINFO,
+    MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, SRCCOPY, TEXTMETRICW, TRANSPARENT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GetClientRect, GetCursorPos, GetWindowLongPtrW, GetWindowRect, KillTimer, SetTimer,
@@ -278,7 +275,9 @@ struct SelectableRow {
     left: i32,
     top: i32,
     bottom: i32,
-    boundaries: Vec<SelectableBoundary>,
+    /// Shared with the row-geometry cache in `render::text`, so an unchanged row
+    /// costs a refcount bump instead of a per-character measurement pass.
+    boundaries: Arc<Vec<SelectableBoundary>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -426,13 +425,19 @@ struct HeaderButtonHover {
 
 mod animation;
 mod border;
+mod brush;
 mod bullet;
 mod content;
 mod dither;
+mod gdi;
 mod interaction;
 mod layout;
 mod render;
 mod theme;
+
+use brush::fill_solid_rect;
+use gdi::*;
+use windows::Win32::Graphics::Gdi::{HBITMAP, HGDIOBJ};
 
 /// Shows the popup near the current cursor location.
 pub fn show_popup(hwnd: HWND, state: &AppState) {
@@ -576,13 +581,67 @@ pub fn collapse_recipe_detail_at(hwnd: HWND, x: i32, y: i32) -> bool {
 }
 
 /// Paint entry point used by the popup window procedure.
+/// Frees the popup's offscreen drawing surface.
+///
+/// Called when the popup window is destroyed. The surface is kept between paints,
+/// so without this it would outlive the window it was made for.
+pub fn release_back_buffer() {
+    render::release_back_buffer();
+}
+
 pub fn paint_popup(hwnd: HWND, state: &AppState) {
     render::paint_popup(hwnd, state);
 }
 
 pub fn request_repaint(hwnd: HWND) {
+    crate::perf::count_repaint_request();
     unsafe {
         InvalidateRect(hwnd, None, false);
+    }
+}
+
+/// Marks only a horizontal band of the popup for repaint.
+///
+/// Used where a change is known to be confined to a few rows -- dragging a text
+/// selection is the one hot case -- so the paint can clip to those rows and blit
+/// only them instead of redrawing all 650x640 pixels for one character.
+///
+/// Full width rather than a tight rectangle on purpose: a row's highlight, its
+/// inline suffixes, and its price column all live on the same line, and a band is
+/// impossible to get horizontally wrong.
+///
+/// Only sound because the back buffer is kept between paints, so pixels outside
+/// the band still hold the last frame. Anything that changes content, theme,
+/// size, or DPI must keep using `request_repaint`.
+pub fn request_repaint_band(hwnd: HWND, top: i32, bottom: i32) {
+    if bottom <= top {
+        request_repaint(hwnd);
+        return;
+    }
+    // The width comes from the window rather than a large sentinel. GDI region
+    // coordinates are not the full `i32` range, and an out-of-range rectangle is
+    // rejected rather than clipped: an earlier version passed `i32::MAX / 2` and
+    // invalidated nothing at all, so the popup took two paints in fifteen seconds
+    // of dragging and the highlight only appeared on mouse-up.
+    let mut client = RECT::default();
+    unsafe {
+        if GetClientRect(hwnd, &mut client).is_err() {
+            request_repaint(hwnd);
+            return;
+        }
+    }
+    let band = RECT {
+        left: client.left,
+        top: top.max(client.top),
+        right: client.right,
+        bottom: bottom.min(client.bottom),
+    };
+    if band.bottom <= band.top || band.right <= band.left {
+        return;
+    }
+    crate::perf::count_repaint_request();
+    unsafe {
+        InvalidateRect(hwnd, Some(&band), false);
     }
 }
 

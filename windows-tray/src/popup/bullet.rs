@@ -122,44 +122,34 @@ fn fill(hdc: HDC, left: i32, top: i32, right: i32, bottom: i32, color: COLORREF)
     if right <= left || bottom <= top {
         return;
     }
-    unsafe {
-        let brush = CreateSolidBrush(color);
-        FillRect(
-            hdc,
-            &RECT {
-                left,
-                top,
-                right,
-                bottom,
-            },
-            brush,
-        );
-        DeleteObject(brush);
-    }
+    fill_solid_rect(
+        hdc,
+        &RECT {
+            left,
+            top,
+            right,
+            bottom,
+        },
+        color,
+    );
 }
 
 /// Right-pointing triangle built from scanlines, one row per pixel, so small
 /// sizes stay crisp instead of picking up the antialiasing a polygon fill would.
 fn draw_triangle(hdc: HDC, left: i32, top: i32, size: i32, color: COLORREF) {
     let half = size / 2;
-    unsafe {
-        let brush = CreateSolidBrush(color);
-        for row in 0..size {
-            let width = half + 1 - (row - half).abs();
-            if width > 0 {
-                FillRect(
-                    hdc,
-                    &RECT {
-                        left,
-                        top: top + row,
-                        right: left + width,
-                        bottom: top + row + 1,
-                    },
-                    brush,
-                );
-            }
-        }
-        DeleteObject(brush);
+    for row in 0..size {
+        let width = half + 1 - (row - half).abs();
+        fill_solid_rect(
+            hdc,
+            &RECT {
+                left,
+                top: top + row,
+                right: left + width,
+                bottom: top + row + 1,
+            },
+            color,
+        );
     }
 }
 
@@ -191,22 +181,18 @@ fn draw_diamond(hdc: HDC, left: i32, top: i32, size: i32, color: COLORREF) {
     let size = (size * 7 / 10) | 1;
     let half = size / 2;
     let center_x = left + half;
-    unsafe {
-        let brush = CreateSolidBrush(color);
-        for row in 0..size {
-            let reach = half - (row - half).abs();
-            FillRect(
-                hdc,
-                &RECT {
-                    left: center_x - reach,
-                    top: top + row,
-                    right: center_x + reach + 1,
-                    bottom: top + row + 1,
-                },
-                brush,
-            );
-        }
-        DeleteObject(brush);
+    for row in 0..size {
+        let reach = half - (row - half).abs();
+        fill_solid_rect(
+            hdc,
+            &RECT {
+                left: center_x - reach,
+                top: top + row,
+                right: center_x + reach + 1,
+                bottom: top + row + 1,
+            },
+            color,
+        );
     }
 }
 

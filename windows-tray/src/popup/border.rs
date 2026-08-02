@@ -198,20 +198,16 @@ fn fill(hdc: HDC, left: i32, top: i32, right: i32, bottom: i32, color: COLORREF)
     if right <= left || bottom <= top {
         return;
     }
-    unsafe {
-        let brush = CreateSolidBrush(color);
-        FillRect(
-            hdc,
-            &RECT {
-                left,
-                top,
-                right,
-                bottom,
-            },
-            brush,
-        );
-        DeleteObject(brush);
-    }
+    fill_solid_rect(
+        hdc,
+        &RECT {
+            left,
+            top,
+            right,
+            bottom,
+        },
+        color,
+    );
 }
 
 #[cfg(test)]

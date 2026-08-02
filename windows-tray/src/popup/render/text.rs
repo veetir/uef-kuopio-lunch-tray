@@ -1,6 +1,8 @@
 //! Lower-level text, selection, and highlight drawing helpers.
 
 use super::*;
+use std::cell::RefCell;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct SegmentColors {
@@ -122,11 +124,7 @@ pub(super) fn draw_selection_bg_for_row(
         right: bounds.left + right_width,
         bottom: bounds.top + bounds.line_height - 1,
     };
-    unsafe {
-        let brush = CreateSolidBrush(selection.bg_color);
-        FillRect(hdc, &rect, brush);
-        DeleteObject(brush);
-    }
+    fill_solid_rect(hdc, &rect, selection.bg_color);
 }
 
 pub(super) fn draw_selection_bg_for_segments(
@@ -152,11 +150,7 @@ pub(super) fn draw_selection_bg_for_segments(
         right: bounds.left + right_width,
         bottom: bounds.top + bounds.line_height - 1,
     };
-    unsafe {
-        let brush = CreateSolidBrush(selection.bg_color);
-        FillRect(hdc, &rect, brush);
-        DeleteObject(brush);
-    }
+    fill_solid_rect(hdc, &rect, selection.bg_color);
 }
 
 pub(super) fn add_selectable_row(
@@ -195,7 +189,68 @@ pub(super) fn add_selectable_segmented_row(
     });
 }
 
-fn row_boundaries(hdc: HDC, font: HFONT, text: &str) -> Vec<SelectableBoundary> {
+/// Identifies a run of text whose character geometry is already known.
+///
+/// Boundaries are offsets from the start of the row, so they do not depend on
+/// where the row is drawn — only on the glyphs and the fonts measuring them. That
+/// is what makes them cacheable across paints at all: a selection drag, a hover,
+/// and an animation frame all redraw identical rows at identical widths.
+///
+/// The font handles are part of the key, and they are only meaningful as such
+/// because `create_fonts` keeps them for the life of the process. If fonts ever
+/// go back to being created and destroyed per paint, this cache must key on the
+/// font's description instead, or it will return another font's measurements.
+#[derive(PartialEq, Eq, Hash)]
+struct RowBoundaryKey {
+    fonts: (isize, isize),
+    text: String,
+}
+
+/// Enough for every row of every restaurant at a couple of themes. Cleared
+/// wholesale on overflow rather than evicted: the contents are rebuilt in one
+/// paint, so a rare full clear costs far less than tracking recency.
+const ROW_BOUNDARY_CACHE_LIMIT: usize = 1024;
+
+thread_local! {
+    static ROW_BOUNDARY_CACHE: RefCell<HashMap<RowBoundaryKey, Arc<Vec<SelectableBoundary>>>> =
+        RefCell::new(HashMap::new());
+}
+
+/// Clears memoised row geometry. Only needed if fonts stop being permanent.
+#[cfg(test)]
+fn clear_row_boundary_cache() {
+    ROW_BOUNDARY_CACHE.with(|cache| cache.borrow_mut().clear());
+}
+
+fn cached_row_boundaries(
+    key: RowBoundaryKey,
+    measure: impl FnOnce() -> Vec<SelectableBoundary>,
+) -> Arc<Vec<SelectableBoundary>> {
+    if let Some(hit) = ROW_BOUNDARY_CACHE.with(|cache| cache.borrow().get(&key).cloned()) {
+        crate::perf::count_row_boundary_hit();
+        return hit;
+    }
+    crate::perf::count_row_boundary_miss();
+    let boundaries = Arc::new(measure());
+    ROW_BOUNDARY_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.len() >= ROW_BOUNDARY_CACHE_LIMIT {
+            cache.clear();
+        }
+        cache.insert(key, boundaries.clone());
+    });
+    boundaries
+}
+
+fn row_boundaries(hdc: HDC, font: HFONT, text: &str) -> Arc<Vec<SelectableBoundary>> {
+    let key = RowBoundaryKey {
+        fonts: (font.0, font.0),
+        text: text.to_string(),
+    };
+    cached_row_boundaries(key, || measure_row_boundaries(hdc, font, text))
+}
+
+fn measure_row_boundaries(hdc: HDC, font: HFONT, text: &str) -> Vec<SelectableBoundary> {
     let mut out = Vec::new();
     out.push(SelectableBoundary {
         byte_index: 0,
@@ -216,6 +271,28 @@ fn row_boundaries(hdc: HDC, font: HFONT, text: &str) -> Vec<SelectableBoundary> 
 }
 
 fn row_boundaries_for_segments(
+    hdc: HDC,
+    segments: &[(String, bool)],
+    fonts: SegmentFonts,
+) -> Arc<Vec<SelectableBoundary>> {
+    // The highlight flag changes which font measures a segment, so it has to be
+    // part of the key. `\u{1}` cannot occur in menu text, which keeps segment
+    // boundaries unambiguous without allocating a structured key per row.
+    let mut text = String::new();
+    for (segment, highlighted) in segments {
+        text.push(if *highlighted { '\u{1}' } else { '\u{2}' });
+        text.push_str(segment);
+    }
+    let key = RowBoundaryKey {
+        fonts: (fonts.normal.0, fonts.highlight.0),
+        text,
+    };
+    cached_row_boundaries(key, || {
+        measure_row_boundaries_for_segments(hdc, segments, fonts)
+    })
+}
+
+fn measure_row_boundaries_for_segments(
     hdc: HDC,
     segments: &[(String, bool)],
     fonts: SegmentFonts,
@@ -466,23 +543,16 @@ fn cross_stroke(button_size: i32) -> i32 {
 }
 
 fn fill_rect(hdc: HDC, left: i32, top: i32, right: i32, bottom: i32, color: COLORREF) {
-    if right <= left || bottom <= top {
-        return;
-    }
-    unsafe {
-        let brush = CreateSolidBrush(color);
-        FillRect(
-            hdc,
-            &RECT {
-                left,
-                top,
-                right,
-                bottom,
-            },
-            brush,
-        );
-        DeleteObject(brush);
-    }
+    fill_solid_rect(
+        hdc,
+        &RECT {
+            left,
+            top,
+            right,
+            bottom,
+        },
+        color,
+    );
 }
 
 /// Solid navigation arrow, built one scanline at a time.
@@ -590,11 +660,7 @@ pub(super) fn draw_header_button(
         button_rect.right -= 1;
         button_rect.bottom -= 1;
     }
-    unsafe {
-        let brush = CreateSolidBrush(bg);
-        FillRect(hdc, &button_rect, brush);
-        DeleteObject(brush);
-    }
+    fill_solid_rect(hdc, &button_rect, bg);
     draw_edge(hdc, &button_rect, edge.button(pressed), bg);
     let nudge = if pressed { 1 } else { 0 };
     let glyph_rect = RECT {
@@ -609,9 +675,84 @@ pub(super) fn draw_header_button(
 #[cfg(test)]
 mod tests {
     use super::{
-        cross_stroke, favorite_match_ranges, pressed_fill, ranges_overlap, segments_for_row,
+        cached_row_boundaries, clear_row_boundary_cache, cross_stroke, favorite_match_ranges,
+        pressed_fill, ranges_overlap, segments_for_row, Arc, RowBoundaryKey, SelectableBoundary,
+        ROW_BOUNDARY_CACHE_LIMIT,
     };
     use crate::popup::theme::{contrast_ratio, rgb};
+
+    fn boundaries(count: usize) -> Vec<SelectableBoundary> {
+        (0..count)
+            .map(|index| SelectableBoundary {
+                byte_index: index,
+                x_offset: index as i32 * 7,
+            })
+            .collect()
+    }
+
+    fn key(normal: isize, highlight: isize, text: &str) -> RowBoundaryKey {
+        RowBoundaryKey {
+            fonts: (normal, highlight),
+            text: text.to_string(),
+        }
+    }
+
+    /// The whole point: an unchanged row measured once is reused, and the reuse
+    /// shares the same allocation rather than copying it.
+    #[test]
+    fn an_unchanged_row_is_measured_once() {
+        clear_row_boundary_cache();
+        let first = cached_row_boundaries(key(1, 1, "Kaali-omenasalaatti"), || boundaries(3));
+        let second = cached_row_boundaries(key(1, 1, "Kaali-omenasalaatti"), || {
+            panic!("measured a row that was already known")
+        });
+        assert!(Arc::ptr_eq(&first, &second));
+    }
+
+    #[test]
+    fn different_text_is_measured_separately() {
+        clear_row_boundary_cache();
+        let first = cached_row_boundaries(key(1, 1, "Linssisalaatti"), || boundaries(3));
+        let second = cached_row_boundaries(key(1, 1, "Riisi"), || boundaries(5));
+        assert!(!Arc::ptr_eq(&first, &second));
+        assert_eq!(second.len(), 5);
+    }
+
+    /// Font handles are part of the key because the same glyphs measure
+    /// differently at another size or weight. Missing this would show as
+    /// selection highlights landing off the text after a theme or scale change.
+    #[test]
+    fn the_same_text_in_another_font_is_measured_again() {
+        clear_row_boundary_cache();
+        let normal = cached_row_boundaries(key(1, 1, "Lounas"), || boundaries(3));
+        let bold = cached_row_boundaries(key(2, 2, "Lounas"), || boundaries(4));
+        assert!(!Arc::ptr_eq(&normal, &bold));
+        assert_eq!(bold.len(), 4);
+    }
+
+    /// Segment rows encode the highlight flag into the key, so a row whose
+    /// favourite match moved is not served another row's geometry.
+    #[test]
+    fn segment_rows_key_on_which_font_measures_each_segment() {
+        clear_row_boundary_cache();
+        let plain = cached_row_boundaries(key(1, 2, "\u{2}Riisi"), || boundaries(3));
+        let highlighted = cached_row_boundaries(key(1, 2, "\u{1}Riisi"), || boundaries(6));
+        assert!(!Arc::ptr_eq(&plain, &highlighted));
+        assert_eq!(highlighted.len(), 6);
+    }
+
+    /// The cache is cleared wholesale on overflow, so it must stay correct across
+    /// that boundary rather than serving a stale entry.
+    #[test]
+    fn overflow_clears_the_cache_without_returning_stale_geometry() {
+        clear_row_boundary_cache();
+        for index in 0..=ROW_BOUNDARY_CACHE_LIMIT {
+            let text = format!("row {index}");
+            cached_row_boundaries(key(1, 1, &text), || boundaries(2));
+        }
+        let refreshed = cached_row_boundaries(key(1, 1, "row 0"), || boundaries(9));
+        assert_eq!(refreshed.len(), 9);
+    }
 
     #[test]
     fn cross_stroke_stays_thin_at_every_button_size() {

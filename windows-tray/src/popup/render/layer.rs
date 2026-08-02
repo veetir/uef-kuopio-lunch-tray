@@ -10,6 +10,7 @@ use super::text::{
 use super::*;
 
 pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
+    let _paint_guard = crate::perf::begin_popup_paint();
     unsafe {
         let mut ps = PAINTSTRUCT::default();
         let paint_hdc = BeginPaint(hwnd, &mut ps);
@@ -21,24 +22,45 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
         let _ = GetClientRect(hwnd, &mut rect);
         let width = (rect.right - rect.left).max(1);
         let height = (rect.bottom - rect.top).max(1);
-        let buffer_dc = CreateCompatibleDC(paint_hdc);
-        if buffer_dc.0 == 0 {
+        crate::perf::record_paint_region(
+            width,
+            height,
+            ps.rcPaint.left,
+            ps.rcPaint.top,
+            ps.rcPaint.right,
+            ps.rcPaint.bottom,
+        );
+        let Some((buffer_dc, reused)) = back_buffer_dc(paint_hdc, width, height) else {
             EndPaint(hwnd, &ps);
             return;
-        }
-        let buffer_bitmap = CreateCompatibleBitmap(paint_hdc, width, height);
-        if buffer_bitmap.0 == 0 {
-            DeleteDC(buffer_dc);
-            EndPaint(hwnd, &ps);
-            return;
-        }
-        let old_bitmap = SelectObject(buffer_dc, buffer_bitmap);
+        };
         let hdc = buffer_dc;
+
+        // Honour the update region only when the buffer still holds the previous
+        // frame. A buffer just created for a new size holds nothing, so the
+        // pixels outside the region would be whatever the allocation happened to
+        // contain.
+        let dirty = if reused {
+            clamp_rect(&ps.rcPaint, width, height)
+        } else {
+            RECT {
+                left: 0,
+                top: 0,
+                right: width,
+                bottom: height,
+            }
+        };
+        if dirty.right <= dirty.left || dirty.bottom <= dirty.top {
+            EndPaint(hwnd, &ps);
+            return;
+        }
+        // The buffer DC outlives the paint, so its clip has to be scoped rather
+        // than left behind for the next one.
+        SaveDC(hdc);
+        IntersectClipRect(hdc, dirty.left, dirty.top, dirty.right, dirty.bottom);
         let palette = theme_palette(&state.settings.theme);
         let recipe_palette = recipe_detail_palette(&state.settings.theme, &palette);
-        let brush = CreateSolidBrush(palette.bg_color);
-        FillRect(hdc, &rect, brush);
-        DeleteObject(brush);
+        fill_solid_rect(hdc, &rect, palette.bg_color);
         SetBkMode(hdc, TRANSPARENT);
 
         let dpi_y = GetDeviceCaps(hdc, LOGPIXELSY);
@@ -58,6 +80,9 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
         let line_height = metrics.tmHeight as i32 + scale.line_gap;
         let content_width = (width - scale.padding_x * 2).max(40);
         let animation = current_animation_frame(hwnd);
+        if animation.is_some() {
+            crate::perf::count_animated_paint();
+        }
         let favorites = current_favorites_snapshot();
 
         let header_rect = RECT {
@@ -66,9 +91,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
             right: rect.right,
             bottom: rect.top + scale.header_height,
         };
-        let header_brush = CreateSolidBrush(palette.header_bg_color);
-        FillRect(hdc, &header_rect, header_brush);
-        DeleteObject(header_brush);
+        fill_solid_rect(hdc, &header_rect, palette.header_bg_color);
 
         let layout = header_layout(width, &scale);
         let rail_top = header_rail_top(width, &state.settings, &scale);
@@ -120,9 +143,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
             right: rect.right,
             bottom: header_rect.bottom,
         };
-        let divider_brush = CreateSolidBrush(palette.divider_color);
-        FillRect(hdc, &divider_rect, divider_brush);
-        DeleteObject(divider_brush);
+        fill_solid_rect(hdc, &divider_rect, palette.divider_color);
 
         if let Some(frame) = animation {
             clear_selection_layout(hwnd);
@@ -495,17 +516,111 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
         draw_edge(hdc, &frame_rect, border_edge, palette.bg_color);
 
         SelectObject(hdc, _old_font);
-        DeleteObject(normal_font);
-        DeleteObject(bold_font);
-        DeleteObject(bold_italic_font);
-        DeleteObject(small_font);
-        DeleteObject(small_bold_font);
-        let _ = BitBlt(paint_hdc, 0, 0, width, height, hdc, 0, 0, SRCCOPY);
-        SelectObject(hdc, old_bitmap);
-        DeleteObject(buffer_bitmap);
-        DeleteDC(hdc);
+        // The fonts are shared and outlive this paint; see `create_fonts`.
+        RestoreDC(hdc, -1);
+        let _ = BitBlt(
+            paint_hdc,
+            dirty.left,
+            dirty.top,
+            dirty.right - dirty.left,
+            dirty.bottom - dirty.top,
+            hdc,
+            dirty.left,
+            dirty.top,
+            SRCCOPY,
+        );
         EndPaint(hwnd, &ps);
     }
+}
+
+/// The offscreen surface every paint draws into, kept between paints.
+///
+/// A popup-sized compatible bitmap is about 1.6 MB, and it was created and
+/// destroyed on every paint: roughly 150 MB/s of GDI pool churn while dragging.
+/// Unlike a text extent, which GDI serves from its own cache, allocating a
+/// device-dependent bitmap is real work every time.
+///
+/// The surface is rebuilt only when the popup changes size, and released when the
+/// popup window is destroyed. Carrying GDI state across paints is safe here
+/// because every paint fills the whole surface before drawing and sets the text
+/// mode it needs, and because the fonts and brushes that stay selected in the DC
+/// are themselves permanent.
+struct BackBuffer {
+    dc: HDC,
+    bitmap: HBITMAP,
+    previous: HGDIOBJ,
+    width: i32,
+    height: i32,
+}
+
+thread_local! {
+    static BACK_BUFFER: std::cell::RefCell<Option<BackBuffer>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// The surface to draw into, and whether it still holds the previous frame.
+fn back_buffer_dc(paint_hdc: HDC, width: i32, height: i32) -> Option<(HDC, bool)> {
+    BACK_BUFFER.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if let Some(buffer) = slot.as_ref() {
+            if buffer.width == width && buffer.height == height {
+                return Some((buffer.dc, true));
+            }
+        }
+        if let Some(stale) = slot.take() {
+            release_back_buffer_parts(stale);
+        }
+
+        unsafe {
+            let dc = CreateCompatibleDC(paint_hdc);
+            if dc.0 == 0 {
+                return None;
+            }
+            let bitmap = CreateCompatibleBitmap(paint_hdc, width, height);
+            if bitmap.0 == 0 {
+                DeleteDC(dc);
+                return None;
+            }
+            let previous = SelectObject(dc, bitmap);
+            *slot = Some(BackBuffer {
+                dc,
+                bitmap,
+                previous,
+                width,
+                height,
+            });
+            Some((dc, false))
+        }
+    })
+}
+
+/// Keeps an update rectangle inside the client area.
+fn clamp_rect(rect: &RECT, width: i32, height: i32) -> RECT {
+    RECT {
+        left: rect.left.clamp(0, width),
+        top: rect.top.clamp(0, height),
+        right: rect.right.clamp(0, width),
+        bottom: rect.bottom.clamp(0, height),
+    }
+}
+
+/// Frees the surface. The bitmap is deselected first: a bitmap selected into a DC
+/// cannot be deleted, and skipping this leaks it silently.
+fn release_back_buffer_parts(buffer: BackBuffer) {
+    unsafe {
+        SelectObject(buffer.dc, buffer.previous);
+        DeleteObject(buffer.bitmap);
+        DeleteDC(buffer.dc);
+    }
+}
+
+/// Releases the popup's offscreen surface, on window destruction.
+pub(in crate::popup) fn release_back_buffer() {
+    BACK_BUFFER.with(|slot| {
+        if let Some(buffer) = slot.borrow_mut().take() {
+            release_back_buffer_parts(buffer);
+        }
+    });
 }
 
 struct DrawLayerParams<'a> {
@@ -1526,11 +1641,7 @@ fn draw_header_marker_rail(
         let size = if active { active_size } else { inactive_size };
         let marker_rect = marker_rect_at(hit_rect, size);
         if active {
-            unsafe {
-                let brush = CreateSolidBrush(active_color);
-                FillRect(hdc, &marker_rect, brush);
-                DeleteObject(brush);
-            }
+            fill_solid_rect(hdc, &marker_rect, active_color);
         } else {
             draw_outline_rect(hdc, &marker_rect, inactive_color);
         }
@@ -1663,9 +1774,7 @@ fn draw_closure_notice_block(
     };
 
     unsafe {
-        let brush = CreateSolidBrush(bg_color);
-        FillRect(hdc, &block_rect, brush);
-        DeleteObject(brush);
+        fill_solid_rect(hdc, &block_rect, bg_color);
         SelectObject(hdc, font);
         SetTextColor(hdc, text_color);
     }
@@ -1760,11 +1869,7 @@ fn draw_recipe_detail_block(
         bottom: block_top + block_height,
     };
 
-    unsafe {
-        let brush = CreateSolidBrush(bg_color);
-        FillRect(hdc, &block_rect, brush);
-        DeleteObject(brush);
-    }
+    fill_solid_rect(hdc, &block_rect, bg_color);
     draw_recipe_detail_border(hdc, &block_rect, edge, bg_color);
     if let Some(ref mut draw_capture) = capture {
         draw_capture.layout.recipe_scroll_rect = Some(block_rect);
@@ -1976,14 +2081,8 @@ fn draw_recipe_detail_scrollbar(
         right: track_rect.right,
         bottom: thumb_top + thumb_height,
     };
-    unsafe {
-        let track_brush = CreateSolidBrush(track_color);
-        FillRect(hdc, &track_rect, track_brush);
-        DeleteObject(track_brush);
-        let thumb_brush = CreateSolidBrush(thumb_color);
-        FillRect(hdc, &thumb_rect, thumb_brush);
-        DeleteObject(thumb_brush);
-    }
+    fill_solid_rect(hdc, &track_rect, track_color);
+    fill_solid_rect(hdc, &thumb_rect, thumb_color);
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2216,8 +2315,7 @@ fn draw_recipe_detail_border(hdc: HDC, rect: &RECT, edge: ChromeEdge, face: COLO
 }
 
 fn draw_outline_rect(hdc: HDC, rect: &RECT, color: COLORREF) {
-    unsafe {
-        let brush = CreateSolidBrush(color);
+    {
         let top = RECT {
             left: rect.left,
             top: rect.top,
@@ -2242,17 +2340,51 @@ fn draw_outline_rect(hdc: HDC, rect: &RECT, color: COLORREF) {
             right: rect.right,
             bottom: rect.bottom,
         };
-        FillRect(hdc, &top, brush);
-        FillRect(hdc, &bottom, brush);
-        FillRect(hdc, &left, brush);
-        FillRect(hdc, &right, brush);
-        DeleteObject(brush);
+        fill_solid_rect(hdc, &top, color);
+        fill_solid_rect(hdc, &bottom, color);
+        fill_solid_rect(hdc, &left, color);
+        fill_solid_rect(hdc, &right, color);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn rect(left: i32, top: i32, right: i32, bottom: i32) -> RECT {
+        RECT {
+            left,
+            top,
+            right,
+            bottom,
+        }
+    }
+
+    /// The update region arrives from Windows and the band we ask for is
+    /// deliberately over-wide, so it has to be brought back inside the client
+    /// area before it is used to clip and to size the blit.
+    #[test]
+    fn an_update_region_is_clamped_to_the_client_area() {
+        let clamped = clamp_rect(&rect(-20, -5, 100_000, 100_000), 650, 640);
+        assert_eq!(clamped.left, 0);
+        assert_eq!(clamped.top, 0);
+        assert_eq!(clamped.right, 650);
+        assert_eq!(clamped.bottom, 640);
+    }
+
+    #[test]
+    fn a_band_inside_the_client_area_is_left_alone() {
+        let clamped = clamp_rect(&rect(0, 120, 650, 148), 650, 640);
+        assert_eq!((clamped.top, clamped.bottom), (120, 148));
+    }
+
+    /// An empty region has to stay empty rather than clamp into something the
+    /// paint would treat as work to do.
+    #[test]
+    fn an_empty_region_stays_empty() {
+        let clamped = clamp_rect(&rect(0, 0, 0, 0), 650, 640);
+        assert!(clamped.right <= clamped.left || clamped.bottom <= clamped.top);
+    }
 
     fn trail(strength: f32, direction: i32) -> MarkerTrail {
         MarkerTrail {

@@ -59,6 +59,7 @@ pub fn sample_app_state() -> AppState {
         provider: Provider::LunchApi,
         payload_date: FIXTURE_DATE.to_string(),
         stale_date: false,
+        api_stale: false,
     }
 }
 

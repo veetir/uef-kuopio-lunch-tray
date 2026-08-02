@@ -15,7 +15,6 @@
 //! into visible checkerboard.
 
 use super::*;
-use windows::Win32::Graphics::Gdi::{CreateBitmap, MaskBlt};
 
 /// The classic 8x8 ordered dither matrix, holding each threshold 0..=63 once.
 /// Its recursive construction is what spreads consecutive thresholds as far
@@ -156,9 +155,7 @@ pub(super) fn fill_dithered_rect(hdc: HDC, rect: &RECT, color: COLORREF, coverag
     }
     unsafe {
         if coverage >= DITHER_STEPS {
-            let brush = CreateSolidBrush(color);
-            FillRect(hdc, rect, brush);
-            let _ = DeleteObject(brush);
+            fill_solid_rect(hdc, rect, color);
             return;
         }
         blit_through_dither(
@@ -169,9 +166,7 @@ pub(super) fn fill_dithered_rect(hdc: HDC, rect: &RECT, color: COLORREF, coverag
             height,
             coverage,
             |slip_dc, slip_rect| {
-                let brush = CreateSolidBrush(color);
-                FillRect(slip_dc, slip_rect, brush);
-                let _ = DeleteObject(brush);
+                fill_solid_rect(slip_dc, slip_rect, color);
             },
         );
     }

@@ -385,6 +385,26 @@ pub unsafe extern "system" fn popup_wndproc(
             }
             let app = &*(app);
             let key = wparam.0 as u32;
+            #[cfg(feature = "perf-counters")]
+            if key == 0x7A {
+                crate::perf::reset();
+                log_line("popup performance counters reset");
+                return LRESULT(0);
+            }
+            #[cfg(feature = "perf-counters")]
+            if key == 0x7B {
+                match crate::perf::append_report(crate::perf::current_gdi_batch_limit()) {
+                    Ok(path) => log_line(&format!(
+                        "popup performance counters written to {}",
+                        path.display()
+                    )),
+                    Err(error) => log_line(&format!(
+                        "failed to write popup performance counters: {error}"
+                    )),
+                }
+                return LRESULT(0);
+            }
+            crate::perf::count_key_down();
             match key {
                 0x1B => {
                     popup::cancel_text_selection(hwnd);
@@ -413,6 +433,7 @@ pub unsafe extern "system" fn popup_wndproc(
             LRESULT(0)
         }
         WM_MOUSEMOVE => {
+            let _mouse_move_guard = crate::perf::begin_mouse_move();
             let x = (lparam.0 as u32 & 0xFFFF) as i16 as i32;
             let y = ((lparam.0 as u32 >> 16) & 0xFFFF) as i16 as i32;
             track_popup_mouse_leave(hwnd);
@@ -510,6 +531,7 @@ pub unsafe extern "system" fn popup_wndproc(
             LRESULT(0)
         }
         WM_MOUSEWHEEL => {
+            crate::perf::count_mouse_wheel();
             let app = app_from_hwnd(hwnd);
             if app.is_null() {
                 return LRESULT(0);
@@ -539,6 +561,7 @@ pub unsafe extern "system" fn popup_wndproc(
         }
         WM_TIMER => {
             if wparam.0 == popup::POPUP_ANIM_TIMER_ID {
+                crate::perf::count_animation_tick();
                 popup::tick_animation(hwnd);
                 return LRESULT(0);
             }
@@ -548,7 +571,10 @@ pub unsafe extern "system" fn popup_wndproc(
             }
             LRESULT(0)
         }
-        WM_DESTROY => LRESULT(0),
+        WM_DESTROY => {
+            popup::release_back_buffer();
+            LRESULT(0)
+        }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
 }
@@ -568,6 +594,7 @@ fn cycle_popup_restaurant(hwnd: HWND, app: &App, direction: i32) {
     popup::press_navigation_button(hwnd, direction);
     popup::clear_interaction_state(hwnd);
     app.cycle_restaurant(direction);
+    crate::perf::count_restaurant_switch();
     let _ = app.load_cache_for_current();
     app.maybe_refresh_on_selection();
     let new_state = app.snapshot();
@@ -615,6 +642,7 @@ fn select_popup_restaurant_index(hwnd: HWND, app: &App, index: usize) {
         return;
     }
 
+    crate::perf::count_restaurant_switch();
     let direction = if new_index > old_index { 1 } else { -1 };
     popup::resize_popup_keep_position(hwnd, &new_state);
     popup::begin_switch_animation(hwnd, &old_state, &new_state, direction);

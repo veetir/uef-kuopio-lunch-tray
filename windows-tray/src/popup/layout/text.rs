@@ -1,6 +1,8 @@
 //! Text measurement and wrapping helpers for the popup layout pipeline.
 
 use super::*;
+use std::cell::RefCell;
+use std::collections::HashMap;
 
 pub(super) fn measure_lines_layout(
     hdc: HDC,
@@ -412,13 +414,67 @@ fn split_long_token_to_width_rows(
     rows
 }
 
+/// Identifies a measured string. Font handles are usable as keys only because
+/// `create_fonts` keeps them for the life of the process; see the note there.
+#[derive(PartialEq, Eq, Hash)]
+struct TextWidthKey {
+    font: isize,
+    text: String,
+}
+
+/// Roughly the distinct strings measured across every restaurant at one theme,
+/// with room to spare. Cleared wholesale on overflow rather than evicted; the
+/// working set is rebuilt within a paint or two, and tracking recency would cost
+/// more than the rare refill.
+///
+/// If `text_width.hit_rate` in the counter report is not near 100% in steady
+/// state, this cache is thrashing and the limit or the callers are wrong.
+const TEXT_WIDTH_CACHE_LIMIT: usize = 8192;
+
+thread_local! {
+    static TEXT_WIDTH_CACHE: RefCell<HashMap<TextWidthKey, i32>> = RefCell::new(HashMap::new());
+}
+
+#[cfg(test)]
+fn clear_text_width_cache() {
+    TEXT_WIDTH_CACHE.with(|cache| cache.borrow_mut().clear());
+}
+
+/// Measures `text` in `font`, reusing the answer when the same string has already
+/// been measured in the same font.
+///
+/// A repaint measures the same strings as the paint before it: the wrap pass, the
+/// price-column alignment, and the suffix layout all re-derive widths from
+/// unchanged content. Each measurement otherwise costs three GDI calls — select,
+/// measure, restore — and this is the single most frequent call in the paint path.
 pub(in crate::popup) fn text_width_with_font(hdc: HDC, font: HFONT, text: &str) -> i32 {
-    unsafe {
+    if text.is_empty() {
+        return 0;
+    }
+    let key = TextWidthKey {
+        font: font.0,
+        text: text.to_string(),
+    };
+    if let Some(width) = TEXT_WIDTH_CACHE.with(|cache| cache.borrow().get(&key).copied()) {
+        crate::perf::count_text_width_hit();
+        return width;
+    }
+    crate::perf::count_text_width_miss();
+
+    let width = unsafe {
         let old = SelectObject(hdc, font);
         let width = text_width(hdc, text);
         SelectObject(hdc, old);
         width
-    }
+    };
+    TEXT_WIDTH_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.len() >= TEXT_WIDTH_CACHE_LIMIT {
+            cache.clear();
+        }
+        cache.insert(key, width);
+    });
+    width
 }
 
 /// Horizontal gap kept between an item's main text and its inline suffix.
@@ -486,7 +542,66 @@ pub(in crate::popup) fn text_width(hdc: HDC, text: &str) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{flatten_suffix_segments, word_bounds};
+    use super::{
+        clear_text_width_cache, flatten_suffix_segments, word_bounds, TextWidthKey,
+        TEXT_WIDTH_CACHE, TEXT_WIDTH_CACHE_LIMIT,
+    };
+
+    fn remember(font: isize, text: &str, width: i32) {
+        TEXT_WIDTH_CACHE.with(|cache| {
+            cache.borrow_mut().insert(
+                TextWidthKey {
+                    font,
+                    text: text.to_string(),
+                },
+                width,
+            );
+        });
+    }
+
+    fn recall(font: isize, text: &str) -> Option<i32> {
+        TEXT_WIDTH_CACHE.with(|cache| {
+            cache
+                .borrow()
+                .get(&TextWidthKey {
+                    font,
+                    text: text.to_string(),
+                })
+                .copied()
+        })
+    }
+
+    /// The same glyphs measure differently at another size or weight, so the font
+    /// is part of the key. Getting this wrong would show as price columns and
+    /// suffixes landing at the wrong offsets after a theme or scale change.
+    #[test]
+    fn width_is_remembered_per_font() {
+        clear_text_width_cache();
+        remember(1, "Riisi", 40);
+        remember(2, "Riisi", 63);
+        assert_eq!(recall(1, "Riisi"), Some(40));
+        assert_eq!(recall(2, "Riisi"), Some(63));
+        assert_eq!(recall(3, "Riisi"), None);
+    }
+
+    /// Overflow clears rather than evicting, so the cache must come back empty and
+    /// be refilled rather than keep serving whatever survived.
+    #[test]
+    fn overflow_clears_the_width_cache() {
+        clear_text_width_cache();
+        for index in 0..TEXT_WIDTH_CACHE_LIMIT {
+            remember(1, &format!("row {index}"), index as i32);
+        }
+        assert_eq!(recall(1, "row 0"), Some(0));
+
+        TEXT_WIDTH_CACHE.with(|cache| {
+            let mut cache = cache.borrow_mut();
+            if cache.len() >= TEXT_WIDTH_CACHE_LIMIT {
+                cache.clear();
+            }
+        });
+        assert_eq!(recall(1, "row 0"), None);
+    }
 
     #[test]
     fn word_bounds_splits_on_whitespace_runs() {

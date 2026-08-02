@@ -49,6 +49,8 @@ fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let print_today = args.iter().any(|a| a == "--print-today");
     let no_tray = args.iter().any(|a| a == "--no-tray");
+    #[cfg(all(feature = "perf-counters", target_os = "windows"))]
+    let gdi_batch_limit = requested_gdi_batch_limit(&args);
     let boot_settings = load_settings();
     log::set_enabled(boot_settings.enable_logging);
 
@@ -66,6 +68,13 @@ fn main() -> anyhow::Result<()> {
     unsafe {
         log::log_line("app start");
         enable_dpi_awareness();
+        #[cfg(all(feature = "perf-counters", target_os = "windows"))]
+        if let Some(limit) = gdi_batch_limit {
+            let previous = windows::Win32::Graphics::Gdi::GdiSetBatchLimit(limit);
+            log::log_line(&format!(
+                "GDI batch limit changed: previous={previous} requested={limit}"
+            ));
+        }
         let hinstance = GetModuleHandleW(None)?;
         winmsg::register_window_classes(hinstance.into())?;
 
@@ -154,6 +163,14 @@ fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(all(feature = "perf-counters", target_os = "windows"))]
+fn requested_gdi_batch_limit(args: &[String]) -> Option<u32> {
+    args.iter().find_map(|arg| {
+        arg.strip_prefix("--gdi-batch-limit=")
+            .and_then(|value| value.parse().ok())
+    })
 }
 
 #[cfg(target_os = "windows")]

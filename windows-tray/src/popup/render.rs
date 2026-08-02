@@ -26,7 +26,7 @@ use super::*;
 mod layer;
 mod text;
 
-pub(super) use layer::paint_popup;
+pub(super) use layer::{paint_popup, release_back_buffer};
 
 #[cfg(feature = "bench")]
 pub(in crate::popup) fn bench_favorite_match_range_count(
