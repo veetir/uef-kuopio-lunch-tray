@@ -57,6 +57,13 @@ const POPUP_CLOSE_ANIM_MS: i64 = 90;
 const POPUP_SWITCH_ANIM_MS: i64 = 120;
 const POPUP_INTERRUPTED_SWITCH_ANIM_MS: i64 = 80;
 const POPUP_SWITCH_OFFSET_PX: i32 = 6;
+/// Switches landing on top of each other before this many have stacked up scale
+/// the header title's dither from none to full.
+const POPUP_SWITCH_TURBULENCE_SATURATION: f32 = 4.0;
+/// Densest a trail marker may be drawn. Held below solid so the trail always
+/// reads as a ghost of the active marker rather than competing with it for which
+/// restaurant you are actually on.
+const POPUP_MARKER_TRAIL_MAX_DITHER: f32 = 0.6;
 const HEADER_MARKER_DOT_SIZE: i32 = 5;
 const HEADER_MARKER_GAP: i32 = 8;
 const HEADER_MARKER_HIT_SIZE: i32 = 16;
@@ -337,6 +344,7 @@ enum PopupAnimationKind {
         new_title: String,
         direction: i32,
         interrupted: bool,
+        turbulence: f32,
     },
 }
 
@@ -368,6 +376,7 @@ enum PopupAnimationFrame {
         direction: i32,
         progress: f32,
         interrupted: bool,
+        turbulence: f32,
     },
 }
 
@@ -410,6 +419,7 @@ mod animation;
 mod border;
 mod bullet;
 mod content;
+mod dither;
 mod interaction;
 mod layout;
 mod render;

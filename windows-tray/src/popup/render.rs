@@ -6,6 +6,7 @@ use super::bullet::{
     bullet_color, bullet_column_width, bullet_style_for_theme, draw_bullet, BulletStyle,
 };
 use super::content::{build_lines, current_favorites_snapshot};
+use super::dither::{coverage_for_progress, fill_dithered_rect};
 use super::interaction::{
     clear_selection_layout, current_selection_range, recipe_detail_scroll_offset_px,
     store_selection_layout,

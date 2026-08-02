@@ -111,6 +111,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
             &scale,
             palette.header_title_color,
             marker_inactive_color(&palette),
+            MarkerTrail::from_frame(animation.as_ref()),
         );
 
         let divider_rect = RECT {
@@ -151,6 +152,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                         &lines,
                         DrawLayerParams {
                             scale,
+                            draw_title: true,
                             width,
                             height,
                             content_width,
@@ -221,6 +223,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                         &lines,
                         DrawLayerParams {
                             scale,
+                            draw_title: true,
                             width,
                             height,
                             content_width,
@@ -267,6 +270,8 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                     direction,
                     progress,
                     interrupted,
+                    // The marker rail reads the turbulence straight off the frame.
+                    turbulence: _,
                 } => {
                     let dir = if direction >= 0 { 1 } else { -1 };
                     let old_fade_progress = if interrupted {
@@ -327,6 +332,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                         &old_lines,
                         DrawLayerParams {
                             scale,
+                            draw_title: false,
                             width,
                             height,
                             content_width,
@@ -370,6 +376,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                         &new_lines,
                         DrawLayerParams {
                             scale,
+                            draw_title: false,
                             width,
                             height,
                             content_width,
@@ -407,6 +414,19 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                             y_offset: new_offset,
                         },
                     );
+                    draw_switch_title(
+                        hdc,
+                        &new_title,
+                        &TitleContext {
+                            bold_font,
+                            width,
+                            layout: &layout,
+                            metrics: &metrics,
+                            rail_top,
+                            scale: &scale,
+                            title_color: palette.header_title_color,
+                        },
+                    );
                 }
             }
         } else {
@@ -425,6 +445,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                 &lines,
                 DrawLayerParams {
                     scale,
+                    draw_title: true,
                     width,
                     height,
                     content_width,
@@ -490,6 +511,9 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
 struct DrawLayerParams<'a> {
     // Group render-only state so the content-layer draw path stays readable.
     scale: PopupScale,
+    /// Cleared while the header title runs its own dissolve, so the switch
+    /// animation's two body layers do not each stamp a solid title underneath it.
+    draw_title: bool,
     width: i32,
     height: i32,
     content_width: i32,
@@ -526,27 +550,94 @@ struct DrawLayerParams<'a> {
     y_offset: i32,
 }
 
-fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerParams<'_>) {
-    unsafe {
-        SelectObject(hdc, params.bold_font);
-        SetTextColor(hdc, params.header_title_color);
-    }
+/// Everything needed to place and ink the header title.
+///
+/// Bundled because the title is now drawn from two places -- the ordinary
+/// content layer and the dissolve -- and they must agree on placement exactly or
+/// the name jumps a pixel as the animation hands over to the live frame.
+struct TitleContext<'a> {
+    bold_font: HFONT,
+    width: i32,
+    layout: &'a HeaderLayout,
+    metrics: &'a TEXTMETRICW,
+    rail_top: Option<i32>,
+    scale: &'a PopupScale,
+    title_color: COLORREF,
+}
 
-    let full_title = normalize_text(title);
-    let title_width = text_width(hdc, &full_title);
-    let title_button_margin = scale_px(HEADER_TITLE_BUTTON_MARGIN, params.scale.factor);
-    let min_title_x = params.layout.next.right + title_button_margin;
-    let max_title_x =
-        (params.layout.close.left - title_width - title_button_margin).max(min_title_x);
-    let title_x = ((params.width - title_width) / 2).clamp(min_title_x, max_title_x);
-    let button_center_y = (params.layout.prev.top + params.layout.prev.bottom) / 2;
-    let title_y = header_title_y(
+/// Where the header title lands, measured in the caller's DC.
+struct TitlePlacement {
+    text: String,
+    x: i32,
+    y: i32,
+}
+
+fn title_placement(hdc: HDC, title: &str, ctx: &TitleContext<'_>) -> TitlePlacement {
+    unsafe {
+        SelectObject(hdc, ctx.bold_font);
+    }
+    let text = normalize_text(title);
+    let title_width = text_width(hdc, &text);
+    let title_button_margin = scale_px(HEADER_TITLE_BUTTON_MARGIN, ctx.scale.factor);
+    let min_title_x = ctx.layout.next.right + title_button_margin;
+    let max_title_x = (ctx.layout.close.left - title_width - title_button_margin).max(min_title_x);
+    let x = ((ctx.width - title_width) / 2).clamp(min_title_x, max_title_x);
+    let button_center_y = (ctx.layout.prev.top + ctx.layout.prev.bottom) / 2;
+    let y = header_title_y(
         button_center_y,
-        params.metrics.tmHeight,
-        params.rail_top,
-        &params.scale,
-    ) + params.y_offset;
-    draw_text_line(hdc, &full_title, title_x, title_y);
+        ctx.metrics.tmHeight,
+        ctx.rail_top,
+        ctx.scale,
+    );
+    TitlePlacement { text, x, y }
+}
+
+/// Draws the header title for a switch: the new name, immediately and crisply.
+///
+/// The title does not animate. It is the one element whose whole job is to say
+/// unambiguously which restaurant this is, and every transition that blends two
+/// names — cross-fade, dissolve, stipple — spends its time showing something that
+/// is neither of them. The motion lives in the body layers and the marker rail
+/// instead, which can carry it without anything becoming harder to read.
+///
+/// Drawn here rather than inside the two body layers so that it does not inherit
+/// their vertical slide. A title that holds still while the menu moves underneath
+/// reads more clearly than one that shifts along with the content.
+fn draw_switch_title(hdc: HDC, new_title: &str, ctx: &TitleContext<'_>) {
+    let placement = title_placement(hdc, new_title, ctx);
+    unsafe {
+        SelectObject(hdc, ctx.bold_font);
+        SetTextColor(hdc, ctx.title_color);
+    }
+    draw_text_line(hdc, &placement.text, placement.x, placement.y);
+}
+
+fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerParams<'_>) {
+    if params.draw_title {
+        let placement = title_placement(
+            hdc,
+            title,
+            &TitleContext {
+                bold_font: params.bold_font,
+                width: params.width,
+                layout: params.layout,
+                metrics: params.metrics,
+                rail_top: params.rail_top,
+                scale: &params.scale,
+                title_color: params.header_title_color,
+            },
+        );
+        unsafe {
+            SelectObject(hdc, params.bold_font);
+            SetTextColor(hdc, params.header_title_color);
+        }
+        draw_text_line(
+            hdc,
+            &placement.text,
+            placement.x,
+            placement.y + params.y_offset,
+        );
+    }
 
     let bullet_width = bullet_column_width(hdc, params.normal_font, params.bullet_style);
     let main_wrap_width = (params.content_width - bullet_width).max(24);
@@ -1364,6 +1455,52 @@ fn draw_date_time_line(
 /// size, and colour. That lets the inactive markers clear a readability floor
 /// without ten of them competing with the one that matters, since an outline
 /// carries far less ink than a solid mark at the same contrast.
+/// A comet trail behind the active marker, showing where a fast scroll came from.
+///
+/// Carries the same turbulence the header title spends on dither, so the rail and
+/// the title read as one motion rather than two effects that happen to coincide.
+#[derive(Debug, Clone, Copy)]
+struct MarkerTrail {
+    direction: i32,
+    strength: f32,
+}
+
+impl MarkerTrail {
+    /// `None` once the switch has resolved, which is also the whole of the
+    /// deliberate single-switch case: the rail then draws exactly as it always
+    /// has, one solid marker and no ghosts.
+    fn from_frame(frame: Option<&PopupAnimationFrame>) -> Option<Self> {
+        match frame {
+            Some(PopupAnimationFrame::Switch {
+                direction,
+                progress,
+                turbulence,
+                ..
+            }) => {
+                let strength = turbulence.clamp(0.0, 1.0) * (1.0 - progress.clamp(0.0, 1.0));
+                (strength > 0.0).then_some(MarkerTrail {
+                    direction: *direction,
+                    strength,
+                })
+            }
+            _ => None,
+        }
+    }
+}
+
+fn marker_rect_at(hit_rect: &RECT, size: i32) -> RECT {
+    let center_x = (hit_rect.left + hit_rect.right) / 2;
+    let center_y = (hit_rect.top + hit_rect.bottom) / 2;
+    let left = center_x - size / 2;
+    let top = center_y - size / 2;
+    RECT {
+        left,
+        top,
+        right: left + size,
+        bottom: top + size,
+    }
+}
+
 fn draw_header_marker_rail(
     hdc: HDC,
     width: i32,
@@ -1371,6 +1508,7 @@ fn draw_header_marker_rail(
     scale: &PopupScale,
     active_color: COLORREF,
     inactive_color: COLORREF,
+    trail: Option<MarkerTrail>,
 ) {
     let restaurants = available_restaurants(settings.enable_antell_restaurants);
     if restaurants.len() <= 1 || settings.show_restaurant_index_numbers {
@@ -1384,18 +1522,9 @@ fn draw_header_marker_rail(
     let (inactive_size, active_size) = header_marker_sizes(scale);
 
     for (idx, hit_rect) in hit_rects.iter().enumerate() {
-        let center_x = (hit_rect.left + hit_rect.right) / 2;
-        let center_y = (hit_rect.top + hit_rect.bottom) / 2;
         let active = idx == active_index;
         let size = if active { active_size } else { inactive_size };
-        let left = center_x - size / 2;
-        let top = center_y - size / 2;
-        let marker_rect = RECT {
-            left,
-            top,
-            right: left + size,
-            bottom: top + size,
-        };
+        let marker_rect = marker_rect_at(hit_rect, size);
         if active {
             unsafe {
                 let brush = CreateSolidBrush(active_color);
@@ -1406,6 +1535,55 @@ fn draw_header_marker_rail(
             draw_outline_rect(hdc, &marker_rect, inactive_color);
         }
     }
+
+    if let Some(trail) = trail {
+        for (offset, coverage) in trail_steps(trail) {
+            let Some(index) = trail_index(active_index, offset, trail.direction, hit_rects.len())
+            else {
+                break;
+            };
+            fill_dithered_rect(
+                hdc,
+                &marker_rect_at(&hit_rects[index], active_size),
+                active_color,
+                coverage,
+            );
+        }
+    }
+}
+
+/// The trail markers to draw, nearest first, as (steps back, dither coverage).
+///
+/// Each successive marker needs a whole extra unit of turbulence before it lights
+/// at all, so the trail grows one marker at a time as the spin accelerates rather
+/// than every ghost brightening together. Stops at the first dark marker, since
+/// everything past it is darker still.
+fn trail_steps(trail: MarkerTrail) -> Vec<(i32, u32)> {
+    let mut steps = Vec::new();
+    let saturation = POPUP_SWITCH_TURBULENCE_SATURATION;
+    for offset in 1..=(saturation as i32) {
+        let lit = (trail.strength * saturation - (offset - 1) as f32).clamp(0.0, 1.0);
+        let coverage = coverage_for_progress(lit * POPUP_MARKER_TRAIL_MAX_DITHER);
+        if coverage == 0 {
+            break;
+        }
+        steps.push((offset, coverage));
+    }
+    steps
+}
+
+/// The marker `offset` steps back along the direction of travel.
+///
+/// `None` once the trail would wrap onto the active marker itself: the rail is a
+/// ring, and a long spin through a short list would otherwise draw ghosts on top
+/// of where you already are and read as a rail flickering at random.
+fn trail_index(active_index: usize, offset: i32, direction: i32, count: usize) -> Option<usize> {
+    if count == 0 || offset as usize >= count {
+        return None;
+    }
+    let step = if direction >= 0 { 1 } else { -1 };
+    let index = (active_index as i32 - step * offset).rem_euclid(count as i32) as usize;
+    (index != active_index).then_some(index)
 }
 
 fn stale_dim_color(bg_color: COLORREF) -> COLORREF {
@@ -2068,6 +2246,80 @@ fn draw_outline_rect(hdc: HDC, rect: &RECT, color: COLORREF) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn trail(strength: f32, direction: i32) -> MarkerTrail {
+        MarkerTrail {
+            direction,
+            strength,
+        }
+    }
+
+    /// A deliberate single switch carries no turbulence, so the rail has to draw
+    /// exactly as it always has. This is the common case and the one regression
+    /// that would be most obvious.
+    #[test]
+    fn a_settled_rail_draws_no_ghosts() {
+        assert!(trail_steps(trail(0.0, 1)).is_empty());
+    }
+
+    /// The trail lengthens a marker at a time as the spin accelerates, rather
+    /// than every ghost brightening at once.
+    #[test]
+    fn the_trail_lengthens_with_turbulence() {
+        assert_eq!(trail_steps(trail(0.2, 1)).len(), 1);
+        assert!(trail_steps(trail(0.6, 1)).len() > 1);
+        assert_eq!(
+            trail_steps(trail(1.0, 1)).len(),
+            POPUP_SWITCH_TURBULENCE_SATURATION as usize
+        );
+    }
+
+    /// Nearer ghosts are always denser than further ones, which is what makes the
+    /// trail read as direction of travel rather than as scattered noise.
+    #[test]
+    fn ghosts_fade_with_distance() {
+        let steps = trail_steps(trail(1.0, 1));
+        for pair in steps.windows(2) {
+            assert!(
+                pair[0].1 >= pair[1].1,
+                "ghost at {} is denser than at {}",
+                pair[1].0,
+                pair[0].0
+            );
+        }
+    }
+
+    /// No ghost may reach full coverage, or it would compete with the active
+    /// marker for which restaurant you are actually on.
+    #[test]
+    fn ghosts_never_reach_the_density_of_the_active_marker() {
+        for (_, coverage) in trail_steps(trail(1.0, 1)) {
+            assert!(coverage < crate::popup::dither::DITHER_STEPS);
+        }
+    }
+
+    #[test]
+    fn the_trail_runs_opposite_the_direction_of_travel() {
+        assert_eq!(trail_index(5, 1, 1, 10), Some(4));
+        assert_eq!(trail_index(5, 2, 1, 10), Some(3));
+        assert_eq!(trail_index(5, 1, -1, 10), Some(6));
+    }
+
+    #[test]
+    fn the_trail_wraps_around_the_ring() {
+        assert_eq!(trail_index(0, 1, 1, 10), Some(9));
+        assert_eq!(trail_index(9, 1, -1, 10), Some(0));
+    }
+
+    /// A long spin through a short list would otherwise lap the rail and stipple
+    /// ghosts over the active marker, which reads as random flicker.
+    #[test]
+    fn the_trail_stops_before_lapping_the_active_marker() {
+        assert_eq!(trail_index(2, 3, 1, 3), None);
+        assert_eq!(trail_index(2, 4, 1, 3), None);
+        assert_eq!(trail_index(0, 1, 1, 1), None);
+        assert_eq!(trail_index(0, 1, 1, 0), None);
+    }
 
     #[test]
     fn recipe_detail_viewport_caps_to_remaining_client_height() {

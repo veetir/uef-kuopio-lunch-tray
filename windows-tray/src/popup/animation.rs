@@ -175,6 +175,7 @@ pub(super) fn current_animation_frame(hwnd: HWND) -> Option<PopupAnimationFrame>
             new_title,
             direction,
             interrupted,
+            turbulence,
         } => Some(PopupAnimationFrame::Switch {
             old_lines: old_lines.clone(),
             new_lines: new_lines.clone(),
@@ -183,6 +184,7 @@ pub(super) fn current_animation_frame(hwnd: HWND) -> Option<PopupAnimationFrame>
             direction: *direction,
             progress,
             interrupted: *interrupted,
+            turbulence: *turbulence,
         }),
     }
 }
@@ -221,7 +223,8 @@ pub(super) fn begin_switch_animation(
         request_repaint(hwnd);
         return;
     }
-    let interrupted = switch_animation_active(hwnd);
+    let stacked = stacked_switch_count(hwnd);
+    let interrupted = stacked > 0;
     start_animation(
         hwnd,
         if interrupted {
@@ -236,17 +239,40 @@ pub(super) fn begin_switch_animation(
             new_title: header_title(new_state),
             direction,
             interrupted,
+            turbulence: turbulence_for_stack(stacked),
         },
     );
 }
 
-fn switch_animation_active(hwnd: HWND) -> bool {
+/// How much header dither this switch earns, from how many switches have landed
+/// on top of one another without one being allowed to finish.
+///
+/// Deliberately the opposite of how the body reads. A single deliberate switch
+/// resolves clean and instant, so the name is legible the moment you arrive.
+/// Spinning the wheel puts the title into visible churn instead, which is honest
+/// about the state: the names are going past faster than they can be read, and
+/// the stipple says so rather than flashing a sequence of half-legible words.
+fn turbulence_for_stack(stacked: u32) -> f32 {
+    (stacked as f32 / POPUP_SWITCH_TURBULENCE_SATURATION).clamp(0.0, 1.0)
+}
+
+/// Switches already stacked up on the running animation, saturating so a long
+/// spin cannot run the counter away and leave the title stippled for ages after
+/// the user stops.
+fn stacked_switch_count(hwnd: HWND) -> u32 {
     let store = POPUP_ANIMATION.get_or_init(|| Mutex::new(None));
-    match store.lock() {
-        Ok(guard) => guard.as_ref().is_some_and(|anim| {
-            anim.hwnd == hwnd && matches!(anim.kind, PopupAnimationKind::Switch { .. })
-        }),
-        Err(_) => false,
+    let Ok(guard) = store.lock() else {
+        return 0;
+    };
+    match guard.as_ref() {
+        Some(anim) if anim.hwnd == hwnd => match &anim.kind {
+            PopupAnimationKind::Switch { turbulence, .. } => {
+                let previous = (turbulence * POPUP_SWITCH_TURBULENCE_SATURATION).round() as u32;
+                (previous + 1).min(POPUP_SWITCH_TURBULENCE_SATURATION as u32)
+            }
+            _ => 0,
+        },
+        _ => 0,
     }
 }
 
@@ -290,5 +316,32 @@ pub(super) fn tick_animation(hwnd: HWND) {
             }
         }
         request_repaint(hwnd);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A single deliberate switch has to land perfectly clean. This is the whole
+    /// point of driving the dither from velocity rather than from progress: the
+    /// common case, clicking an arrow, must look like a direct switch.
+    #[test]
+    fn a_lone_switch_earns_no_turbulence() {
+        assert_eq!(turbulence_for_stack(0), 0.0);
+    }
+
+    #[test]
+    fn stacked_switches_ramp_turbulence_to_full() {
+        assert!(turbulence_for_stack(1) > 0.0);
+        assert!(turbulence_for_stack(1) < turbulence_for_stack(2));
+        assert_eq!(turbulence_for_stack(4), 1.0);
+    }
+
+    /// Saturating matters as much as ramping. A long spin must not bank
+    /// turbulence it would spend stippling the title long after the user stopped.
+    #[test]
+    fn turbulence_saturates_rather_than_running_away() {
+        assert_eq!(turbulence_for_stack(50), 1.0);
     }
 }
