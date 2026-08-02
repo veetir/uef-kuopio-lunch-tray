@@ -88,12 +88,12 @@ pub(super) fn update_text_selection(hwnd: HWND, x: i32, y: i32) {
         return;
     };
     let item_id = drag.item_id;
-    let next_index = match state.layout.as_ref() {
+    let (next_index, band) = match state.layout.as_ref() {
         Some(value) if value.hwnd == hwnd => {
             let Some((_, next_index)) = hit_test_row_for_item(value, item_id, x, y) else {
                 return;
             };
-            next_index
+            (next_index, item_row_band(value, item_id))
         }
         _ => return,
     };
@@ -102,8 +102,26 @@ pub(super) fn update_text_selection(hwnd: HWND, x: i32, y: i32) {
     };
     if drag.current != next_index {
         drag.current = next_index;
-        request_repaint(hwnd);
+        crate::perf::count_selection_change();
+        // A drag never leaves the item it started on, so only that item's rows
+        // can change appearance. Falling back to a full repaint when the band is
+        // unknown keeps a missing row from leaving a stale highlight behind.
+        match band {
+            Some((top, bottom)) => request_repaint_band(hwnd, top, bottom),
+            None => request_repaint(hwnd),
+        }
     }
+}
+
+/// The vertical extent of every row belonging to one selectable item.
+fn item_row_band(layout: &SelectableLayout, item_id: usize) -> Option<(i32, i32)> {
+    let mut top = i32::MAX;
+    let mut bottom = i32::MIN;
+    for row in layout.rows.iter().filter(|row| row.item_id == item_id) {
+        top = top.min(row.top);
+        bottom = bottom.max(row.bottom);
+    }
+    (top < bottom).then_some((top, bottom))
 }
 
 pub(super) fn finish_text_selection(hwnd: HWND, x: i32, y: i32) -> bool {
@@ -472,5 +490,67 @@ fn selected_range(a: usize, b: usize) -> (usize, usize) {
         (a, b)
     } else {
         (b, a)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(item_id: usize, top: i32, bottom: i32) -> SelectableRow {
+        SelectableRow {
+            item_id,
+            start: 0,
+            end: 0,
+            left: 0,
+            top,
+            bottom,
+            boundaries: Arc::new(Vec::new()),
+        }
+    }
+
+    fn layout(rows: Vec<SelectableRow>) -> SelectableLayout {
+        SelectableLayout {
+            rows,
+            ..Default::default()
+        }
+    }
+
+    /// A wrapped item spans several rows, and all of them can change highlight as
+    /// the drag moves, so the band has to cover the whole item rather than the
+    /// row under the cursor.
+    #[test]
+    fn the_band_spans_every_row_of_the_item() {
+        let layout = layout(vec![
+            row(0, 40, 60),
+            row(1, 60, 80),
+            row(1, 80, 100),
+            row(2, 100, 120),
+        ]);
+        assert_eq!(item_row_band(&layout, 1), Some((60, 100)));
+    }
+
+    /// Rows of other items must stay outside the band, or the popup would repaint
+    /// more than it needs to and the change would buy nothing.
+    #[test]
+    fn the_band_excludes_other_items() {
+        let layout = layout(vec![row(0, 40, 60), row(1, 60, 80)]);
+        assert_eq!(item_row_band(&layout, 0), Some((40, 60)));
+    }
+
+    /// An unknown item yields no band, which the caller turns into a full
+    /// repaint rather than skipping the paint.
+    #[test]
+    fn an_unknown_item_has_no_band() {
+        assert_eq!(item_row_band(&layout(vec![row(0, 40, 60)]), 7), None);
+        assert_eq!(item_row_band(&layout(Vec::new()), 0), None);
+    }
+
+    /// A degenerate row would produce an empty band, which must not be treated as
+    /// a valid region to clip a paint to.
+    #[test]
+    fn a_zero_height_row_has_no_band() {
+        let layout = layout(vec![row(0, 40, 40)]);
+        assert_eq!(item_row_band(&layout, 0), None);
     }
 }

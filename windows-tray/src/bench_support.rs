@@ -59,6 +59,7 @@ pub fn sample_app_state() -> AppState {
         provider: Provider::LunchApi,
         payload_date: FIXTURE_DATE.to_string(),
         stale_date: false,
+        api_stale: false,
     }
 }
 
@@ -105,7 +106,6 @@ fn sample_settings() -> Settings {
         show_guest_price: true,
         show_price_group_names: false,
         lunch_item_display_mode: LunchItemDisplayMode::Standard,
-        hide_expensive_student_meals: false,
         theme: "dark".to_string(),
         show_restaurant_index_numbers: false,
         widget_scale: "normal".to_string(),

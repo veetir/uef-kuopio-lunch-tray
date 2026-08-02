@@ -37,13 +37,17 @@ const CORE_RESTAURANTS: [Restaurant; 5] = [
         code: "canthia",
         name: "Canthia",
         provider: Provider::LunchApi,
-        url: None,
+        url: Some(
+            "https://www.compass-group.fi/ravintolat-ja-ruokalistat/foodco/kaupungit/kuopio/ita-suomen-yliopistocanthia/",
+        ),
     },
     Restaurant {
         code: "tietoteknia",
         name: "Tietoteknia",
         provider: Provider::LunchApi,
-        url: None,
+        url: Some(
+            "https://www.compass-group.fi/ravintolat-ja-ruokalistat/foodco/kaupungit/kuopio/tietoteknia/",
+        ),
     },
     Restaurant {
         code: "hyva-huomen-bioteknia",

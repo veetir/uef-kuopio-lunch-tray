@@ -16,6 +16,16 @@ pub fn cache_path(provider: Provider, code: &str, language: &str) -> PathBuf {
     cache_dir().join(cache_filename(provider, code, language))
 }
 
+/// Returns the marker file path used by local mock-cache testing.
+pub fn mock_cache_mode_path() -> PathBuf {
+    cache_dir().join("mock-cache-mode")
+}
+
+/// Returns true when local mock-cache testing should suppress network refreshes.
+pub fn mock_cache_mode_enabled() -> bool {
+    mock_cache_mode_path().is_file()
+}
+
 fn cache_filename(provider: Provider, code: &str, language: &str) -> String {
     let ext = match provider {
         Provider::LunchApi => "json",
@@ -56,12 +66,16 @@ fn sanitize_key_segment(value: &str) -> String {
 pub fn read_cache(provider: Provider, code: &str, language: &str) -> Option<String> {
     let path = cache_path(provider, code, language);
     match fs::read_to_string(&path) {
-        Ok(data) => Some(data),
+        Ok(data) => Some(strip_json_bom(data)),
         Err(_) => {
             let legacy_path = legacy_cache_path(provider, code, language);
-            fs::read_to_string(legacy_path).ok()
+            fs::read_to_string(legacy_path).ok().map(strip_json_bom)
         }
     }
+}
+
+fn strip_json_bom(data: String) -> String {
+    data.strip_prefix('\u{feff}').unwrap_or(&data).to_string()
 }
 
 /// Returns the cache modification time in epoch milliseconds, if available.
@@ -87,4 +101,18 @@ pub fn write_cache(
     let path = cache_path(provider, code, language);
     fs::write(&path, payload).with_context(|| format!("write cache file {}", path.display()))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::strip_json_bom;
+
+    #[test]
+    fn strips_utf8_bom_from_cached_json() {
+        assert_eq!(
+            strip_json_bom("\u{feff}{\"ok\":true}".to_string()),
+            "{\"ok\":true}"
+        );
+        assert_eq!(strip_json_bom("{\"ok\":true}".to_string()), "{\"ok\":true}");
+    }
 }

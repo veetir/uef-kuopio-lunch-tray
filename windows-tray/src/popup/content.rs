@@ -58,7 +58,6 @@ pub(super) fn build_lines(state: &AppState) -> Vec<Line> {
                         highlight_gluten_free: state.settings.highlight_gluten_free,
                         highlight_veg: state.settings.highlight_veg,
                         highlight_lactose_free: state.settings.highlight_lactose_free,
-                        hide_expensive_student_meals: state.settings.hide_expensive_student_meals,
                     },
                 );
                 if rendered_groups == 0 && state.status != FetchStatus::Loading {
@@ -131,7 +130,6 @@ struct MenuRenderOptions<'a> {
     highlight_gluten_free: bool,
     highlight_veg: bool,
     highlight_lactose_free: bool,
-    hide_expensive_student_meals: bool,
 }
 
 fn append_menus(lines: &mut Vec<Line>, menu: &TodayMenu, options: MenuRenderOptions) -> usize {
@@ -149,14 +147,6 @@ fn append_menus(lines: &mut Vec<Line>, menu: &TodayMenu, options: MenuRenderOpti
 
     for render_group in groups {
         let group = render_group.group;
-        if options.hide_expensive_student_meals {
-            if let Some(price) = student_price_for_group(group) {
-                if price > 4.0 {
-                    continue;
-                }
-            }
-        }
-
         let renderable_components = renderable_group_components(group);
         if renderable_components.is_empty()
             && group.presentation != MenuGroupPresentation::GeneralOffer
@@ -1053,7 +1043,6 @@ mod tests {
             highlight_gluten_free: false,
             highlight_veg: false,
             highlight_lactose_free: false,
-            hide_expensive_student_meals: false,
         }
     }
 

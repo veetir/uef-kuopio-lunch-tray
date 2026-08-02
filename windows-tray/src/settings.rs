@@ -24,7 +24,6 @@ pub struct Settings {
     pub show_guest_price: bool,
     pub show_price_group_names: bool,
     pub lunch_item_display_mode: LunchItemDisplayMode,
-    pub hide_expensive_student_meals: bool,
     pub theme: String,
     pub show_restaurant_index_numbers: bool,
     pub widget_scale: String,
@@ -50,7 +49,6 @@ impl Default for Settings {
             show_guest_price: true,
             show_price_group_names: false,
             lunch_item_display_mode: LunchItemDisplayMode::Classic,
-            hide_expensive_student_meals: false,
             theme: "dark".to_string(),
             show_restaurant_index_numbers: false,
             widget_scale: "normal".to_string(),
@@ -106,7 +104,6 @@ struct RawSettings {
     show_guest_price: Option<bool>,
     show_price_group_names: Option<bool>,
     lunch_item_display_mode: Option<String>,
-    hide_expensive_student_meals: Option<bool>,
     theme: Option<String>,
     show_restaurant_index_numbers: Option<bool>,
     widget_scale: Option<String>,
@@ -178,9 +175,6 @@ fn decode_settings(data: &str) -> anyhow::Result<Settings> {
             .as_deref()
             .map(normalize_lunch_item_display_mode)
             .unwrap_or(LunchItemDisplayMode::Classic),
-        hide_expensive_student_meals: raw
-            .hide_expensive_student_meals
-            .unwrap_or(defaults.hide_expensive_student_meals),
         theme,
         show_restaurant_index_numbers: raw
             .show_restaurant_index_numbers
@@ -215,10 +209,16 @@ pub fn normalize_theme(value: &str) -> String {
     match value.to_ascii_lowercase().as_str() {
         "light" => "light".to_string(),
         "dark" => "dark".to_string(),
+        "grandpa" | "windows 95" | "win95" => "grandpa".to_string(),
+        "grandma" => "grandma".to_string(),
         "blue" => "blue".to_string(),
         "green" => "green".to_string(),
         "amber" => "amber".to_string(),
-        "barbie" => "barbie".to_string(),
+        // Barbie was retired in favour of Grandma, which covers the same hues
+        // with a referent the other themes share. Kept as an alias so existing
+        // `settings.json` files do not fall through to the unknown-theme
+        // default and silently land on Dark.
+        "barbie" => "grandma".to_string(),
         "teletext1" => "teletext1".to_string(),
         "teletext2" => "teletext2".to_string(),
         _ => {
@@ -328,6 +328,27 @@ mod tests {
 
         let settings = decode_settings(r#"{"widget_scale":"150"}"#).unwrap();
         assert_eq!(settings.widget_scale, "large");
+    }
+
+    #[test]
+    fn grandma_theme_decodes() {
+        let settings = decode_settings(r#"{"theme":"Grandma"}"#).unwrap();
+        assert_eq!(settings.theme, "grandma");
+    }
+
+    #[test]
+    fn retired_barbie_theme_migrates_to_grandma() {
+        let settings = decode_settings(r#"{"theme":"barbie"}"#).unwrap();
+        assert_eq!(settings.theme, "grandma");
+    }
+
+    #[test]
+    fn grandpa_theme_decodes_supported_aliases() {
+        let settings = decode_settings(r#"{"theme":"grandpa"}"#).unwrap();
+        assert_eq!(settings.theme, "grandpa");
+
+        let settings = decode_settings(r#"{"theme":"Windows 95"}"#).unwrap();
+        assert_eq!(settings.theme, "grandpa");
     }
 
     #[test]

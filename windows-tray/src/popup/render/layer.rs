@@ -3,12 +3,14 @@
 use super::text::{
     add_selectable_row, add_selectable_segmented_row, draw_header_button, draw_main_segments,
     draw_selection_bg_for_row, draw_selection_bg_for_segments, draw_text_line, draw_text_segments,
-    favorite_match_ranges, fit_text_to_width, segments_for_row, text_segments_width, LinePlacement,
-    RowBounds, RowCaptureContext, SegmentColors, SegmentFonts, SegmentStyle, SelectionOverlay,
+    favorite_match_ranges, fit_text_to_width, segments_for_row, text_segments_width, HeaderGlyph,
+    LinePlacement, RowBounds, RowCaptureContext, SegmentColors, SegmentFonts, SegmentStyle,
+    SelectionOverlay,
 };
 use super::*;
 
 pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
+    let _paint_guard = crate::perf::begin_popup_paint();
     unsafe {
         let mut ps = PAINTSTRUCT::default();
         let paint_hdc = BeginPaint(hwnd, &mut ps);
@@ -20,30 +22,57 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
         let _ = GetClientRect(hwnd, &mut rect);
         let width = (rect.right - rect.left).max(1);
         let height = (rect.bottom - rect.top).max(1);
-        let buffer_dc = CreateCompatibleDC(paint_hdc);
-        if buffer_dc.0 == 0 {
+        crate::perf::record_paint_region(
+            width,
+            height,
+            ps.rcPaint.left,
+            ps.rcPaint.top,
+            ps.rcPaint.right,
+            ps.rcPaint.bottom,
+        );
+        let Some((buffer_dc, reused)) = back_buffer_dc(paint_hdc, width, height) else {
             EndPaint(hwnd, &ps);
             return;
-        }
-        let buffer_bitmap = CreateCompatibleBitmap(paint_hdc, width, height);
-        if buffer_bitmap.0 == 0 {
-            DeleteDC(buffer_dc);
-            EndPaint(hwnd, &ps);
-            return;
-        }
-        let old_bitmap = SelectObject(buffer_dc, buffer_bitmap);
+        };
         let hdc = buffer_dc;
+
+        // Honour the update region only when the buffer still holds the previous
+        // frame. A buffer just created for a new size holds nothing, so the
+        // pixels outside the region would be whatever the allocation happened to
+        // contain.
+        let dirty = if reused {
+            clamp_rect(&ps.rcPaint, width, height)
+        } else {
+            RECT {
+                left: 0,
+                top: 0,
+                right: width,
+                bottom: height,
+            }
+        };
+        if dirty.right <= dirty.left || dirty.bottom <= dirty.top {
+            EndPaint(hwnd, &ps);
+            return;
+        }
+        // The buffer DC outlives the paint, so its clip has to be scoped rather
+        // than left behind for the next one.
+        SaveDC(hdc);
+        IntersectClipRect(hdc, dirty.left, dirty.top, dirty.right, dirty.bottom);
         let palette = theme_palette(&state.settings.theme);
         let recipe_palette = recipe_detail_palette(&state.settings.theme, &palette);
-        let brush = CreateSolidBrush(palette.bg_color);
-        FillRect(hdc, &rect, brush);
-        DeleteObject(brush);
+        fill_solid_rect(hdc, &rect, palette.bg_color);
         SetBkMode(hdc, TRANSPARENT);
 
         let dpi_y = GetDeviceCaps(hdc, LOGPIXELSY);
         let scale = popup_scale_for_dpi(&state.settings, dpi_y);
         let (normal_font, bold_font, bold_italic_font, small_font, small_bold_font) =
             create_fonts(hdc, &state.settings.theme, scale.factor);
+        let bullet_style = bullet_style_for_theme(&state.settings.theme);
+        let bullet_base_color = bullet_color(bullet_style, &palette);
+        let border_edge = ChromeEdge {
+            style: border_style_for_theme(&state.settings.theme),
+            color: palette.border_color,
+        };
         let highlight_font = bold_font;
         let _old_font = SelectObject(hdc, normal_font);
 
@@ -51,6 +80,9 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
         let line_height = metrics.tmHeight as i32 + scale.line_gap;
         let content_width = (width - scale.padding_x * 2).max(40);
         let animation = current_animation_frame(hwnd);
+        if animation.is_some() {
+            crate::perf::count_animated_paint();
+        }
         let favorites = current_favorites_snapshot();
 
         let header_rect = RECT {
@@ -59,52 +91,50 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
             right: rect.right,
             bottom: rect.top + scale.header_height,
         };
-        let header_brush = CreateSolidBrush(palette.header_bg_color);
-        FillRect(hdc, &header_rect, header_brush);
-        DeleteObject(header_brush);
+        fill_solid_rect(hdc, &header_rect, palette.header_bg_color);
 
         let layout = header_layout(width, &scale);
+        let rail_top = header_rail_top(width, &state.settings, &scale);
         let pressed_button = pressed_header_button(hwnd);
         let hovered_button = hovered_header_button(hwnd);
         draw_header_button(
             hdc,
             &layout.prev,
-            "‹",
+            HeaderGlyph::Prev,
             palette.button_bg_color,
-            palette.body_text_color,
-            normal_font,
+            palette.button_text_color,
             pressed_button == Some(HeaderButtonAction::Prev),
             hovered_button == Some(HeaderButtonAction::Prev),
+            border_edge,
         );
         draw_header_button(
             hdc,
             &layout.next,
-            "›",
+            HeaderGlyph::Next,
             palette.button_bg_color,
-            palette.body_text_color,
-            normal_font,
+            palette.button_text_color,
             pressed_button == Some(HeaderButtonAction::Next),
             hovered_button == Some(HeaderButtonAction::Next),
+            border_edge,
         );
         draw_header_button(
             hdc,
             &layout.close,
-            "X",
+            HeaderGlyph::Close,
             palette.button_bg_color,
-            palette.body_text_color,
-            normal_font,
+            palette.button_text_color,
             false,
             hovered_button == Some(HeaderButtonAction::Close),
+            border_edge,
         );
         draw_header_marker_rail(
             hdc,
             width,
             &state.settings,
             &scale,
-            palette.header_bg_color,
             palette.header_title_color,
-            palette.divider_color,
-            small_font,
+            marker_inactive_color(&palette),
+            MarkerTrail::from_frame(animation.as_ref()),
         );
 
         let divider_rect = RECT {
@@ -113,9 +143,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
             right: rect.right,
             bottom: header_rect.bottom,
         };
-        let divider_brush = CreateSolidBrush(palette.divider_color);
-        FillRect(hdc, &divider_rect, divider_brush);
-        DeleteObject(divider_brush);
+        fill_solid_rect(hdc, &divider_rect, palette.divider_color);
 
         if let Some(frame) = animation {
             clear_selection_layout(hwnd);
@@ -138,13 +166,16 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                         lerp_color(palette.bg_color, palette.suffix_highlight_color, progress);
                     let layer_favorites =
                         lerp_color(palette.bg_color, palette.favorite_highlight_color, progress);
+                    let layer_bullet = lerp_color(palette.bg_color, bullet_base_color, progress);
                     draw_content_layer(
                         hdc,
                         &title,
                         &lines,
                         DrawLayerParams {
                             scale,
+                            draw_title: true,
                             width,
+                            height,
                             content_width,
                             bg_color: palette.bg_color,
                             body_text_color: layer_body_text,
@@ -162,6 +193,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                                 .ingredient_highlight_color,
                             recipe_selection_text_color: recipe_palette.selection_text_color,
                             layout: &layout,
+                            rail_top,
                             metrics: &metrics,
                             line_height,
                             normal_font,
@@ -170,6 +202,9 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                             highlight_font,
                             small_font,
                             small_bold_font,
+                            border_edge,
+                            bullet_style,
+                            bullet_color: layer_bullet,
                             favorites: &favorites,
                             selection: None,
                             capture: None,
@@ -201,13 +236,17 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                         palette.favorite_highlight_color,
                         1.0 - progress,
                     );
+                    let layer_bullet =
+                        lerp_color(palette.bg_color, bullet_base_color, 1.0 - progress);
                     draw_content_layer(
                         hdc,
                         &title,
                         &lines,
                         DrawLayerParams {
                             scale,
+                            draw_title: true,
                             width,
+                            height,
                             content_width,
                             bg_color: palette.bg_color,
                             body_text_color: layer_body_text,
@@ -225,6 +264,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                                 .ingredient_highlight_color,
                             recipe_selection_text_color: recipe_palette.selection_text_color,
                             layout: &layout,
+                            rail_top,
                             metrics: &metrics,
                             line_height,
                             normal_font,
@@ -233,6 +273,9 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                             highlight_font,
                             small_font,
                             small_bold_font,
+                            border_edge,
+                            bullet_style,
+                            bullet_color: layer_bullet,
                             favorites: &favorites,
                             selection: None,
                             capture: None,
@@ -248,6 +291,8 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                     direction,
                     progress,
                     interrupted,
+                    // The marker rail reads the turbulence straight off the frame.
+                    turbulence: _,
                 } => {
                     let dir = if direction >= 0 { 1 } else { -1 };
                     let old_fade_progress = if interrupted {
@@ -289,6 +334,8 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                         palette.favorite_highlight_color,
                         1.0 - old_fade_progress,
                     );
+                    let old_bullet =
+                        lerp_color(palette.bg_color, bullet_base_color, 1.0 - old_fade_progress);
                     let new_body_text =
                         lerp_color(palette.bg_color, palette.body_text_color, progress);
                     let new_heading = lerp_color(palette.bg_color, palette.heading_color, progress);
@@ -299,13 +346,16 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                         lerp_color(palette.bg_color, palette.suffix_highlight_color, progress);
                     let new_favorites =
                         lerp_color(palette.bg_color, palette.favorite_highlight_color, progress);
+                    let new_bullet = lerp_color(palette.bg_color, bullet_base_color, progress);
                     draw_content_layer(
                         hdc,
                         &old_title,
                         &old_lines,
                         DrawLayerParams {
                             scale,
+                            draw_title: false,
                             width,
+                            height,
                             content_width,
                             bg_color: palette.bg_color,
                             body_text_color: old_body_text,
@@ -323,6 +373,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                                 .ingredient_highlight_color,
                             recipe_selection_text_color: recipe_palette.selection_text_color,
                             layout: &layout,
+                            rail_top,
                             metrics: &metrics,
                             line_height,
                             normal_font,
@@ -331,6 +382,9 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                             highlight_font,
                             small_font,
                             small_bold_font,
+                            border_edge,
+                            bullet_style,
+                            bullet_color: old_bullet,
                             favorites: &favorites,
                             selection: None,
                             capture: None,
@@ -343,7 +397,9 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                         &new_lines,
                         DrawLayerParams {
                             scale,
+                            draw_title: false,
                             width,
+                            height,
                             content_width,
                             bg_color: palette.bg_color,
                             body_text_color: new_body_text,
@@ -361,6 +417,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                                 .ingredient_highlight_color,
                             recipe_selection_text_color: recipe_palette.selection_text_color,
                             layout: &layout,
+                            rail_top,
                             metrics: &metrics,
                             line_height,
                             normal_font,
@@ -369,10 +426,26 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                             highlight_font,
                             small_font,
                             small_bold_font,
+                            border_edge,
+                            bullet_style,
+                            bullet_color: new_bullet,
                             favorites: &favorites,
                             selection: None,
                             capture: None,
                             y_offset: new_offset,
+                        },
+                    );
+                    draw_switch_title(
+                        hdc,
+                        &new_title,
+                        &TitleContext {
+                            bold_font,
+                            width,
+                            layout: &layout,
+                            metrics: &metrics,
+                            rail_top,
+                            scale: &scale,
+                            title_color: palette.header_title_color,
                         },
                     );
                 }
@@ -393,7 +466,9 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                 &lines,
                 DrawLayerParams {
                     scale,
+                    draw_title: true,
                     width,
+                    height,
                     content_width,
                     bg_color: palette.bg_color,
                     body_text_color: palette.body_text_color,
@@ -410,6 +485,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                     recipe_ingredient_highlight_color: recipe_palette.ingredient_highlight_color,
                     recipe_selection_text_color: recipe_palette.selection_text_color,
                     layout: &layout,
+                    rail_top,
                     metrics: &metrics,
                     line_height,
                     normal_font,
@@ -418,6 +494,9 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                     highlight_font,
                     small_font,
                     small_bold_font,
+                    border_edge,
+                    bullet_style,
+                    bullet_color: bullet_base_color,
                     favorites: &favorites,
                     selection: selection.as_ref(),
                     capture: Some(&mut capture),
@@ -427,24 +506,131 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
             store_selection_layout(capture.layout);
         }
 
+        // Frame last, over the header fill and content, so the edge is unbroken.
+        let frame_rect = RECT {
+            left: rect.left,
+            top: rect.top,
+            right: rect.right,
+            bottom: rect.bottom,
+        };
+        draw_edge(hdc, &frame_rect, border_edge, palette.bg_color);
+
         SelectObject(hdc, _old_font);
-        DeleteObject(normal_font);
-        DeleteObject(bold_font);
-        DeleteObject(bold_italic_font);
-        DeleteObject(small_font);
-        DeleteObject(small_bold_font);
-        let _ = BitBlt(paint_hdc, 0, 0, width, height, hdc, 0, 0, SRCCOPY);
-        SelectObject(hdc, old_bitmap);
-        DeleteObject(buffer_bitmap);
-        DeleteDC(hdc);
+        // The fonts are shared and outlive this paint; see `create_fonts`.
+        RestoreDC(hdc, -1);
+        let _ = BitBlt(
+            paint_hdc,
+            dirty.left,
+            dirty.top,
+            dirty.right - dirty.left,
+            dirty.bottom - dirty.top,
+            hdc,
+            dirty.left,
+            dirty.top,
+            SRCCOPY,
+        );
         EndPaint(hwnd, &ps);
     }
+}
+
+/// The offscreen surface every paint draws into, kept between paints.
+///
+/// A popup-sized compatible bitmap is about 1.6 MB, and it was created and
+/// destroyed on every paint: roughly 150 MB/s of GDI pool churn while dragging.
+/// Unlike a text extent, which GDI serves from its own cache, allocating a
+/// device-dependent bitmap is real work every time.
+///
+/// The surface is rebuilt only when the popup changes size, and released when the
+/// popup window is destroyed. Carrying GDI state across paints is safe here
+/// because every paint fills the whole surface before drawing and sets the text
+/// mode it needs, and because the fonts and brushes that stay selected in the DC
+/// are themselves permanent.
+struct BackBuffer {
+    dc: HDC,
+    bitmap: HBITMAP,
+    previous: HGDIOBJ,
+    width: i32,
+    height: i32,
+}
+
+thread_local! {
+    static BACK_BUFFER: std::cell::RefCell<Option<BackBuffer>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// The surface to draw into, and whether it still holds the previous frame.
+fn back_buffer_dc(paint_hdc: HDC, width: i32, height: i32) -> Option<(HDC, bool)> {
+    BACK_BUFFER.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if let Some(buffer) = slot.as_ref() {
+            if buffer.width == width && buffer.height == height {
+                return Some((buffer.dc, true));
+            }
+        }
+        if let Some(stale) = slot.take() {
+            release_back_buffer_parts(stale);
+        }
+
+        unsafe {
+            let dc = CreateCompatibleDC(paint_hdc);
+            if dc.0 == 0 {
+                return None;
+            }
+            let bitmap = CreateCompatibleBitmap(paint_hdc, width, height);
+            if bitmap.0 == 0 {
+                DeleteDC(dc);
+                return None;
+            }
+            let previous = SelectObject(dc, bitmap);
+            *slot = Some(BackBuffer {
+                dc,
+                bitmap,
+                previous,
+                width,
+                height,
+            });
+            Some((dc, false))
+        }
+    })
+}
+
+/// Keeps an update rectangle inside the client area.
+fn clamp_rect(rect: &RECT, width: i32, height: i32) -> RECT {
+    RECT {
+        left: rect.left.clamp(0, width),
+        top: rect.top.clamp(0, height),
+        right: rect.right.clamp(0, width),
+        bottom: rect.bottom.clamp(0, height),
+    }
+}
+
+/// Frees the surface. The bitmap is deselected first: a bitmap selected into a DC
+/// cannot be deleted, and skipping this leaks it silently.
+fn release_back_buffer_parts(buffer: BackBuffer) {
+    unsafe {
+        SelectObject(buffer.dc, buffer.previous);
+        DeleteObject(buffer.bitmap);
+        DeleteDC(buffer.dc);
+    }
+}
+
+/// Releases the popup's offscreen surface, on window destruction.
+pub(in crate::popup) fn release_back_buffer() {
+    BACK_BUFFER.with(|slot| {
+        if let Some(buffer) = slot.borrow_mut().take() {
+            release_back_buffer_parts(buffer);
+        }
+    });
 }
 
 struct DrawLayerParams<'a> {
     // Group render-only state so the content-layer draw path stays readable.
     scale: PopupScale,
+    /// Cleared while the header title runs its own dissolve, so the switch
+    /// animation's two body layers do not each stamp a solid title underneath it.
+    draw_title: bool,
     width: i32,
+    height: i32,
     content_width: i32,
     bg_color: COLORREF,
     body_text_color: COLORREF,
@@ -461,6 +647,7 @@ struct DrawLayerParams<'a> {
     recipe_ingredient_highlight_color: COLORREF,
     recipe_selection_text_color: COLORREF,
     layout: &'a HeaderLayout,
+    rail_top: Option<i32>,
     metrics: &'a TEXTMETRICW,
     line_height: i32,
     normal_font: HFONT,
@@ -469,30 +656,105 @@ struct DrawLayerParams<'a> {
     highlight_font: HFONT,
     small_font: HFONT,
     small_bold_font: HFONT,
+    bullet_style: BulletStyle,
+    bullet_color: COLORREF,
+    border_edge: ChromeEdge,
     favorites: &'a FavoritesSnapshot,
     selection: Option<&'a SelectionRange>,
     capture: Option<&'a mut DrawCapture>,
     y_offset: i32,
 }
 
-fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerParams<'_>) {
+/// Everything needed to place and ink the header title.
+///
+/// Bundled because the title is now drawn from two places -- the ordinary
+/// content layer and the dissolve -- and they must agree on placement exactly or
+/// the name jumps a pixel as the animation hands over to the live frame.
+struct TitleContext<'a> {
+    bold_font: HFONT,
+    width: i32,
+    layout: &'a HeaderLayout,
+    metrics: &'a TEXTMETRICW,
+    rail_top: Option<i32>,
+    scale: &'a PopupScale,
+    title_color: COLORREF,
+}
+
+/// Where the header title lands, measured in the caller's DC.
+struct TitlePlacement {
+    text: String,
+    x: i32,
+    y: i32,
+}
+
+fn title_placement(hdc: HDC, title: &str, ctx: &TitleContext<'_>) -> TitlePlacement {
     unsafe {
-        SelectObject(hdc, params.bold_font);
-        SetTextColor(hdc, params.header_title_color);
+        SelectObject(hdc, ctx.bold_font);
+    }
+    let text = normalize_text(title);
+    let title_width = text_width(hdc, &text);
+    let title_button_margin = scale_px(HEADER_TITLE_BUTTON_MARGIN, ctx.scale.factor);
+    let min_title_x = ctx.layout.next.right + title_button_margin;
+    let max_title_x = (ctx.layout.close.left - title_width - title_button_margin).max(min_title_x);
+    let x = ((ctx.width - title_width) / 2).clamp(min_title_x, max_title_x);
+    let button_center_y = (ctx.layout.prev.top + ctx.layout.prev.bottom) / 2;
+    let y = header_title_y(
+        button_center_y,
+        ctx.metrics.tmHeight,
+        ctx.rail_top,
+        ctx.scale,
+    );
+    TitlePlacement { text, x, y }
+}
+
+/// Draws the header title for a switch: the new name, immediately and crisply.
+///
+/// The title does not animate. It is the one element whose whole job is to say
+/// unambiguously which restaurant this is, and every transition that blends two
+/// names — cross-fade, dissolve, stipple — spends its time showing something that
+/// is neither of them. The motion lives in the body layers and the marker rail
+/// instead, which can carry it without anything becoming harder to read.
+///
+/// Drawn here rather than inside the two body layers so that it does not inherit
+/// their vertical slide. A title that holds still while the menu moves underneath
+/// reads more clearly than one that shifts along with the content.
+fn draw_switch_title(hdc: HDC, new_title: &str, ctx: &TitleContext<'_>) {
+    let placement = title_placement(hdc, new_title, ctx);
+    unsafe {
+        SelectObject(hdc, ctx.bold_font);
+        SetTextColor(hdc, ctx.title_color);
+    }
+    draw_text_line(hdc, &placement.text, placement.x, placement.y);
+}
+
+fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerParams<'_>) {
+    if params.draw_title {
+        let placement = title_placement(
+            hdc,
+            title,
+            &TitleContext {
+                bold_font: params.bold_font,
+                width: params.width,
+                layout: params.layout,
+                metrics: params.metrics,
+                rail_top: params.rail_top,
+                scale: &params.scale,
+                title_color: params.header_title_color,
+            },
+        );
+        unsafe {
+            SelectObject(hdc, params.bold_font);
+            SetTextColor(hdc, params.header_title_color);
+        }
+        draw_text_line(
+            hdc,
+            &placement.text,
+            placement.x,
+            placement.y + params.y_offset,
+        );
     }
 
-    let full_title = normalize_text(title);
-    let title_width = text_width(hdc, &full_title);
-    let title_button_margin = scale_px(HEADER_TITLE_BUTTON_MARGIN, params.scale.factor);
-    let min_title_x = params.layout.next.right + title_button_margin;
-    let max_title_x =
-        (params.layout.close.left - title_width - title_button_margin).max(min_title_x);
-    let title_x = ((params.width - title_width) / 2).clamp(min_title_x, max_title_x);
-    let title_y =
-        ((params.scale.header_height - params.metrics.tmHeight) / 2 - 1) + params.y_offset;
-    draw_text_line(hdc, &full_title, title_x, title_y);
-
-    let bullet_width = text_width_with_font(hdc, params.normal_font, BULLET_PREFIX);
+    let bullet_width = bullet_column_width(hdc, params.normal_font, params.bullet_style);
     let main_wrap_width = (params.content_width - bullet_width).max(24);
     let stale_mode = lines
         .iter()
@@ -594,6 +856,7 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                         y += params.line_height;
                     }
                 }
+                y += group_caption_bottom_gap(lines, line_index);
             }
             Line::Text(text) => {
                 unsafe {
@@ -660,12 +923,15 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                     if dim_line {
                         stale_dim_color
                     } else {
-                        params.recipe_border_color
-                    },
-                    if dim_line {
-                        stale_dim_color
-                    } else {
                         params.body_text_color
+                    },
+                    ChromeEdge {
+                        style: params.border_edge.style,
+                        color: if dim_line {
+                            stale_dim_color
+                        } else {
+                            params.recipe_border_color
+                        },
                     },
                 );
             }
@@ -702,6 +968,11 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                     stale_dim_color
                 } else {
                     params.recipe_border_color
+                };
+                let line_bullet_color = if dim_line {
+                    stale_dim_color
+                } else {
+                    params.bullet_color
                 };
                 unsafe {
                     SelectObject(hdc, params.normal_font);
@@ -759,9 +1030,13 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                         }
                         suffix_width += text_width(hdc, segment);
                     }
-                    let max_main =
-                        (params.content_width - bullet_width - prefix_width - suffix_width - 4)
-                            .max(24);
+                    let suffix_gap = suffix_gap_width(hdc, params.normal_font);
+                    let max_main = (params.content_width
+                        - bullet_width
+                        - prefix_width
+                        - suffix_width
+                        - suffix_gap)
+                        .max(24);
                     unsafe {
                         SelectObject(hdc, params.normal_font);
                         SetTextColor(hdc, line_body_color);
@@ -787,7 +1062,18 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                         params.highlight_font,
                     );
                     if *show_bullet {
-                        draw_text_line(hdc, BULLET_PREFIX, params.scale.padding_x, y);
+                        draw_bullet(
+                            hdc,
+                            params.bullet_style,
+                            params.scale.padding_x,
+                            y,
+                            params.metrics.tmHeight as i32,
+                            line_bullet_color,
+                        );
+                        unsafe {
+                            SelectObject(hdc, params.normal_font);
+                            SetTextColor(hdc, line_body_color);
+                        }
                     }
                     if let Some(prefix) = price_prefix.as_deref() {
                         draw_text_line(hdc, prefix, line_x, y);
@@ -853,8 +1139,9 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                         );
                     }
                     if !suffix_segments.is_empty() {
-                        let tight_suffix_x = main_x + main_width + 4;
-                        let aligned_suffix_x = aligned_main_width.map(|width| main_x + width + 4);
+                        let tight_suffix_x = main_x + main_width + suffix_gap;
+                        let aligned_suffix_x =
+                            aligned_main_width.map(|width| main_x + width + suffix_gap);
                         let right_edge = params.scale.padding_x + params.content_width;
                         let suffix_x = aligned_suffix_x
                             .filter(|x| *x + suffix_width <= right_edge)
@@ -898,7 +1185,18 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                         let main_x = line_x + prefix_width;
                         if idx == 0 {
                             if *show_bullet {
-                                draw_text_line(hdc, BULLET_PREFIX, params.scale.padding_x, y);
+                                draw_bullet(
+                                    hdc,
+                                    params.bullet_style,
+                                    params.scale.padding_x,
+                                    y,
+                                    params.metrics.tmHeight as i32,
+                                    line_bullet_color,
+                                );
+                                unsafe {
+                                    SelectObject(hdc, params.normal_font);
+                                    SetTextColor(hdc, line_body_color);
+                                }
                             }
                             if let Some(prefix) = price_prefix.as_deref() {
                                 draw_text_line(hdc, prefix, line_x, y);
@@ -1037,11 +1335,6 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                     if dim_line {
                         stale_dim_color
                     } else {
-                        params.recipe_border_color
-                    },
-                    if dim_line {
-                        stale_dim_color
-                    } else {
                         params.recipe_label_color
                     },
                     if dim_line {
@@ -1055,7 +1348,16 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                         params.recipe_ingredient_highlight_color
                     },
                     params.recipe_selection_text_color,
+                    ChromeEdge {
+                        style: params.border_edge.style,
+                        color: if dim_line {
+                            stale_dim_color
+                        } else {
+                            params.recipe_border_color
+                        },
+                    },
                     bullet_width,
+                    params.height - params.scale.padding_y,
                     params.selection,
                     params.favorites,
                     capture.as_deref_mut(),
@@ -1255,15 +1557,73 @@ fn draw_date_time_line(
     }
 }
 
+/// Draws the restaurant position rail under the header title.
+///
+/// The markers are drawn rather than typed. As glyphs their sizes came from
+/// whichever font family the theme picked, so the rail looked different in
+/// Segoe UI, Tahoma and Consolas, and the active/inactive size ratio was
+/// whatever those two codepoints happened to be — while the spacing and hit
+/// rects were meanwhile computed from `HEADER_MARKER_DOT_SIZE`. Drawing squares
+/// makes that constant true and keeps the rail identical everywhere.
+///
+/// Position is carried by three weak signals rather than one strong one: fill,
+/// size, and colour. That lets the inactive markers clear a readability floor
+/// without ten of them competing with the one that matters, since an outline
+/// carries far less ink than a solid mark at the same contrast.
+/// A comet trail behind the active marker, showing where a fast scroll came from.
+///
+/// Carries the same turbulence the header title spends on dither, so the rail and
+/// the title read as one motion rather than two effects that happen to coincide.
+#[derive(Debug, Clone, Copy)]
+struct MarkerTrail {
+    direction: i32,
+    strength: f32,
+}
+
+impl MarkerTrail {
+    /// `None` once the switch has resolved, which is also the whole of the
+    /// deliberate single-switch case: the rail then draws exactly as it always
+    /// has, one solid marker and no ghosts.
+    fn from_frame(frame: Option<&PopupAnimationFrame>) -> Option<Self> {
+        match frame {
+            Some(PopupAnimationFrame::Switch {
+                direction,
+                progress,
+                turbulence,
+                ..
+            }) => {
+                let strength = turbulence.clamp(0.0, 1.0) * (1.0 - progress.clamp(0.0, 1.0));
+                (strength > 0.0).then_some(MarkerTrail {
+                    direction: *direction,
+                    strength,
+                })
+            }
+            _ => None,
+        }
+    }
+}
+
+fn marker_rect_at(hit_rect: &RECT, size: i32) -> RECT {
+    let center_x = (hit_rect.left + hit_rect.right) / 2;
+    let center_y = (hit_rect.top + hit_rect.bottom) / 2;
+    let left = center_x - size / 2;
+    let top = center_y - size / 2;
+    RECT {
+        left,
+        top,
+        right: left + size,
+        bottom: top + size,
+    }
+}
+
 fn draw_header_marker_rail(
     hdc: HDC,
     width: i32,
     settings: &Settings,
     scale: &PopupScale,
-    header_bg_color: COLORREF,
     active_color: COLORREF,
     inactive_color: COLORREF,
-    font: HFONT,
+    trail: Option<MarkerTrail>,
 ) {
     let restaurants = available_restaurants(settings.enable_antell_restaurants);
     if restaurants.len() <= 1 || settings.show_restaurant_index_numbers {
@@ -1274,35 +1634,74 @@ fn draw_header_marker_rail(
         .position(|restaurant| restaurant.code == settings.restaurant_code)
         .unwrap_or(0);
     let hit_rects = header_marker_rects(width, settings, scale);
-    let active_marker = "●";
-    let inactive_marker = "•";
-    let marker_height = text_metrics(hdc, font).tmHeight as i32;
+    let (inactive_size, active_size) = header_marker_sizes(scale);
+
     for (idx, hit_rect) in hit_rects.iter().enumerate() {
-        let center_x = (hit_rect.left + hit_rect.right) / 2;
-        let center_y = (hit_rect.top + hit_rect.bottom) / 2;
         let active = idx == active_index;
-        let marker = if active {
-            active_marker
+        let size = if active { active_size } else { inactive_size };
+        let marker_rect = marker_rect_at(hit_rect, size);
+        if active {
+            fill_solid_rect(hdc, &marker_rect, active_color);
         } else {
-            inactive_marker
-        };
-        let marker_width = text_width_with_font(hdc, font, marker);
-        let color = if active {
-            active_color
-        } else {
-            lerp_color(header_bg_color, inactive_color, 0.45)
-        };
-        unsafe {
-            SelectObject(hdc, font);
-            SetTextColor(hdc, color);
+            draw_outline_rect(hdc, &marker_rect, inactive_color);
         }
-        draw_text_line(
-            hdc,
-            marker,
-            center_x - marker_width / 2,
-            center_y - marker_height / 2,
-        );
     }
+
+    if let Some(trail) = trail {
+        for (offset, coverage) in trail_steps(trail, hit_rects.len()) {
+            let Some(index) = trail_index(active_index, offset, trail.direction, hit_rects.len())
+            else {
+                break;
+            };
+            fill_dithered_rect(
+                hdc,
+                &marker_rect_at(&hit_rects[index], active_size),
+                active_color,
+                coverage,
+            );
+        }
+    }
+}
+
+/// The trail markers to draw, nearest first, as (steps back, dither coverage).
+///
+/// Each successive marker needs a whole extra unit of turbulence before it lights
+/// at all, so the trail grows one marker at a time as the spin accelerates rather
+/// than every ghost brightening together. Stops at the first dark marker, since
+/// everything past it is darker still.
+///
+/// The length is capped both absolutely and as a fraction of the rail. The
+/// fraction is what stops a long spin lighting up most of the markers at once:
+/// the trail should read as a highlight moving along the rail, and once it covers
+/// much of the rail there is nothing left for it to move against.
+fn trail_steps(trail: MarkerTrail, marker_count: usize) -> Vec<(i32, u32)> {
+    let max_len = POPUP_MARKER_TRAIL_MAX_LEN
+        .min(marker_count as i32 / POPUP_MARKER_TRAIL_RAIL_FRACTION)
+        .max(0);
+    let mut steps = Vec::new();
+    for offset in 1..=max_len {
+        let lit = (trail.strength * max_len as f32 - (offset - 1) as f32).clamp(0.0, 1.0);
+        let coverage = coverage_for_progress(lit * POPUP_MARKER_TRAIL_MAX_DITHER);
+        if coverage == 0 {
+            break;
+        }
+        steps.push((offset, coverage));
+    }
+    steps
+}
+
+/// The marker `offset` steps back along the direction of travel.
+///
+/// `None` once the trail would wrap onto the active marker itself: the rail is a
+/// ring, and a long spin through a short list would otherwise draw ghosts on top
+/// of where you already are and read as a rail flickering at random.
+fn trail_index(active_index: usize, offset: i32, direction: i32, count: usize) -> Option<usize> {
+    if count == 0 || offset as usize >= count {
+        return None;
+    }
+    let step = if direction >= 0 { 1 } else { -1 };
+    let index = (active_index as i32 - step * offset).rem_euclid(count as i32) as usize;
+    (index != active_index).then_some(index)
 }
 
 fn stale_dim_color(bg_color: COLORREF) -> COLORREF {
@@ -1354,8 +1753,8 @@ fn draw_closure_notice_block(
     line_height: i32,
     font: HFONT,
     bg_color: COLORREF,
-    border_color: COLORREF,
     text_color: COLORREF,
+    edge: ChromeEdge,
 ) -> i32 {
     let pad_x = scale_px(NOTICE_PAD_X, scale.factor);
     let pad_y = scale_px(NOTICE_PAD_Y, scale.factor);
@@ -1375,13 +1774,11 @@ fn draw_closure_notice_block(
     };
 
     unsafe {
-        let brush = CreateSolidBrush(bg_color);
-        FillRect(hdc, &block_rect, brush);
-        DeleteObject(brush);
+        fill_solid_rect(hdc, &block_rect, bg_color);
         SelectObject(hdc, font);
         SetTextColor(hdc, text_color);
     }
-    draw_outline_rect(hdc, &block_rect, border_color);
+    draw_edge(hdc, &block_rect, edge.panel(), bg_color);
 
     let mut text_y = block_top + pad_y;
     if wrapped.is_empty() {
@@ -1396,6 +1793,19 @@ fn draw_closure_notice_block(
     block_rect.bottom + margin_y
 }
 
+fn recipe_detail_max_viewport_height(
+    block_top: i32,
+    max_bottom: i32,
+    pad_y: i32,
+    line_height: i32,
+    ideal_viewport_height: i32,
+) -> i32 {
+    let available = max_bottom - block_top - pad_y * 2;
+    let ideal = ideal_viewport_height.max(1);
+    let minimum = line_height.max(1).min(ideal);
+    available.clamp(minimum, ideal)
+}
+
 fn draw_recipe_detail_block(
     hdc: HDC,
     rows: &[RecipeDetailRow],
@@ -1406,12 +1816,13 @@ fn draw_recipe_detail_block(
     normal_font: HFONT,
     label_font: HFONT,
     bg_color: COLORREF,
-    border_color: COLORREF,
     label_color: COLORREF,
     text_color: COLORREF,
     ingredient_highlight_color: COLORREF,
     selection_text_color: COLORREF,
+    edge: ChromeEdge,
     bullet_width: i32,
+    max_bottom: i32,
     selection: Option<&SelectionRange>,
     favorites: &FavoritesSnapshot,
     mut capture: Option<&mut DrawCapture>,
@@ -1435,11 +1846,19 @@ fn draw_recipe_detail_block(
     let block_top = y + margin_y;
     let content_height = content_rows as i32 * line_height + gaps;
     let viewport_rows = content_rows.min(RECIPE_DETAIL_MAX_VISIBLE_ROWS).max(1);
-    let viewport_height = if content_rows <= RECIPE_DETAIL_MAX_VISIBLE_ROWS {
+    let ideal_viewport_height = if content_rows <= RECIPE_DETAIL_MAX_VISIBLE_ROWS {
         content_height
     } else {
         viewport_rows as i32 * line_height
     };
+    let max_viewport_height = recipe_detail_max_viewport_height(
+        block_top,
+        max_bottom,
+        pad_y,
+        line_height,
+        ideal_viewport_height,
+    );
+    let viewport_height = ideal_viewport_height.min(max_viewport_height);
     let max_scroll_offset = (content_height - viewport_height).max(0);
     let scroll_offset = recipe_detail_scroll_offset_px().min(max_scroll_offset);
     let block_height = pad_y * 2 + viewport_height;
@@ -1450,12 +1869,8 @@ fn draw_recipe_detail_block(
         bottom: block_top + block_height,
     };
 
-    unsafe {
-        let brush = CreateSolidBrush(bg_color);
-        FillRect(hdc, &block_rect, brush);
-        DeleteObject(brush);
-    }
-    draw_recipe_detail_border(hdc, &block_rect, border_color);
+    fill_solid_rect(hdc, &block_rect, bg_color);
+    draw_recipe_detail_border(hdc, &block_rect, edge, bg_color);
     if let Some(ref mut draw_capture) = capture {
         draw_capture.layout.recipe_scroll_rect = Some(block_rect);
         draw_capture.layout.recipe_scroll_max_offset_px = max_scroll_offset;
@@ -1471,7 +1886,7 @@ fn draw_recipe_detail_block(
             max_scroll_offset,
             viewport_height,
             content_height,
-            border_color,
+            edge.color,
             label_color,
         );
     }
@@ -1666,14 +2081,8 @@ fn draw_recipe_detail_scrollbar(
         right: track_rect.right,
         bottom: thumb_top + thumb_height,
     };
-    unsafe {
-        let track_brush = CreateSolidBrush(track_color);
-        FillRect(hdc, &track_rect, track_brush);
-        DeleteObject(track_brush);
-        let thumb_brush = CreateSolidBrush(thumb_color);
-        FillRect(hdc, &thumb_rect, thumb_brush);
-        DeleteObject(thumb_brush);
-    }
+    fill_solid_rect(hdc, &track_rect, track_color);
+    fill_solid_rect(hdc, &thumb_rect, thumb_color);
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1901,13 +2310,12 @@ fn recipe_detail_row_layouts(
     out
 }
 
-fn draw_recipe_detail_border(hdc: HDC, rect: &RECT, color: COLORREF) {
-    draw_outline_rect(hdc, rect, color);
+fn draw_recipe_detail_border(hdc: HDC, rect: &RECT, edge: ChromeEdge, face: COLORREF) {
+    draw_edge(hdc, rect, edge.panel(), face);
 }
 
 fn draw_outline_rect(hdc: HDC, rect: &RECT, color: COLORREF) {
-    unsafe {
-        let brush = CreateSolidBrush(color);
+    {
         let top = RECT {
             left: rect.left,
             top: rect.top,
@@ -1932,10 +2340,177 @@ fn draw_outline_rect(hdc: HDC, rect: &RECT, color: COLORREF) {
             right: rect.right,
             bottom: rect.bottom,
         };
-        FillRect(hdc, &top, brush);
-        FillRect(hdc, &bottom, brush);
-        FillRect(hdc, &left, brush);
-        FillRect(hdc, &right, brush);
-        DeleteObject(brush);
+        fill_solid_rect(hdc, &top, color);
+        fill_solid_rect(hdc, &bottom, color);
+        fill_solid_rect(hdc, &left, color);
+        fill_solid_rect(hdc, &right, color);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rect(left: i32, top: i32, right: i32, bottom: i32) -> RECT {
+        RECT {
+            left,
+            top,
+            right,
+            bottom,
+        }
+    }
+
+    /// The update region arrives from Windows and the band we ask for is
+    /// deliberately over-wide, so it has to be brought back inside the client
+    /// area before it is used to clip and to size the blit.
+    #[test]
+    fn an_update_region_is_clamped_to_the_client_area() {
+        let clamped = clamp_rect(&rect(-20, -5, 100_000, 100_000), 650, 640);
+        assert_eq!(clamped.left, 0);
+        assert_eq!(clamped.top, 0);
+        assert_eq!(clamped.right, 650);
+        assert_eq!(clamped.bottom, 640);
+    }
+
+    #[test]
+    fn a_band_inside_the_client_area_is_left_alone() {
+        let clamped = clamp_rect(&rect(0, 120, 650, 148), 650, 640);
+        assert_eq!((clamped.top, clamped.bottom), (120, 148));
+    }
+
+    /// An empty region has to stay empty rather than clamp into something the
+    /// paint would treat as work to do.
+    #[test]
+    fn an_empty_region_stays_empty() {
+        let clamped = clamp_rect(&rect(0, 0, 0, 0), 650, 640);
+        assert!(clamped.right <= clamped.left || clamped.bottom <= clamped.top);
+    }
+
+    fn trail(strength: f32, direction: i32) -> MarkerTrail {
+        MarkerTrail {
+            direction,
+            strength,
+        }
+    }
+
+    /// The rail as it usually is: ten restaurants.
+    const RAIL: usize = 10;
+
+    /// A deliberate single switch carries no turbulence, so the rail has to draw
+    /// exactly as it always has. This is the common case and the one regression
+    /// that would be most obvious.
+    #[test]
+    fn a_settled_rail_draws_no_ghosts() {
+        assert!(trail_steps(trail(0.0, 1), RAIL).is_empty());
+    }
+
+    /// The trail lengthens a marker at a time as the spin accelerates, rather
+    /// than every ghost brightening at once.
+    #[test]
+    fn the_trail_lengthens_with_turbulence() {
+        assert_eq!(trail_steps(trail(0.2, 1), RAIL).len(), 1);
+        assert!(trail_steps(trail(0.9, 1), RAIL).len() > 1);
+    }
+
+    /// Nearer ghosts are always denser than further ones, which is what makes the
+    /// trail read as direction of travel rather than as scattered noise.
+    #[test]
+    fn ghosts_fade_with_distance() {
+        let steps = trail_steps(trail(1.0, 1), RAIL);
+        for pair in steps.windows(2) {
+            assert!(
+                pair[0].1 >= pair[1].1,
+                "ghost at {} is denser than at {}",
+                pair[1].0,
+                pair[0].0
+            );
+        }
+    }
+
+    /// No ghost may reach full coverage, or it would compete with the active
+    /// marker for which restaurant you are actually on.
+    #[test]
+    fn ghosts_never_reach_the_density_of_the_active_marker() {
+        for (_, coverage) in trail_steps(trail(1.0, 1), RAIL) {
+            assert!(coverage < crate::popup::dither::DITHER_STEPS);
+        }
+    }
+
+    /// However hard the rail is spun, the trail stays within a third of it.
+    /// Without this it lights a fixed number of markers regardless of how many
+    /// exist, and a long spin reads as the rail coming on rather than as motion
+    /// along it — which is exactly how the first version looked.
+    #[test]
+    fn a_hard_spin_keeps_the_trail_within_a_third_of_the_rail() {
+        for count in 2..=12 {
+            let ghosts = trail_steps(trail(1.0, 1), count).len();
+            assert!(
+                ghosts * POPUP_MARKER_TRAIL_RAIL_FRACTION as usize <= count,
+                "{ghosts} ghosts on a rail of {count}"
+            );
+        }
+    }
+
+    /// And never more than three however long the rail gets.
+    #[test]
+    fn the_trail_has_an_absolute_ceiling() {
+        assert_eq!(
+            trail_steps(trail(1.0, 1), 200).len(),
+            POPUP_MARKER_TRAIL_MAX_LEN as usize
+        );
+    }
+
+    /// A rail too short to spare markers gets no trail at all: on three markers
+    /// even one ghost would light two thirds of the rail.
+    #[test]
+    fn a_short_rail_gets_no_trail() {
+        assert!(trail_steps(trail(1.0, 1), 2).is_empty());
+    }
+
+    #[test]
+    fn the_trail_runs_opposite_the_direction_of_travel() {
+        assert_eq!(trail_index(5, 1, 1, 10), Some(4));
+        assert_eq!(trail_index(5, 2, 1, 10), Some(3));
+        assert_eq!(trail_index(5, 1, -1, 10), Some(6));
+    }
+
+    #[test]
+    fn the_trail_wraps_around_the_ring() {
+        assert_eq!(trail_index(0, 1, 1, 10), Some(9));
+        assert_eq!(trail_index(9, 1, -1, 10), Some(0));
+    }
+
+    /// A long spin through a short list would otherwise lap the rail and stipple
+    /// ghosts over the active marker, which reads as random flicker.
+    #[test]
+    fn the_trail_stops_before_lapping_the_active_marker() {
+        assert_eq!(trail_index(2, 3, 1, 3), None);
+        assert_eq!(trail_index(2, 4, 1, 3), None);
+        assert_eq!(trail_index(0, 1, 1, 1), None);
+        assert_eq!(trail_index(0, 1, 1, 0), None);
+    }
+
+    #[test]
+    fn recipe_detail_viewport_caps_to_remaining_client_height() {
+        assert_eq!(
+            recipe_detail_max_viewport_height(400, 700, 10, 24, 14 * 24),
+            280
+        );
+    }
+
+    #[test]
+    fn recipe_detail_viewport_keeps_ideal_height_when_space_allows() {
+        assert_eq!(
+            recipe_detail_max_viewport_height(100, 700, 10, 24, 8 * 24),
+            8 * 24
+        );
+    }
+
+    #[test]
+    fn recipe_detail_viewport_keeps_minimum_scrollable_area() {
+        assert_eq!(
+            recipe_detail_max_viewport_height(680, 700, 10, 24, 14 * 24),
+            24
+        );
     }
 }

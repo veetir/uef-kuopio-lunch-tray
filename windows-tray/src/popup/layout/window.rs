@@ -1,5 +1,6 @@
 //! Window placement, popup sizing, and font creation helpers.
 
+use super::super::border::theme_shadow_enabled;
 use super::cache::{
     cached_desired_size, desired_size_cache_key, popup_cached_layout_budget,
     update_desired_size_cache,
@@ -7,8 +8,75 @@ use super::cache::{
 use super::text::{measure_lines_layout, text_metrics, text_width_with_font};
 use super::*;
 
+/// Turns the popup's drop shadow on or off to match the active theme.
+///
+/// This is the real DWM window shadow, the same one every ordinary window on the
+/// desktop casts, rather than the small fixed `CS_DROPSHADOW` tooltip shadow.
+/// DWM shadows any window that carries a sizing frame, so the shadow is toggled
+/// by adding and removing `WS_THICKFRAME`. The frame itself never shows:
+/// `WM_NCCALCSIZE` hands the whole window rect back to the client area and
+/// `WM_NCHITTEST` suppresses the resize edges.
+///
+/// Deliberately *not* done with `DwmExtendFrameIntoClientArea`: that asks DWM to
+/// composite a glass band at the window edge, and GDI drawing leaves zero alpha
+/// behind, so the band shows through as a pale rim instead of popup content.
+///
+/// The shadow is composited by DWM out of process, so it costs the app no
+/// bitmap, no extra window, and nothing on the paint path.
+fn apply_popup_shadow(hwnd: HWND, theme: &str) {
+    unsafe {
+        let style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
+        if style & WS_CAPTION.0 != 0 {
+            // `--no-tray` builds a normal captioned window; leave its frame be.
+            return;
+        }
+
+        // A sizing frame otherwise earns a 1px system border along every edge,
+        // drawn in the accent colour. Windows 11 lets us decline it; on Windows
+        // 10 the call fails harmlessly and the line stays.
+        let border = DWMWA_COLOR_NONE;
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_BORDER_COLOR,
+            &border as *const _ as *const _,
+            std::mem::size_of_val(&border) as u32,
+        );
+
+        // Windows 11 rounds the corners of any window with a sizing frame,
+        // which would be badly wrong on the retro themes.
+        let corner = DWMWCP_DONOTROUND;
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_WINDOW_CORNER_PREFERENCE,
+            &corner as *const _ as *const _,
+            std::mem::size_of_val(&corner) as u32,
+        );
+
+        let wanted = theme_shadow_enabled(theme);
+        if wanted == (style & WS_THICKFRAME.0 != 0) {
+            return;
+        }
+        let updated = if wanted {
+            style | WS_THICKFRAME.0
+        } else {
+            style & !WS_THICKFRAME.0
+        };
+        SetWindowLongPtrW(hwnd, GWL_STYLE, updated as isize);
+        let _ = SetWindowPos(
+            hwnd,
+            HWND(0),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+        );
+    }
+}
+
 pub(in crate::popup) fn show_popup(hwnd: HWND, state: &AppState) {
     unsafe {
+        apply_popup_shadow(hwnd, &state.settings.theme);
         let (width, height) = desired_size(hwnd, state);
         let mut cursor = POINT::default();
         let _ = GetCursorPos(&mut cursor);
@@ -22,6 +90,7 @@ pub(in crate::popup) fn show_popup(hwnd: HWND, state: &AppState) {
 
 pub(in crate::popup) fn show_popup_at(hwnd: HWND, state: &AppState, anchor: POINT) {
     unsafe {
+        apply_popup_shadow(hwnd, &state.settings.theme);
         let (width, height) = desired_size(hwnd, state);
         let (width, height) = constrain_size_to_work_area_near_point(width, height, anchor);
         let (x, y) = position_near_point(width, height, anchor);
@@ -33,6 +102,7 @@ pub(in crate::popup) fn show_popup_at(hwnd: HWND, state: &AppState, anchor: POIN
 
 pub(in crate::popup) fn show_popup_for_tray_icon(hwnd: HWND, state: &AppState, tray_rect: RECT) {
     unsafe {
+        apply_popup_shadow(hwnd, &state.settings.theme);
         let (width, height) = desired_size(hwnd, state);
         let hdc = windows::Win32::Graphics::Gdi::GetDC(hwnd);
         let dpi_y = GetDeviceCaps(hdc, LOGPIXELSY);
@@ -125,7 +195,7 @@ pub(in crate::popup) fn header_marker_rects(
     let hit = scale_px(HEADER_MARKER_HIT_SIZE, scale.factor).max(dot + 6);
     let rail_width = count as i32 * dot + (count.saturating_sub(1) as i32 * gap);
     let start_x = (width - rail_width) / 2;
-    let dot_top = scale.header_height - scale_px(10, scale.factor).max(8);
+    let dot_top = scale.header_height - scale_px(HEADER_MARKER_BOTTOM_GAP, scale.factor).max(7);
     let center_y = dot_top + dot / 2;
 
     (0..count)
@@ -140,6 +210,52 @@ pub(in crate::popup) fn header_marker_rects(
             }
         })
         .collect()
+}
+
+/// Drawn sizes of the rail markers: inactive first, then active.
+pub(in crate::popup) fn header_marker_sizes(scale: &PopupScale) -> (i32, i32) {
+    let inactive = scale_px(HEADER_MARKER_DOT_SIZE, scale.factor).max(3);
+    let active = (inactive * 8 / 5).max(inactive + 2);
+    (inactive, active)
+}
+
+/// Top edge of the marker rail, if one is drawn.
+///
+/// The title has to clear this. `None` when there is no rail at all, which is
+/// the single-restaurant and index-number cases.
+pub(in crate::popup) fn header_rail_top(
+    width: i32,
+    settings: &Settings,
+    scale: &PopupScale,
+) -> Option<i32> {
+    let rects = header_marker_rects(width, settings, scale);
+    let first = rects.first()?;
+    let (_, active) = header_marker_sizes(scale);
+    Some((first.top + first.bottom) / 2 - active / 2)
+}
+
+/// Vertical position of the header title.
+///
+/// Aligned to the centre of the nav buttons, because they are the heaviest
+/// things in the header and the eye reads their centre as the bar's midline —
+/// a title floating off that line looks wrong even when it is centred on
+/// something defensible. It only lifts off that line when the marker rail would
+/// otherwise crowd it, and then only by as much as it must.
+pub(in crate::popup) fn header_title_y(
+    button_center_y: i32,
+    text_height: i32,
+    rail_top: Option<i32>,
+    scale: &PopupScale,
+) -> i32 {
+    let aligned = button_center_y - text_height / 2;
+    let min_gap = scale_px(4, scale.factor).max(3);
+    let top_margin = scale_px(2, scale.factor).max(1);
+    match rail_top {
+        Some(rail_top) if aligned + text_height + min_gap > rail_top => {
+            (rail_top - min_gap - text_height).max(top_margin)
+        }
+        _ => aligned.max(top_margin),
+    }
 }
 
 pub(in crate::popup) fn header_title(state: &AppState) -> String {
@@ -189,12 +305,18 @@ fn desired_size(hwnd: HWND, state: &AppState) -> (i32, i32) {
         }
 
         let scale = popup_scale_for_dpi(&state.settings, dpi_y);
-        let (normal_font, bold_font, bold_italic_font, small_font, small_bold_font) =
+        let (normal_font, bold_font, _bold_italic_font, small_font, small_bold_font) =
             create_fonts(hdc, &state.settings.theme, scale.factor);
+        let bullet_width = bullet_column_width(
+            hdc,
+            normal_font,
+            bullet_style_for_theme(&state.settings.theme),
+        );
         let current_lines = build_lines(state);
         let current_metrics = measure_lines_layout(
             hdc,
             normal_font,
+            bullet_width,
             bold_font,
             small_font,
             small_bold_font,
@@ -205,6 +327,7 @@ fn desired_size(hwnd: HWND, state: &AppState) -> (i32, i32) {
             state,
             hdc,
             normal_font,
+            bullet_width,
             bold_font,
             small_font,
             small_bold_font,
@@ -217,6 +340,7 @@ fn desired_size(hwnd: HWND, state: &AppState) -> (i32, i32) {
         let current_wrapped_metrics = measure_lines_layout(
             hdc,
             normal_font,
+            bullet_width,
             bold_font,
             small_font,
             small_bold_font,
@@ -253,11 +377,7 @@ fn desired_size(hwnd: HWND, state: &AppState) -> (i32, i32) {
         );
         let max_width = max(scale.max_width, header_required_width);
         let width = width_candidate.clamp(scale.min_width, max_width);
-        DeleteObject(normal_font);
-        DeleteObject(bold_font);
-        DeleteObject(bold_italic_font);
-        DeleteObject(small_font);
-        DeleteObject(small_bold_font);
+        // The fonts are shared and outlive this call; see `create_fonts`.
         windows::Win32::Graphics::Gdi::ReleaseDC(hwnd, hdc);
 
         let size = (
@@ -271,15 +391,88 @@ fn desired_size(hwnd: HWND, state: &AppState) -> (i32, i32) {
     }
 }
 
+/// The popup's five fonts, kept for the life of the process.
+///
+/// Fonts used to be created and destroyed on every paint and every size
+/// calculation, which is ten GDI calls a frame for handles that almost never
+/// change. More importantly it made font handles meaningless as cache keys,
+/// because a new paint produced new handles for identical fonts.
+///
+/// **These handles are deliberately never deleted.** That is what makes them
+/// stable identifiers, which `row_boundaries` relies on to memoise per-character
+/// selection geometry. Deleting them would both undo the saving and silently
+/// corrupt that cache by letting GDI reissue a handle value for a different font.
+///
+/// Because they are never freed, every set built has to be *kept and reused*. An
+/// earlier version held a single set and replaced it on each theme change, which
+/// orphaned five handles every time the font family changed and grew without
+/// bound if the user alternated between two themes.
+struct CachedFonts {
+    height_normal: i32,
+    height_small: i32,
+    face: String,
+    fonts: (HFONT, HFONT, HFONT, HFONT, HFONT),
+}
+
+/// Distinct font sets worth keeping. One per (size, face), so the ceiling is the
+/// few font families the themes use times the widget scales and DPIs a session
+/// visits. Past it, fonts are created uncached rather than evicted: a handle that
+/// might be reissued cannot be a cache key, and both the text-width and row
+/// geometry caches key on these.
+const POPUP_FONT_CACHE_LIMIT: usize = 48;
+
+thread_local! {
+    static POPUP_FONTS: std::cell::RefCell<Vec<CachedFonts>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
 pub(in crate::popup) fn create_fonts(
-    _hdc: HDC,
+    hdc: HDC,
     theme: &str,
     scale_factor: f32,
 ) -> (HFONT, HFONT, HFONT, HFONT, HFONT) {
+    let height_normal = -MulDiv(scale_px(12, scale_factor).max(8), BASE_DPI, 72);
+    let height_small = -MulDiv(scale_px(10, scale_factor).max(7), BASE_DPI, 72);
+    let face = theme_font_family(theme);
+
+    let cached = POPUP_FONTS.with(|cache| {
+        cache
+            .borrow()
+            .iter()
+            .find(|entry| {
+                entry.height_normal == height_normal
+                    && entry.height_small == height_small
+                    && entry.face == face
+            })
+            .map(|entry| entry.fonts)
+    });
+    if let Some(fonts) = cached {
+        return fonts;
+    }
+
+    let fonts = build_fonts(hdc, height_normal, height_small, face);
+    POPUP_FONTS.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.len() < POPUP_FONT_CACHE_LIMIT {
+            cache.push(CachedFonts {
+                height_normal,
+                height_small,
+                face: face.to_string(),
+                fonts,
+            });
+        }
+    });
+    fonts
+}
+
+fn build_fonts(
+    _hdc: HDC,
+    height_normal: i32,
+    height_small: i32,
+    face: &str,
+) -> (HFONT, HFONT, HFONT, HFONT, HFONT) {
     unsafe {
-        let height_normal = -MulDiv(scale_px(12, scale_factor).max(8), BASE_DPI, 72);
-        let height_small = -MulDiv(scale_px(10, scale_factor).max(7), BASE_DPI, 72);
-        let face = to_wstring(theme_font_family(theme));
+        let face = to_wstring(face);
 
         let normal = CreateFontW(
             height_normal,
@@ -477,5 +670,69 @@ unsafe fn work_area_for_monitor(monitor: windows::Win32::Graphics::Gdi::HMONITOR
         info.rcWork
     } else {
         RECT::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scale() -> PopupScale {
+        popup_scale_for_dpi(&Settings::default(), BASE_DPI)
+    }
+
+    #[test]
+    fn marker_active_size_exceeds_inactive() {
+        let (inactive, active) = header_marker_sizes(&scale());
+
+        assert!(
+            active > inactive,
+            "the active marker must carry more weight"
+        );
+    }
+
+    #[test]
+    fn title_sits_on_the_button_midline_when_it_fits() {
+        let scale = scale();
+        let text_height = 24;
+        let button_center = 27;
+
+        let y = header_title_y(button_center, text_height, Some(200), &scale);
+
+        assert_eq!(y, button_center - text_height / 2);
+    }
+
+    /// The title used to centre on the whole header and ended up almost
+    /// touching the rail.
+    #[test]
+    fn title_lifts_off_the_midline_only_to_clear_the_rail() {
+        let scale = scale();
+        let text_height = 24;
+        let button_center = 27;
+        let rail_top = 36;
+
+        let y = header_title_y(button_center, text_height, Some(rail_top), &scale);
+
+        assert!(y < button_center - text_height / 2, "should lift");
+        assert!(y + text_height < rail_top, "should clear the rail");
+    }
+
+    #[test]
+    fn title_stays_on_the_midline_without_a_rail() {
+        let scale = scale();
+        let text_height = 24;
+        let button_center = 27;
+
+        assert_eq!(
+            header_title_y(button_center, text_height, None, &scale),
+            button_center - text_height / 2
+        );
+    }
+
+    #[test]
+    fn title_never_leaves_the_header() {
+        let scale = scale();
+
+        assert!(header_title_y(10, 40, Some(12), &scale) >= 1);
     }
 }

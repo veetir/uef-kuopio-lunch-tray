@@ -7,7 +7,7 @@ use compass_lunch::app::App;
 #[cfg(not(all(feature = "bench", not(windows))))]
 use compass_lunch::format::{
     date_and_time_line, menu_heading_for_restaurant, normalize_text, split_component_suffix,
-    student_price_for_group, text_for, PriceGroups,
+    text_for, PriceGroups,
 };
 #[cfg(not(all(feature = "bench", not(windows))))]
 use compass_lunch::log;
@@ -36,7 +36,7 @@ use windows::Win32::System::Threading::{CreateMutexW, OpenMutexW, MUTEX_ALL_ACCE
 #[cfg(not(all(feature = "bench", not(windows))))]
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DispatchMessageW, GetMessageW, TranslateMessage, MSG, SW_HIDE,
-    WS_EX_TOOLWINDOW, WS_OVERLAPPEDWINDOW, WS_POPUP,
+    WS_EX_TOOLWINDOW, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_THICKFRAME,
 };
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, PostMessageW};
@@ -49,6 +49,8 @@ fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let print_today = args.iter().any(|a| a == "--print-today");
     let no_tray = args.iter().any(|a| a == "--no-tray");
+    #[cfg(all(feature = "perf-counters", target_os = "windows"))]
+    let gdi_batch_limit = requested_gdi_batch_limit(&args);
     let boot_settings = load_settings();
     log::set_enabled(boot_settings.enable_logging);
 
@@ -66,6 +68,13 @@ fn main() -> anyhow::Result<()> {
     unsafe {
         log::log_line("app start");
         enable_dpi_awareness();
+        #[cfg(all(feature = "perf-counters", target_os = "windows"))]
+        if let Some(limit) = gdi_batch_limit {
+            let previous = windows::Win32::Graphics::Gdi::GdiSetBatchLimit(limit);
+            log::log_line(&format!(
+                "GDI batch limit changed: previous={previous} requested={limit}"
+            ));
+        }
         let hinstance = GetModuleHandleW(None)?;
         winmsg::register_window_classes(hinstance.into())?;
 
@@ -89,10 +98,14 @@ fn main() -> anyhow::Result<()> {
         );
 
         let popup_class = to_wstring(winmsg::POPUP_WND_CLASS);
+        // WS_THICKFRAME is what makes DWM treat the popup as a window worth
+        // shadowing. The popup window procedure hands the whole frame back to
+        // the client area and suppresses the resize edges it would otherwise
+        // bring, so the style costs nothing visually.
         let popup_style = if no_tray {
             WS_OVERLAPPEDWINDOW
         } else {
-            WS_POPUP
+            WS_POPUP | WS_THICKFRAME
         };
         let popup_ex_style = if no_tray {
             Default::default()
@@ -150,6 +163,14 @@ fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(all(feature = "perf-counters", target_os = "windows"))]
+fn requested_gdi_batch_limit(args: &[String]) -> Option<u32> {
+    args.iter().find_map(|arg| {
+        arg.strip_prefix("--gdi-batch-limit=")
+            .and_then(|value| value.parse().ok())
+    })
 }
 
 #[cfg(target_os = "windows")]
@@ -273,13 +294,6 @@ fn print_today_menu_with_settings(settings: &Settings) -> anyhow::Result<()> {
         Some(menu) => {
             if !menu.menus.is_empty() {
                 for group in &menu.menus {
-                    if settings.hide_expensive_student_meals {
-                        if let Some(price) = student_price_for_group(group) {
-                            if price > 4.0 {
-                                continue;
-                            }
-                        }
-                    }
                     let heading = menu_heading_for_restaurant(
                         group,
                         &settings.restaurant_code,

@@ -1,10 +1,13 @@
 //! Text measurement and wrapping helpers for the popup layout pipeline.
 
 use super::*;
+use std::cell::RefCell;
+use std::collections::HashMap;
 
 pub(super) fn measure_lines_layout(
     hdc: HDC,
     normal_font: HFONT,
+    bullet_width: i32,
     bold_font: HFONT,
     small_font: HFONT,
     small_bold_font: HFONT,
@@ -12,13 +15,12 @@ pub(super) fn measure_lines_layout(
     wrap_content_width: i32,
 ) -> LineLayoutMetrics {
     let wrap_width = wrap_content_width.max(40);
-    let bullet_width = text_width_with_font(hdc, normal_font, BULLET_PREFIX);
     let main_wrap_width = (wrap_width - bullet_width).max(24);
     let mut required_content_width = 0;
     let mut wrapped_line_count = 0usize;
     let mut extra_height_px = 0;
 
-    for line in lines {
+    for (line_index, line) in lines.iter().enumerate() {
         match line {
             Line::Heading(text) => {
                 let width = text_width_with_font(hdc, bold_font, text);
@@ -62,6 +64,7 @@ pub(super) fn measure_lines_layout(
                     (main_wrap_width - prefix_width).max(24),
                 );
                 wrapped_line_count += rows.max(1);
+                extra_height_px += group_caption_bottom_gap(lines, line_index);
             }
             Line::Text(text) => {
                 let width = text_width_with_font(hdc, normal_font, text);
@@ -146,8 +149,12 @@ pub(super) fn measure_lines_layout(
                     } else {
                         label_width + 6 + value_width
                     };
-                    required_content_width = required_content_width
-                        .max(bullet_width + RECIPE_DETAIL_PAD_X * 2 + same_line_width);
+                    // Deliberately does *not* raise `required_content_width`.
+                    // An expanded panel wraps to whatever width it is given, so
+                    // letting a long ingredient run widen the popup made opening
+                    // the details resize the window diagonally rather than just
+                    // taller. It showed up first in a wide serif face, where the
+                    // ingredient line outruns the menu lines that set the width.
                     if same_line_width <= block_wrap_width {
                         block_row_count += 1;
                     } else {
@@ -407,13 +414,77 @@ fn split_long_token_to_width_rows(
     rows
 }
 
+/// Identifies a measured string. Font handles are usable as keys only because
+/// `create_fonts` keeps them for the life of the process; see the note there.
+#[derive(PartialEq, Eq, Hash)]
+struct TextWidthKey {
+    font: isize,
+    text: String,
+}
+
+/// Roughly the distinct strings measured across every restaurant at one theme,
+/// with room to spare. Cleared wholesale on overflow rather than evicted; the
+/// working set is rebuilt within a paint or two, and tracking recency would cost
+/// more than the rare refill.
+///
+/// If `text_width.hit_rate` in the counter report is not near 100% in steady
+/// state, this cache is thrashing and the limit or the callers are wrong.
+const TEXT_WIDTH_CACHE_LIMIT: usize = 8192;
+
+thread_local! {
+    static TEXT_WIDTH_CACHE: RefCell<HashMap<TextWidthKey, i32>> = RefCell::new(HashMap::new());
+}
+
+#[cfg(test)]
+fn clear_text_width_cache() {
+    TEXT_WIDTH_CACHE.with(|cache| cache.borrow_mut().clear());
+}
+
+/// Measures `text` in `font`, reusing the answer when the same string has already
+/// been measured in the same font.
+///
+/// A repaint measures the same strings as the paint before it: the wrap pass, the
+/// price-column alignment, and the suffix layout all re-derive widths from
+/// unchanged content. Each measurement otherwise costs three GDI calls — select,
+/// measure, restore — and this is the single most frequent call in the paint path.
 pub(in crate::popup) fn text_width_with_font(hdc: HDC, font: HFONT, text: &str) -> i32 {
-    unsafe {
+    if text.is_empty() {
+        return 0;
+    }
+    let key = TextWidthKey {
+        font: font.0,
+        text: text.to_string(),
+    };
+    if let Some(width) = TEXT_WIDTH_CACHE.with(|cache| cache.borrow().get(&key).copied()) {
+        crate::perf::count_text_width_hit();
+        return width;
+    }
+    crate::perf::count_text_width_miss();
+
+    let width = unsafe {
         let old = SelectObject(hdc, font);
         let width = text_width(hdc, text);
         SelectObject(hdc, old);
         width
-    }
+    };
+    TEXT_WIDTH_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.len() >= TEXT_WIDTH_CACHE_LIMIT {
+            cache.clear();
+        }
+        cache.insert(key, width);
+    });
+    width
+}
+
+/// Horizontal gap kept between an item's main text and its inline suffix.
+///
+/// Derived from the body font so it tracks font size and DPI without threading
+/// the popup scale through the measurement helpers. Two spaces reads as a
+/// deliberate separation rather than a missing space, since the suffix is set in
+/// a smaller font than the text it follows.
+pub(in crate::popup) fn suffix_gap_width(hdc: HDC, normal_font: HFONT) -> i32 {
+    text_width_with_font(hdc, normal_font, "  ").max(8)
 }
 
 pub(in crate::popup) fn text_with_suffix_width(
@@ -435,7 +506,7 @@ pub(in crate::popup) fn text_with_suffix_width(
         let font = if *bold { small_bold_font } else { small_font };
         suffix_width += text_width_with_font(hdc, font, segment);
     }
-    bullet_width + main_width + suffix_width + 4
+    bullet_width + main_width + suffix_width + suffix_gap_width(hdc, normal_font)
 }
 
 pub(in crate::popup) fn flatten_suffix_segments(segments: &[(String, bool)]) -> String {
@@ -471,7 +542,66 @@ pub(in crate::popup) fn text_width(hdc: HDC, text: &str) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{flatten_suffix_segments, word_bounds};
+    use super::{
+        clear_text_width_cache, flatten_suffix_segments, word_bounds, TextWidthKey,
+        TEXT_WIDTH_CACHE, TEXT_WIDTH_CACHE_LIMIT,
+    };
+
+    fn remember(font: isize, text: &str, width: i32) {
+        TEXT_WIDTH_CACHE.with(|cache| {
+            cache.borrow_mut().insert(
+                TextWidthKey {
+                    font,
+                    text: text.to_string(),
+                },
+                width,
+            );
+        });
+    }
+
+    fn recall(font: isize, text: &str) -> Option<i32> {
+        TEXT_WIDTH_CACHE.with(|cache| {
+            cache
+                .borrow()
+                .get(&TextWidthKey {
+                    font,
+                    text: text.to_string(),
+                })
+                .copied()
+        })
+    }
+
+    /// The same glyphs measure differently at another size or weight, so the font
+    /// is part of the key. Getting this wrong would show as price columns and
+    /// suffixes landing at the wrong offsets after a theme or scale change.
+    #[test]
+    fn width_is_remembered_per_font() {
+        clear_text_width_cache();
+        remember(1, "Riisi", 40);
+        remember(2, "Riisi", 63);
+        assert_eq!(recall(1, "Riisi"), Some(40));
+        assert_eq!(recall(2, "Riisi"), Some(63));
+        assert_eq!(recall(3, "Riisi"), None);
+    }
+
+    /// Overflow clears rather than evicting, so the cache must come back empty and
+    /// be refilled rather than keep serving whatever survived.
+    #[test]
+    fn overflow_clears_the_width_cache() {
+        clear_text_width_cache();
+        for index in 0..TEXT_WIDTH_CACHE_LIMIT {
+            remember(1, &format!("row {index}"), index as i32);
+        }
+        assert_eq!(recall(1, "row 0"), Some(0));
+
+        TEXT_WIDTH_CACHE.with(|cache| {
+            let mut cache = cache.borrow_mut();
+            if cache.len() >= TEXT_WIDTH_CACHE_LIMIT {
+                cache.clear();
+            }
+        });
+        assert_eq!(recall(1, "row 0"), None);
+    }
 
     #[test]
     fn word_bounds_splits_on_whitespace_runs() {

@@ -46,14 +46,14 @@ pub const CMD_TOGGLE_HIGHLIGHT_L: u16 = 2205;
 pub const CMD_TOGGLE_SHOW_STUDENT_PRICE: u16 = 2206;
 pub const CMD_TOGGLE_SHOW_STAFF_PRICE: u16 = 2207;
 pub const CMD_TOGGLE_SHOW_GUEST_PRICE: u16 = 2208;
-pub const CMD_TOGGLE_HIDE_EXPENSIVE_STUDENT: u16 = 2209;
 pub const CMD_TOGGLE_PRICE_GROUP_NAMES: u16 = 2210;
 pub const CMD_THEME_LIGHT: u16 = 2211;
 pub const CMD_THEME_DARK: u16 = 2212;
 pub const CMD_THEME_BLUE: u16 = 2213;
 pub const CMD_THEME_GREEN: u16 = 2214;
 pub const CMD_THEME_AMBER: u16 = 2220;
-pub const CMD_THEME_BARBIE: u16 = 2221;
+pub const CMD_THEME_GRANDPA: u16 = 2222;
+pub const CMD_THEME_GRANDMA: u16 = 2223;
 pub const CMD_TOGGLE_STARTUP: u16 = 2215;
 pub const CMD_TOGGLE_LOGGING: u16 = 2216;
 pub const CMD_OPEN_APPDATA_DIR: u16 = 2217;
@@ -408,12 +408,6 @@ fn build_context_menu(state: &AppState) -> HMENU {
         );
         append_menu_item(
             theme_menu,
-            CMD_THEME_BARBIE,
-            "Barbie",
-            state.settings.theme == "barbie",
-        );
-        append_menu_item(
-            theme_menu,
             CMD_THEME_TELETEXT1,
             "Teletext 1",
             state.settings.theme == "teletext1",
@@ -423,6 +417,18 @@ fn build_context_menu(state: &AppState) -> HMENU {
             CMD_THEME_TELETEXT2,
             "Teletext 2",
             state.settings.theme == "teletext2",
+        );
+        append_menu_item(
+            theme_menu,
+            CMD_THEME_GRANDPA,
+            "Grandpa",
+            state.settings.theme == "grandpa",
+        );
+        append_menu_item(
+            theme_menu,
+            CMD_THEME_GRANDMA,
+            "Grandma",
+            state.settings.theme == "grandma",
         );
         let custom_themes = crate::custom_themes::custom_themes();
         if !custom_themes.is_empty() {
@@ -570,12 +576,6 @@ fn build_context_menu(state: &AppState) -> HMENU {
             MF_POPUP,
             price_menu.0 as usize,
             PCWSTR(to_wstring("Price groups").as_ptr()),
-        );
-        append_menu_toggle(
-            menu,
-            CMD_TOGGLE_HIDE_EXPENSIVE_STUDENT,
-            "Hide expensive student meals",
-            state.settings.hide_expensive_student_meals,
         );
         append_menu_toggle(
             menu,

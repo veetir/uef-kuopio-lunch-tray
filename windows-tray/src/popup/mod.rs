@@ -9,7 +9,7 @@ use crate::favorites;
 use crate::format::{
     date_and_time_parts, menu_group_title_for_restaurant, menu_heading_for_restaurant,
     menu_price_for_restaurant_display, normalize_text, price_values_for_sort,
-    split_component_suffix, student_price_for_group, text_for, PriceGroups,
+    split_component_suffix, text_for, PriceGroups,
 };
 use crate::model::{MenuGroup, MenuGroupPresentation, RecipeInfo, TodayMenu};
 use crate::restaurant::{available_restaurants, Provider, Restaurant};
@@ -21,16 +21,19 @@ use std::sync::{Arc, Mutex, OnceLock};
 use time::OffsetDateTime;
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{COLORREF, HWND, POINT, RECT};
+use windows::Win32::Graphics::Dwm::{
+    DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE, DWMWA_WINDOW_CORNER_PREFERENCE,
+    DWMWCP_DONOTROUND,
+};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW, CreateSolidBrush,
-    DeleteDC, DeleteObject, EndPaint, FillRect, GetDeviceCaps, GetMonitorInfoW,
-    GetTextExtentPoint32W, GetTextMetricsW, IntersectClipRect, InvalidateRect, MonitorFromPoint,
-    RestoreDC, SaveDC, SelectObject, SetBkMode, SetTextColor, TextOutW, HDC, HFONT, LOGPIXELSY,
-    MONITORINFO, MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, SRCCOPY, TEXTMETRICW, TRANSPARENT,
+    GetMonitorInfoW, InvalidateRect, MonitorFromPoint, HDC, HFONT, LOGPIXELSY, MONITORINFO,
+    MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, SRCCOPY, TEXTMETRICW, TRANSPARENT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetClientRect, GetCursorPos, GetWindowRect, KillTimer, SetTimer, SetWindowPos, ShowWindow,
-    HWND_TOPMOST, SWP_SHOWWINDOW, SW_HIDE,
+    GetClientRect, GetCursorPos, GetWindowLongPtrW, GetWindowRect, KillTimer, SetTimer,
+    SetWindowLongPtrW, SetWindowPos, ShowWindow, GWL_STYLE, HWND_TOPMOST, SWP_FRAMECHANGED,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE, WS_CAPTION,
+    WS_THICKFRAME,
 };
 
 const PADDING_X: i32 = 12;
@@ -39,8 +42,8 @@ const LINE_GAP: i32 = 2;
 const ANCHOR_GAP: i32 = 0;
 const POPUP_MAX_WIDTH: i32 = 525;
 const POPUP_MIN_WIDTH: i32 = 320;
-const HEADER_HEIGHT: i32 = 46;
-const HEADER_BUTTON_SIZE: i32 = 30;
+const HEADER_HEIGHT: i32 = 44;
+const HEADER_BUTTON_SIZE: i32 = 26;
 const HEADER_BUTTON_GAP: i32 = 8;
 const LOADING_HINT_DELAY_MS: i64 = 250;
 const MAX_DYNAMIC_LINES: usize = 35;
@@ -51,12 +54,31 @@ const POPUP_CLOSE_ANIM_MS: i64 = 90;
 const POPUP_SWITCH_ANIM_MS: i64 = 120;
 const POPUP_INTERRUPTED_SWITCH_ANIM_MS: i64 = 80;
 const POPUP_SWITCH_OFFSET_PX: i32 = 6;
+/// Switches landing on top of each other before this many have stacked up scale
+/// the header title's dither from none to full.
+const POPUP_SWITCH_TURBULENCE_SATURATION: f32 = 4.0;
+/// Densest a trail marker may be drawn. Held well below solid so the trail always
+/// reads as a ghost of the active marker rather than competing with it for which
+/// restaurant you are actually on.
+const POPUP_MARKER_TRAIL_MAX_DITHER: f32 = 0.45;
+/// Longest comet trail the rail will draw. Kept short deliberately: two or three
+/// ghosts are enough to read as direction and speed, and every one past that is
+/// just more of the rail lit at once.
+const POPUP_MARKER_TRAIL_MAX_LEN: i32 = 3;
+/// The most of the rail the trail may occupy, as one part in this many. Without
+/// it a long spin lights a fixed number of markers regardless of how many there
+/// are, so the same trail that reads as a highlight on a long rail swallows a
+/// short one.
+const POPUP_MARKER_TRAIL_RAIL_FRACTION: i32 = 3;
 const HEADER_MARKER_DOT_SIZE: i32 = 5;
 const HEADER_MARKER_GAP: i32 = 8;
 const HEADER_MARKER_HIT_SIZE: i32 = 16;
+/// Distance from the header's bottom edge to the top of the marker rail. Sets
+/// how much room is left above the rail for the title to sit on the button
+/// midline instead of being pushed up off it.
+const HEADER_MARKER_BOTTOM_GAP: i32 = 9;
 const FAVORITES_RELOAD_INTERVAL_MS: i64 = 1000;
 const POPUP_DESIRED_SIZE_CACHE_LIMIT: usize = 32;
-const BULLET_PREFIX: &str = "▸ ";
 const HEADER_TITLE_BUTTON_MARGIN: i32 = 12;
 const RECIPE_DETAIL_PAD_X: i32 = 8;
 const RECIPE_DETAIL_PAD_Y: i32 = 5;
@@ -114,7 +136,6 @@ struct PopupLineBudgetKey {
     show_guest_price: bool,
     show_price_group_names: bool,
     lunch_item_display_mode: crate::settings::LunchItemDisplayMode,
-    hide_expensive_student_meals: bool,
     show_allergens: bool,
     highlight_gluten_free: bool,
     highlight_veg: bool,
@@ -152,6 +173,11 @@ struct PopupDesiredSizeKey {
     stale_date: bool,
     expanded_recipe_key: Option<RecipeExpansionKey>,
     enable_antell_restaurants: bool,
+    /// Index numbers append " (n/total)" to every title, which widens the
+    /// header and so the popup. Without it in the key, sizes cached before the
+    /// setting was toggled are served alongside freshly computed ones and the
+    /// popup resizes as the user scrolls between restaurants.
+    show_restaurant_index_numbers: bool,
     language: String,
     theme: String,
     widget_scale: String,
@@ -162,7 +188,6 @@ struct PopupDesiredSizeKey {
     show_guest_price: bool,
     show_price_group_names: bool,
     lunch_item_display_mode: crate::settings::LunchItemDisplayMode,
-    hide_expensive_student_meals: bool,
     show_allergens: bool,
     highlight_gluten_free: bool,
     highlight_veg: bool,
@@ -250,7 +275,9 @@ struct SelectableRow {
     left: i32,
     top: i32,
     bottom: i32,
-    boundaries: Vec<SelectableBoundary>,
+    /// Shared with the row-geometry cache in `render::text`, so an unchanged row
+    /// costs a refcount bump instead of a per-character measurement pass.
+    boundaries: Arc<Vec<SelectableBoundary>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -325,6 +352,7 @@ enum PopupAnimationKind {
         new_title: String,
         direction: i32,
         interrupted: bool,
+        turbulence: f32,
     },
 }
 
@@ -356,6 +384,7 @@ enum PopupAnimationFrame {
         direction: i32,
         progress: f32,
         interrupted: bool,
+        turbulence: f32,
     },
 }
 
@@ -395,11 +424,20 @@ struct HeaderButtonHover {
 }
 
 mod animation;
+mod border;
+mod brush;
+mod bullet;
 mod content;
+mod dither;
+mod gdi;
 mod interaction;
 mod layout;
 mod render;
 mod theme;
+
+use brush::fill_solid_rect;
+use gdi::*;
+use windows::Win32::Graphics::Gdi::{HBITMAP, HGDIOBJ};
 
 /// Shows the popup near the current cursor location.
 pub fn show_popup(hwnd: HWND, state: &AppState) {
@@ -543,13 +581,67 @@ pub fn collapse_recipe_detail_at(hwnd: HWND, x: i32, y: i32) -> bool {
 }
 
 /// Paint entry point used by the popup window procedure.
+/// Frees the popup's offscreen drawing surface.
+///
+/// Called when the popup window is destroyed. The surface is kept between paints,
+/// so without this it would outlive the window it was made for.
+pub fn release_back_buffer() {
+    render::release_back_buffer();
+}
+
 pub fn paint_popup(hwnd: HWND, state: &AppState) {
     render::paint_popup(hwnd, state);
 }
 
 pub fn request_repaint(hwnd: HWND) {
+    crate::perf::count_repaint_request();
     unsafe {
         InvalidateRect(hwnd, None, false);
+    }
+}
+
+/// Marks only a horizontal band of the popup for repaint.
+///
+/// Used where a change is known to be confined to a few rows -- dragging a text
+/// selection is the one hot case -- so the paint can clip to those rows and blit
+/// only them instead of redrawing all 650x640 pixels for one character.
+///
+/// Full width rather than a tight rectangle on purpose: a row's highlight, its
+/// inline suffixes, and its price column all live on the same line, and a band is
+/// impossible to get horizontally wrong.
+///
+/// Only sound because the back buffer is kept between paints, so pixels outside
+/// the band still hold the last frame. Anything that changes content, theme,
+/// size, or DPI must keep using `request_repaint`.
+pub fn request_repaint_band(hwnd: HWND, top: i32, bottom: i32) {
+    if bottom <= top {
+        request_repaint(hwnd);
+        return;
+    }
+    // The width comes from the window rather than a large sentinel. GDI region
+    // coordinates are not the full `i32` range, and an out-of-range rectangle is
+    // rejected rather than clipped: an earlier version passed `i32::MAX / 2` and
+    // invalidated nothing at all, so the popup took two paints in fifteen seconds
+    // of dragging and the highlight only appeared on mouse-up.
+    let mut client = RECT::default();
+    unsafe {
+        if GetClientRect(hwnd, &mut client).is_err() {
+            request_repaint(hwnd);
+            return;
+        }
+    }
+    let band = RECT {
+        left: client.left,
+        top: top.max(client.top),
+        right: client.right,
+        bottom: bottom.min(client.bottom),
+    };
+    if band.bottom <= band.top || band.right <= band.left {
+        return;
+    }
+    crate::perf::count_repaint_request();
+    unsafe {
+        InvalidateRect(hwnd, Some(&band), false);
     }
 }
 

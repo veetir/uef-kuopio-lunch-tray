@@ -20,11 +20,12 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent, TME_LEAVE, TR
 use windows::Win32::UI::WindowsAndMessaging::{
     DefWindowProcW, DestroyWindow, GetCursorPos, GetWindowLongPtrW, GetWindowRect, KillTimer,
     LoadCursorW, MessageBoxW, PostQuitMessage, RegisterClassExW, SetCursor, SetForegroundWindow,
-    SetTimer, SetWindowLongPtrW, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, IDC_ARROW,
-    IDC_HAND, IDYES, MB_DEFBUTTON2, MB_ICONINFORMATION, MB_ICONWARNING, MB_YESNO, WM_ACTIVATE,
-    WM_APP, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_KEYDOWN,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_PAINT,
-    WM_RBUTTONUP, WM_SETTINGCHANGE, WM_THEMECHANGED, WM_TIMER, WNDCLASSEXW,
+    SetTimer, SetWindowLongPtrW, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, GWL_STYLE,
+    HTCLIENT, IDC_ARROW, IDC_HAND, IDYES, MB_DEFBUTTON2, MB_ICONINFORMATION, MB_ICONWARNING,
+    MB_YESNO, WM_ACTIVATE, WM_APP, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_DPICHANGED,
+    WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONUP, WM_MOUSEMOVE,
+    WM_MOUSEWHEEL, WM_NCCALCSIZE, WM_NCCREATE, WM_NCHITTEST, WM_PAINT, WM_RBUTTONUP,
+    WM_SETTINGCHANGE, WM_THEMECHANGED, WM_TIMER, WNDCLASSEXW, WS_CAPTION,
 };
 
 pub const TRAY_WND_CLASS: &str = "CompassLunchTrayWindow";
@@ -285,6 +286,12 @@ pub unsafe extern "system" fn tray_wndproc(
 }
 
 /// Window procedure for the visible popup window.
+/// True for the tray popup, false for the captioned window `--no-tray` creates.
+unsafe fn popup_is_frameless(hwnd: HWND) -> bool {
+    let style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
+    style & WS_CAPTION.0 == 0
+}
+
 pub unsafe extern "system" fn popup_wndproc(
     hwnd: HWND,
     msg: u32,
@@ -307,6 +314,14 @@ pub unsafe extern "system" fn popup_wndproc(
             LRESULT(0)
         }
         WM_ERASEBKGND => LRESULT(1),
+        // The popup carries WS_THICKFRAME only so DWM gives it a real window
+        // shadow. Claiming the whole window rect as client area keeps the frame
+        // itself invisible, and reporting every hit as client suppresses the
+        // resize edges that style would otherwise put around the popup. Skipped
+        // in `--no-tray` mode, where the popup is a normal captioned window and
+        // both overrides would strip its title bar.
+        WM_NCCALCSIZE if wparam.0 != 0 && popup_is_frameless(hwnd) => LRESULT(0),
+        WM_NCHITTEST if popup_is_frameless(hwnd) => LRESULT(HTCLIENT as isize),
         WM_DPICHANGED => {
             let app = app_from_hwnd(hwnd);
             if !app.is_null() {
@@ -370,6 +385,26 @@ pub unsafe extern "system" fn popup_wndproc(
             }
             let app = &*(app);
             let key = wparam.0 as u32;
+            #[cfg(feature = "perf-counters")]
+            if key == 0x7A {
+                crate::perf::reset();
+                log_line("popup performance counters reset");
+                return LRESULT(0);
+            }
+            #[cfg(feature = "perf-counters")]
+            if key == 0x7B {
+                match crate::perf::append_report(crate::perf::current_gdi_batch_limit()) {
+                    Ok(path) => log_line(&format!(
+                        "popup performance counters written to {}",
+                        path.display()
+                    )),
+                    Err(error) => log_line(&format!(
+                        "failed to write popup performance counters: {error}"
+                    )),
+                }
+                return LRESULT(0);
+            }
+            crate::perf::count_key_down();
             match key {
                 0x1B => {
                     popup::cancel_text_selection(hwnd);
@@ -398,6 +433,7 @@ pub unsafe extern "system" fn popup_wndproc(
             LRESULT(0)
         }
         WM_MOUSEMOVE => {
+            let _mouse_move_guard = crate::perf::begin_mouse_move();
             let x = (lparam.0 as u32 & 0xFFFF) as i16 as i32;
             let y = ((lparam.0 as u32 >> 16) & 0xFFFF) as i16 as i32;
             track_popup_mouse_leave(hwnd);
@@ -495,6 +531,7 @@ pub unsafe extern "system" fn popup_wndproc(
             LRESULT(0)
         }
         WM_MOUSEWHEEL => {
+            crate::perf::count_mouse_wheel();
             let app = app_from_hwnd(hwnd);
             if app.is_null() {
                 return LRESULT(0);
@@ -524,6 +561,7 @@ pub unsafe extern "system" fn popup_wndproc(
         }
         WM_TIMER => {
             if wparam.0 == popup::POPUP_ANIM_TIMER_ID {
+                crate::perf::count_animation_tick();
                 popup::tick_animation(hwnd);
                 return LRESULT(0);
             }
@@ -533,7 +571,10 @@ pub unsafe extern "system" fn popup_wndproc(
             }
             LRESULT(0)
         }
-        WM_DESTROY => LRESULT(0),
+        WM_DESTROY => {
+            popup::release_back_buffer();
+            LRESULT(0)
+        }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
 }
@@ -553,6 +594,7 @@ fn cycle_popup_restaurant(hwnd: HWND, app: &App, direction: i32) {
     popup::press_navigation_button(hwnd, direction);
     popup::clear_interaction_state(hwnd);
     app.cycle_restaurant(direction);
+    crate::perf::count_restaurant_switch();
     let _ = app.load_cache_for_current();
     app.maybe_refresh_on_selection();
     let new_state = app.snapshot();
@@ -600,6 +642,7 @@ fn select_popup_restaurant_index(hwnd: HWND, app: &App, index: usize) {
         return;
     }
 
+    crate::perf::count_restaurant_switch();
     let direction = if new_index > old_index { 1 } else { -1 };
     popup::resize_popup_keep_position(hwnd, &new_state);
     popup::begin_switch_animation(hwnd, &old_state, &new_state, direction);
@@ -672,9 +715,6 @@ fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
             app.set_lunch_item_display_mode(LunchItemDisplayMode::Compact);
             popup::invalidate_layout_budget_cache();
         }
-        tray::CMD_TOGGLE_HIDE_EXPENSIVE_STUDENT => {
-            app.toggle_hide_expensive_student_meals();
-        }
         tray::CMD_THEME_LIGHT => {
             app.set_theme("light");
             if popup_is_visible(app.hwnd_popup()) {
@@ -684,6 +724,20 @@ fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
         }
         tray::CMD_THEME_DARK => {
             app.set_theme("dark");
+            if popup_is_visible(app.hwnd_popup()) {
+                let state = app.snapshot();
+                popup::resize_popup_keep_position(app.hwnd_popup(), &state);
+            }
+        }
+        tray::CMD_THEME_GRANDPA => {
+            app.set_theme("grandpa");
+            if popup_is_visible(app.hwnd_popup()) {
+                let state = app.snapshot();
+                popup::resize_popup_keep_position(app.hwnd_popup(), &state);
+            }
+        }
+        tray::CMD_THEME_GRANDMA => {
+            app.set_theme("grandma");
             if popup_is_visible(app.hwnd_popup()) {
                 let state = app.snapshot();
                 popup::resize_popup_keep_position(app.hwnd_popup(), &state);
@@ -705,13 +759,6 @@ fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
         }
         tray::CMD_THEME_AMBER => {
             app.set_theme("amber");
-            if popup_is_visible(app.hwnd_popup()) {
-                let state = app.snapshot();
-                popup::resize_popup_keep_position(app.hwnd_popup(), &state);
-            }
-        }
-        tray::CMD_THEME_BARBIE => {
-            app.set_theme("barbie");
             if popup_is_visible(app.hwnd_popup()) {
                 let state = app.snapshot();
                 popup::resize_popup_keep_position(app.hwnd_popup(), &state);
