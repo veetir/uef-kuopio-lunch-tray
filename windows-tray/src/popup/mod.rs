@@ -60,10 +60,19 @@ const POPUP_SWITCH_OFFSET_PX: i32 = 6;
 /// Switches landing on top of each other before this many have stacked up scale
 /// the header title's dither from none to full.
 const POPUP_SWITCH_TURBULENCE_SATURATION: f32 = 4.0;
-/// Densest a trail marker may be drawn. Held below solid so the trail always
+/// Densest a trail marker may be drawn. Held well below solid so the trail always
 /// reads as a ghost of the active marker rather than competing with it for which
 /// restaurant you are actually on.
-const POPUP_MARKER_TRAIL_MAX_DITHER: f32 = 0.6;
+const POPUP_MARKER_TRAIL_MAX_DITHER: f32 = 0.45;
+/// Longest comet trail the rail will draw. Kept short deliberately: two or three
+/// ghosts are enough to read as direction and speed, and every one past that is
+/// just more of the rail lit at once.
+const POPUP_MARKER_TRAIL_MAX_LEN: i32 = 3;
+/// The most of the rail the trail may occupy, as one part in this many. Without
+/// it a long spin lights a fixed number of markers regardless of how many there
+/// are, so the same trail that reads as a highlight on a long rail swallows a
+/// short one.
+const POPUP_MARKER_TRAIL_RAIL_FRACTION: i32 = 3;
 const HEADER_MARKER_DOT_SIZE: i32 = 5;
 const HEADER_MARKER_GAP: i32 = 8;
 const HEADER_MARKER_HIT_SIZE: i32 = 16;

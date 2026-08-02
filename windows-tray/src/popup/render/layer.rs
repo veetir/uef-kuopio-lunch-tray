@@ -1537,7 +1537,7 @@ fn draw_header_marker_rail(
     }
 
     if let Some(trail) = trail {
-        for (offset, coverage) in trail_steps(trail) {
+        for (offset, coverage) in trail_steps(trail, hit_rects.len()) {
             let Some(index) = trail_index(active_index, offset, trail.direction, hit_rects.len())
             else {
                 break;
@@ -1558,11 +1558,18 @@ fn draw_header_marker_rail(
 /// at all, so the trail grows one marker at a time as the spin accelerates rather
 /// than every ghost brightening together. Stops at the first dark marker, since
 /// everything past it is darker still.
-fn trail_steps(trail: MarkerTrail) -> Vec<(i32, u32)> {
+///
+/// The length is capped both absolutely and as a fraction of the rail. The
+/// fraction is what stops a long spin lighting up most of the markers at once:
+/// the trail should read as a highlight moving along the rail, and once it covers
+/// much of the rail there is nothing left for it to move against.
+fn trail_steps(trail: MarkerTrail, marker_count: usize) -> Vec<(i32, u32)> {
+    let max_len = POPUP_MARKER_TRAIL_MAX_LEN
+        .min(marker_count as i32 / POPUP_MARKER_TRAIL_RAIL_FRACTION)
+        .max(0);
     let mut steps = Vec::new();
-    let saturation = POPUP_SWITCH_TURBULENCE_SATURATION;
-    for offset in 1..=(saturation as i32) {
-        let lit = (trail.strength * saturation - (offset - 1) as f32).clamp(0.0, 1.0);
+    for offset in 1..=max_len {
+        let lit = (trail.strength * max_len as f32 - (offset - 1) as f32).clamp(0.0, 1.0);
         let coverage = coverage_for_progress(lit * POPUP_MARKER_TRAIL_MAX_DITHER);
         if coverage == 0 {
             break;
@@ -2254,31 +2261,30 @@ mod tests {
         }
     }
 
+    /// The rail as it usually is: ten restaurants.
+    const RAIL: usize = 10;
+
     /// A deliberate single switch carries no turbulence, so the rail has to draw
     /// exactly as it always has. This is the common case and the one regression
     /// that would be most obvious.
     #[test]
     fn a_settled_rail_draws_no_ghosts() {
-        assert!(trail_steps(trail(0.0, 1)).is_empty());
+        assert!(trail_steps(trail(0.0, 1), RAIL).is_empty());
     }
 
     /// The trail lengthens a marker at a time as the spin accelerates, rather
     /// than every ghost brightening at once.
     #[test]
     fn the_trail_lengthens_with_turbulence() {
-        assert_eq!(trail_steps(trail(0.2, 1)).len(), 1);
-        assert!(trail_steps(trail(0.6, 1)).len() > 1);
-        assert_eq!(
-            trail_steps(trail(1.0, 1)).len(),
-            POPUP_SWITCH_TURBULENCE_SATURATION as usize
-        );
+        assert_eq!(trail_steps(trail(0.2, 1), RAIL).len(), 1);
+        assert!(trail_steps(trail(0.9, 1), RAIL).len() > 1);
     }
 
     /// Nearer ghosts are always denser than further ones, which is what makes the
     /// trail read as direction of travel rather than as scattered noise.
     #[test]
     fn ghosts_fade_with_distance() {
-        let steps = trail_steps(trail(1.0, 1));
+        let steps = trail_steps(trail(1.0, 1), RAIL);
         for pair in steps.windows(2) {
             assert!(
                 pair[0].1 >= pair[1].1,
@@ -2293,9 +2299,40 @@ mod tests {
     /// marker for which restaurant you are actually on.
     #[test]
     fn ghosts_never_reach_the_density_of_the_active_marker() {
-        for (_, coverage) in trail_steps(trail(1.0, 1)) {
+        for (_, coverage) in trail_steps(trail(1.0, 1), RAIL) {
             assert!(coverage < crate::popup::dither::DITHER_STEPS);
         }
+    }
+
+    /// However hard the rail is spun, the trail stays within a third of it.
+    /// Without this it lights a fixed number of markers regardless of how many
+    /// exist, and a long spin reads as the rail coming on rather than as motion
+    /// along it — which is exactly how the first version looked.
+    #[test]
+    fn a_hard_spin_keeps_the_trail_within_a_third_of_the_rail() {
+        for count in 2..=12 {
+            let ghosts = trail_steps(trail(1.0, 1), count).len();
+            assert!(
+                ghosts * POPUP_MARKER_TRAIL_RAIL_FRACTION as usize <= count,
+                "{ghosts} ghosts on a rail of {count}"
+            );
+        }
+    }
+
+    /// And never more than three however long the rail gets.
+    #[test]
+    fn the_trail_has_an_absolute_ceiling() {
+        assert_eq!(
+            trail_steps(trail(1.0, 1), 200).len(),
+            POPUP_MARKER_TRAIL_MAX_LEN as usize
+        );
+    }
+
+    /// A rail too short to spare markers gets no trail at all: on three markers
+    /// even one ghost would light two thirds of the rail.
+    #[test]
+    fn a_short_rail_gets_no_trail() {
+        assert!(trail_steps(trail(1.0, 1), 2).is_empty());
     }
 
     #[test]
