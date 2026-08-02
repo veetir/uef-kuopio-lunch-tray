@@ -40,6 +40,15 @@ describe("restaurant catalogue", () => {
     );
   });
 
+  it("publishes restaurant website links", () => {
+    expect(publicRestaurant("canthia")?.websiteUrl).toBe(
+      "https://www.compass-group.fi/ravintolat-ja-ruokalistat/foodco/kaupungit/kuopio/ita-suomen-yliopistocanthia/"
+    );
+    expect(publicRestaurant("tietoteknia")?.websiteUrl).toBe(
+      "https://www.compass-group.fi/ravintolat-ja-ruokalistat/foodco/kaupungit/kuopio/tietoteknia/"
+    );
+  });
+
   it("keeps cache generations ordered and unique", () => {
     const revisions = cacheRevisions();
     expect(revisions[0]).toBeTruthy();
