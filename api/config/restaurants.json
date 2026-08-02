@@ -1,5 +1,5 @@
 {
-  "revision": "2026-07-27",
+  "revision": "2026-08-02",
   "cacheRevision": "2026-07-29.1",
   "cacheFallbackRevisions": ["2026-07-28.1", "2026-07-27"],
   "restaurants": [
@@ -52,7 +52,7 @@
         "fi": "Canthia",
         "en": "Canthia"
       },
-      "websiteUrl": null,
+      "websiteUrl": "https://www.compass-group.fi/ravintolat-ja-ruokalistat/foodco/kaupungit/kuopio/ita-suomen-yliopistocanthia/",
       "languages": ["fi", "en"],
       "closures": [
         {
@@ -73,7 +73,7 @@
         "fi": "Tietoteknia",
         "en": "Tietoteknia"
       },
-      "websiteUrl": null,
+      "websiteUrl": "https://www.compass-group.fi/ravintolat-ja-ruokalistat/foodco/kaupungit/kuopio/tietoteknia/",
       "languages": ["fi", "en"],
       "closures": [],
       "source": {
