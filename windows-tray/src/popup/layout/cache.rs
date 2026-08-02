@@ -248,7 +248,14 @@ fn max_today_cached_layout_budget(
             Err(_) => continue,
         };
 
-        if !parsed.ok || !is_today_valid_cache(&parsed, restaurant, settings, today_key) {
+        // Stale-dated caches are deliberately measured too. They are still
+        // rendered when the user switches to them, just with a stale notice and
+        // a stale date row prepended, so skipping them here left the popup
+        // sized for the fresh restaurants only and it resized on the stale one.
+        // Error payloads stay out: their text is network dependent, so letting
+        // them into the budget would make the size unstable for a different
+        // reason.
+        if !parsed.ok {
             continue;
         }
 
@@ -285,15 +292,6 @@ fn max_today_cached_layout_budget(
         max_content_width_px,
         max_extra_height_px,
     }
-}
-
-fn is_today_valid_cache(
-    parsed: &api::FetchOutput,
-    _restaurant: Restaurant,
-    _settings: &Settings,
-    today_key: &str,
-) -> bool {
-    !parsed.payload_date.is_empty() && parsed.payload_date == today_key
 }
 
 fn popup_state_from_cached_result(
@@ -342,10 +340,53 @@ fn local_today_key() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::desired_size_cache_key;
-    use crate::restaurant::Provider;
+    use super::{desired_size_cache_key, popup_state_from_cached_result};
+    use crate::restaurant::{restaurant_for_code, Provider};
     use crate::settings::Settings;
     use crate::state::{AppState, FetchStatus};
+
+    fn cached_output(payload_date: &str) -> crate::api::FetchOutput {
+        crate::api::FetchOutput {
+            ok: true,
+            is_stale: false,
+            error_message: String::new(),
+            today_menu: None,
+            restaurant_name: "Canthia".to_string(),
+            restaurant_url: String::new(),
+            provider: Provider::LunchApi,
+            raw_json: String::new(),
+            payload_date: payload_date.to_string(),
+        }
+    }
+
+    /// The layout budget scans every restaurant's cache so the popup keeps one
+    /// size while switching. Yesterday's caches are scanned too, and they render
+    /// a stale notice plus a stale date row, so the candidate state measured for
+    /// them has to carry `stale_date`. It did not reach this function at all
+    /// while a date guard skipped stale caches, and the popup grew a couple of
+    /// lines on whichever restaurant had gone stale.
+    #[test]
+    fn cached_budget_state_marks_stale_dated_payloads() {
+        let settings = Settings::default();
+        let restaurant = restaurant_for_code("canthia", settings.enable_antell_restaurants);
+
+        let fresh = popup_state_from_cached_result(
+            &settings,
+            restaurant,
+            &cached_output("2026-08-02"),
+            "2026-08-02",
+        );
+        assert!(!fresh.stale_date);
+
+        let stale = popup_state_from_cached_result(
+            &settings,
+            restaurant,
+            &cached_output("2026-08-01"),
+            "2026-08-02",
+        );
+        assert!(stale.stale_date);
+        assert_eq!(stale.status, FetchStatus::Ok);
+    }
 
     #[test]
     fn desired_size_key_tracks_status_and_restaurant_line_inputs() {
