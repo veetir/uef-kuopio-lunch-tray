@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import contractMenu from "./fixtures/contract-menu.json";
 import huomenFixture from "./fixtures/huomen.json";
 import antellRound from "./fixtures/antell-round-friday-snippet.html?raw";
+import antellHours from "./fixtures/antell-hours-snippet.html?raw";
+import huomenHours from "./fixtures/huomen-hours-snippet.html?raw";
 import pranzeria from "./fixtures/pranzeria-snippet.html?raw";
 import snellari from "./fixtures/snellari.rss?raw";
 import { parseAntell } from "../src/providers/antell";
@@ -143,11 +145,12 @@ describe("provider normalization", () => {
   it("parses Huomen items and infers general offers from its JSON", () => {
     const parsed = parseHuomen(
       JSON.stringify(huomenFixture),
-      "",
+      huomenHours,
       "fi",
       "2026-02-23"
     );
     expect(parsed.status).toBe("serving");
+    expect(parsed.hours).toBe("10:30–13:00");
     expect(parsed.offers).toEqual([
       {
         id: "soup-lunch",
@@ -166,12 +169,13 @@ describe("provider normalization", () => {
   it("parses Antell group prices into staff/guest and student audiences", () => {
     const parsed = parseAntell(
       antellRound,
-      "",
+      antellHours,
       "fi",
       "2026-02-20",
       "friday"
     );
     expect(parsed.status).toBe("serving");
+    expect(parsed.hours).toBe("10:30–13:00");
     expect(parsed.groups[0]?.prices).toEqual([
       {
         amount: "12.50",
@@ -184,6 +188,33 @@ describe("provider normalization", () => {
         audiences: ["student"]
       }
     ]);
+  });
+
+  it("parses Highway lunch hours independently of restaurant hours", () => {
+    const detailHtml = antellHours.replace(
+      "10.30 &#8211; 13.00",
+      "10.30 &#8211; 12.30"
+    );
+    const parsed = parseAntell(
+      antellRound,
+      detailHtml,
+      "fi",
+      "2026-02-20",
+      "friday"
+    );
+    expect(parsed.hours).toBe("10:30–12:30");
+  });
+
+  it("does not mistake later café hours for missing Antell lunch hours", () => {
+    const parsed = parseAntell(
+      antellRound,
+      `<h3 class="title">Lounas</h3><p>Ei ilmoitettu</p>
+       <h3 class="title">Kahvila</h3><span class="hours">8.00–14.00</span>`,
+      "fi",
+      "2026-02-20",
+      "friday"
+    );
+    expect(parsed.hours).toBeUndefined();
   });
 
   it("parses Sorrento dishes with standalone diet tags", () => {

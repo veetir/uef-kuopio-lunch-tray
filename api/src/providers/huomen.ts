@@ -1,4 +1,4 @@
-import { normalizeText, stableResponseId } from "../normalize";
+import { htmlText, normalizeText, stableResponseId } from "../normalize";
 import type {
   GeneralOffer,
   Language,
@@ -15,6 +15,7 @@ import {
   normalizeOfferAmount,
   type OfferDefinition
 } from "./offers";
+import { normalizeHoursRange } from "./hours";
 
 const huomenOffers: OfferDefinition[] = [
   {
@@ -104,10 +105,12 @@ export function parseHuomen(
   if (!offers.length) {
     offers = inferHuomenOffers(lunches, contentLanguage);
   }
+  const hours = extractHuomenLunchHours(pageHtml);
 
   return {
     contentLanguage,
     status: items.length ? "serving" : "noMenu",
+    ...(hours ? { hours } : {}),
     offers,
     groups: items.length
       ? [
@@ -120,6 +123,13 @@ export function parseHuomen(
         ]
       : []
   };
+}
+
+function extractHuomenLunchHours(html: string): string | undefined {
+  const match = htmlText(html).match(
+    /\b(?:lounas|lunch)\s*(?:klo|at)?\s*(\d{1,2}[.:]\d{2}\s*[-–—]\s*\d{1,2}[.:]\d{2})/i
+  );
+  return match?.[1] ? normalizeHoursRange(match[1]) : undefined;
 }
 
 function huomenItem(
