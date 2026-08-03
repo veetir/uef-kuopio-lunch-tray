@@ -4,7 +4,6 @@
 //! hierarchical context menu command IDs used by the window procedure.
 
 use crate::log::log_line;
-use crate::restaurant::available_restaurants;
 use crate::settings::LunchItemDisplayMode;
 use crate::state::AppState;
 use crate::util::to_wstring;
@@ -26,16 +25,6 @@ use windows::Win32::UI::WindowsAndMessaging::{
     TPM_RIGHTBUTTON, WM_NULL,
 };
 
-pub const CMD_RESTAURANT_0437: u16 = 2001;
-pub const CMD_RESTAURANT_0439: u16 = 2002;
-pub const CMD_RESTAURANT_0436: u16 = 2003;
-pub const CMD_RESTAURANT_SNELLARI_RSS: u16 = 2004;
-pub const CMD_RESTAURANT_HUOMEN_BIOTEKNIA: u16 = 2005;
-pub const CMD_RESTAURANT_ANTELL_HIGHWAY: u16 = 2006;
-pub const CMD_RESTAURANT_ANTELL_ROUND: u16 = 2007;
-pub const CMD_RESTAURANT_MEDITEKNIA: u16 = 2008;
-pub const CMD_RESTAURANT_PRANZERIA: u16 = 2009;
-pub const CMD_RESTAURANT_CAARI: u16 = 2010;
 pub const CMD_LANGUAGE_FI: u16 = 2101;
 pub const CMD_LANGUAGE_EN: u16 = 2102;
 pub const CMD_TOGGLE_SHOW_PRICES: u16 = 2201;
@@ -91,40 +80,6 @@ struct TrayIconSet {
 }
 
 static TRAY_ICONS: OnceLock<TrayIconSet> = OnceLock::new();
-
-/// Maps a restaurant code to its context-menu command identifier.
-pub fn restaurant_command_id(code: &str) -> Option<u16> {
-    match code {
-        "snellmania" => Some(CMD_RESTAURANT_0437),
-        "cafe-snellari" => Some(CMD_RESTAURANT_SNELLARI_RSS),
-        "canthia" => Some(CMD_RESTAURANT_0436),
-        "tietoteknia" => Some(CMD_RESTAURANT_0439),
-        "hyva-huomen-bioteknia" => Some(CMD_RESTAURANT_HUOMEN_BIOTEKNIA),
-        "antell-round" => Some(CMD_RESTAURANT_ANTELL_ROUND),
-        "antell-highway" => Some(CMD_RESTAURANT_ANTELL_HIGHWAY),
-        "mediteknia" => Some(CMD_RESTAURANT_MEDITEKNIA),
-        "pranzeria-sorrento" => Some(CMD_RESTAURANT_PRANZERIA),
-        "caari" => Some(CMD_RESTAURANT_CAARI),
-        _ => None,
-    }
-}
-
-/// Maps a restaurant command identifier back to its stable restaurant code.
-pub fn restaurant_code_for_command(cmd: u16) -> Option<&'static str> {
-    match cmd {
-        CMD_RESTAURANT_0437 => Some("snellmania"),
-        CMD_RESTAURANT_SNELLARI_RSS => Some("cafe-snellari"),
-        CMD_RESTAURANT_0436 => Some("canthia"),
-        CMD_RESTAURANT_0439 => Some("tietoteknia"),
-        CMD_RESTAURANT_HUOMEN_BIOTEKNIA => Some("hyva-huomen-bioteknia"),
-        CMD_RESTAURANT_ANTELL_ROUND => Some("antell-round"),
-        CMD_RESTAURANT_ANTELL_HIGHWAY => Some("antell-highway"),
-        CMD_RESTAURANT_MEDITEKNIA => Some("mediteknia"),
-        CMD_RESTAURANT_PRANZERIA => Some("pranzeria-sorrento"),
-        CMD_RESTAURANT_CAARI => Some("caari"),
-        _ => None,
-    }
-}
 
 /// Adds the notification area icon for the running app instance.
 pub fn add_tray_icon(hwnd: HWND, callback_message: u32) -> anyhow::Result<()> {
@@ -334,24 +289,6 @@ pub fn show_context_menu(hwnd: HWND, state: &AppState) {
 fn build_context_menu(state: &AppState) -> HMENU {
     unsafe {
         let menu = CreatePopupMenu().expect("CreatePopupMenu");
-
-        let restaurant_menu = CreatePopupMenu().expect("CreatePopupMenu");
-        for restaurant in available_restaurants(state.settings.enable_antell_restaurants) {
-            if let Some(cmd) = restaurant_command_id(restaurant.code) {
-                append_menu_item(
-                    restaurant_menu,
-                    cmd,
-                    restaurant.name,
-                    state.settings.restaurant_code == restaurant.code,
-                );
-            }
-        }
-        let _ = AppendMenuW(
-            menu,
-            MF_POPUP,
-            restaurant_menu.0 as usize,
-            PCWSTR(to_wstring("Default restaurant").as_ptr()),
-        );
 
         let language_menu = CreatePopupMenu().expect("CreatePopupMenu");
         append_menu_item(

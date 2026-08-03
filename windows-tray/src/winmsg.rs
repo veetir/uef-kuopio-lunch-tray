@@ -649,18 +649,6 @@ fn select_popup_restaurant_index(hwnd: HWND, app: &App, index: usize) {
 }
 
 fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
-    if let Some(code) = tray::restaurant_code_for_command(cmd) {
-        app.set_restaurant(code);
-        popup::clear_interaction_state(app.hwnd_popup());
-        let _ = app.load_cache_for_current();
-        app.maybe_refresh_on_selection();
-        if popup_is_visible(app.hwnd_popup()) {
-            let state = app.snapshot();
-            popup::resize_popup_keep_position(app.hwnd_popup(), &state);
-        }
-        return;
-    }
-
     match cmd {
         tray::CMD_LANGUAGE_FI => {
             app.set_language("fi");
