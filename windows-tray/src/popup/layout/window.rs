@@ -261,7 +261,7 @@ pub(in crate::popup) fn header_title_y(
 pub(in crate::popup) fn header_title(state: &AppState) -> String {
     let list = available_restaurants(state.settings.enable_antell_restaurants);
     if list.is_empty() {
-        return "Compass Lunch".to_string();
+        return "LunchTray".to_string();
     }
 
     let index = list
@@ -278,7 +278,7 @@ pub(in crate::popup) fn header_title(state: &AppState) -> String {
 fn max_header_title_width(hdc: HDC, font: HFONT, settings: &Settings) -> i32 {
     let list = available_restaurants(settings.enable_antell_restaurants);
     if list.is_empty() {
-        return text_width_with_font(hdc, font, "Compass Lunch");
+        return text_width_with_font(hdc, font, "LunchTray");
     }
     let mut max_width = 0;
     for (idx, restaurant) in list.iter().enumerate() {

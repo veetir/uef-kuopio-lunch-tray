@@ -7,14 +7,14 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$cacheDir = Join-Path $env:LOCALAPPDATA 'compass-lunch\cache'
+$cacheDir = Join-Path $env:LOCALAPPDATA 'LunchTray\cache'
 New-Item -ItemType Directory -Force -Path $cacheDir | Out-Null
 $mockModePath = Join-Path $cacheDir 'mock-cache-mode'
 
 if ($DisableMockMode) {
   Remove-Item -Force -ErrorAction SilentlyContinue $mockModePath
   Write-Host "Removed $mockModePath"
-  Write-Host "Restart compass-lunch.exe or refresh manually to return to live data."
+  Write-Host "Restart LunchTray.exe or refresh manually to return to live data."
   exit 0
 }
 
@@ -274,5 +274,5 @@ foreach ($language in $Languages) {
 Write-Host ""
 Write-Host "Mock cache date: $Date"
 Write-Host "Mock cache mode: enabled ($mockModePath)"
-Write-Host "Restart compass-lunch.exe to load these files from disk."
+Write-Host "Restart LunchTray.exe to load these files from disk."
 Write-Host "Run this script with -DisableMockMode to re-enable live API refreshes."

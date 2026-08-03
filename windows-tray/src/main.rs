@@ -1,28 +1,28 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
 #[cfg(not(all(feature = "bench", not(windows))))]
-use compass_lunch::api::{self, FetchContext, FetchMode, FetchReason};
+use lunch_tray::api::{self, FetchContext, FetchMode, FetchReason};
 #[cfg(not(all(feature = "bench", not(windows))))]
-use compass_lunch::app::App;
+use lunch_tray::app::App;
 #[cfg(not(all(feature = "bench", not(windows))))]
-use compass_lunch::format::{
+use lunch_tray::format::{
     date_and_time_line, menu_heading_for_restaurant, normalize_text, split_component_suffix,
     text_for, PriceGroups,
 };
 #[cfg(not(all(feature = "bench", not(windows))))]
-use compass_lunch::log;
+use lunch_tray::log;
 #[cfg(not(all(feature = "bench", not(windows))))]
-use compass_lunch::popup;
+use lunch_tray::popup;
 #[cfg(not(all(feature = "bench", not(windows))))]
-use compass_lunch::restaurant::restaurant_for_code;
+use lunch_tray::restaurant::restaurant_for_code;
 #[cfg(not(all(feature = "bench", not(windows))))]
-use compass_lunch::settings::{load_settings, Settings};
+use lunch_tray::settings::{load_settings, Settings};
 #[cfg(not(all(feature = "bench", not(windows))))]
-use compass_lunch::tray;
+use lunch_tray::tray;
 #[cfg(not(all(feature = "bench", not(windows))))]
-use compass_lunch::util::to_wstring;
+use lunch_tray::util::to_wstring;
 #[cfg(not(all(feature = "bench", not(windows))))]
-use compass_lunch::winmsg;
+use lunch_tray::winmsg;
 #[cfg(not(all(feature = "bench", not(windows))))]
 use windows::core::PCWSTR;
 #[cfg(not(all(feature = "bench", not(windows))))]
@@ -51,6 +51,10 @@ fn main() -> anyhow::Result<()> {
     let no_tray = args.iter().any(|a| a == "--no-tray");
     #[cfg(all(feature = "perf-counters", target_os = "windows"))]
     let gdi_batch_limit = requested_gdi_batch_limit(&args);
+    // Both migrations run before anything reads app data, and both are no-ops
+    // after the first 1.4.3 launch. See `settings::migrate_legacy_data_dir`.
+    lunch_tray::settings::migrate_legacy_data_dir();
+    lunch_tray::startup::migrate_legacy_run_value();
     let boot_settings = load_settings();
     log::set_enabled(boot_settings.enable_logging);
 
@@ -85,7 +89,7 @@ fn main() -> anyhow::Result<()> {
         let tray_hwnd = CreateWindowExW(
             Default::default(),
             PCWSTR(tray_class.as_ptr()),
-            PCWSTR(to_wstring("Compass Lunch").as_ptr()),
+            PCWSTR(to_wstring("LunchTray").as_ptr()),
             WS_OVERLAPPEDWINDOW,
             0,
             0,
@@ -115,7 +119,7 @@ fn main() -> anyhow::Result<()> {
         let popup_hwnd = CreateWindowExW(
             popup_ex_style,
             PCWSTR(popup_class.as_ptr()),
-            PCWSTR(to_wstring("Compass Lunch").as_ptr()),
+            PCWSTR(to_wstring("LunchTray").as_ptr()),
             popup_style,
             0,
             0,

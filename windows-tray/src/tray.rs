@@ -139,7 +139,7 @@ pub fn add_tray_icon(hwnd: HWND, callback_message: u32) -> anyhow::Result<()> {
             hIcon: icon,
             ..Default::default()
         };
-        let tip = to_wstring("Compass Lunch");
+        let tip = to_wstring("LunchTray");
         let mut sz_tip = [0u16; 128];
         for (idx, ch) in tip.iter().enumerate().take(sz_tip.len() - 1) {
             sz_tip[idx] = *ch;

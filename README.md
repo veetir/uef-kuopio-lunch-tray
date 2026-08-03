@@ -19,7 +19,7 @@ See [Releases](https://github.com/veetir/uef-kuopio-lunch-tray/releases) for Win
 - Highlight favorite dishes
 - Run at startup
 
-![Compass Lunch screenshot](windows-tray/assets/windows.png)
+![LunchTray on Windows](windows-tray/assets/windows.png)
 
 ## macOS app
 

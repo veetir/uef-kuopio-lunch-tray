@@ -64,10 +64,51 @@ impl Default for Settings {
     }
 }
 
+/// Directory name used for app data through release 1.4.2, when the app was
+/// still called Compass Lunch. Kept only so [`migrate_legacy_data_dir`] can find
+/// an existing install's settings, favorites, and custom themes.
+const LEGACY_DATA_DIR: &str = "compass-lunch";
+const DATA_DIR: &str = "LunchTray";
+
 /// Returns the directory used for settings, logs, favorites, and related app data.
 pub fn settings_dir() -> PathBuf {
+    data_root().join(DATA_DIR)
+}
+
+fn data_root() -> PathBuf {
     let base = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| ".".to_string());
-    Path::new(&base).join("compass-lunch")
+    Path::new(&base).to_path_buf()
+}
+
+/// Moves a pre-1.4.3 `compass-lunch` data directory to the current name.
+///
+/// Called once at startup, after the single-instance guard is held so no other
+/// instance has the files open. A plain rename is tried first; if the directory
+/// cannot be moved (locked by an indexer, or spanning a junction) the individual
+/// payload files are copied instead, so a user never silently loses their
+/// favorites or custom themes. Doing nothing is always an acceptable outcome
+/// here — the app falls back to defaults — so every failure is swallowed.
+pub fn migrate_legacy_data_dir() {
+    let current = settings_dir();
+    if current.exists() {
+        return;
+    }
+    let legacy = data_root().join(LEGACY_DATA_DIR);
+    if !legacy.is_dir() {
+        return;
+    }
+    if fs::rename(&legacy, &current).is_ok() {
+        return;
+    }
+    if fs::create_dir_all(&current).is_err() {
+        return;
+    }
+    for name in ["settings.json", "favorites.json", "themes.json"] {
+        let from = legacy.join(name);
+        if from.is_file() {
+            let _ = fs::copy(&from, current.join(name));
+        }
+    }
 }
 
 /// Returns the full path of the persisted settings JSON file.

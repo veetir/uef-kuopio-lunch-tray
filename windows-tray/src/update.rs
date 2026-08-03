@@ -82,7 +82,7 @@ fn fetch_latest_windows_release() -> anyhow::Result<GithubRelease> {
         .header(ACCEPT, "application/vnd.github+json")
         .header(
             USER_AGENT,
-            format!("compass-lunch-windows/{}", current_app_version()),
+            format!("LunchTray-Windows/{}", current_app_version()),
         )
         .send()
         .context("request latest GitHub release")?

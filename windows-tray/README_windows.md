@@ -1,4 +1,4 @@
-# Compass Lunch for Windows
+# LunchTray for Windows
 
 Small system tray app for viewing UEF Kuopio campus lunch menus on Windows.
 
@@ -12,8 +12,8 @@ Small system tray app for viewing UEF Kuopio campus lunch menus on Windows.
 
 1. Open the project's **GitHub Releases** page:  
    `https://github.com/veetir/uef-kuopio-lunch-tray/releases`
-2. Download and extract the latest `compass-lunch-windows-x64` ZIP.
-3. Place `compass-lunch.exe` in any folder (for example `Downloads` or `Apps`).
+2. Download and extract the latest `LunchTray-windows-x64` ZIP.
+3. Place `LunchTray.exe` in any folder (for example `Downloads` or `Apps`).
 4. Double-click the `.exe` to start the app.
 
 After launch, the app runs in the system tray (notification area), usually near the clock.
@@ -37,19 +37,19 @@ Only do this for binaries downloaded from the official GitHub Releases page of t
 
 ## First-time setup
 
-Open settings from the tray menu and set:
+Open settings by right clicking anywhere on the app menu and set:
 
 - Language (`fi` or `en`)
-- Enabled restaurants
-- Favorite/default restaurant
 - Run at startup (optional)
+- Filter the price groups to the one most relevant to you
+- Try different themes
 
 ## Where your data is stored
 
-- Settings: `%LOCALAPPDATA%\compass-lunch\settings.json`
-- Cache: `%LOCALAPPDATA%\compass-lunch\cache\`
-- Favorites: `%LOCALAPPDATA%\compass-lunch\favorites.json`
-- Custom themes: `%LOCALAPPDATA%\compass-lunch\themes.json`
+- Settings: `%LOCALAPPDATA%\LunchTray\settings.json`
+- Cache: `%LOCALAPPDATA%\LunchTray\cache\`
+- Favorites: `%LOCALAPPDATA%\LunchTray\favorites.json`
+- Custom themes: `%LOCALAPPDATA%\LunchTray\themes.json`
 
 The `settings.json` key for the menu row layout is `lunch_item_display_mode`.
 Supported values are `"classic"`, `"standard"`, and `"compact"`. New installs
@@ -75,14 +75,14 @@ Each theme also chooses how its edges are drawn:
 To reset the app:
 
 1. Quit the app from the tray menu.
-2. Delete `%LOCALAPPDATA%\compass-lunch\settings.json`.
+2. Delete `%LOCALAPPDATA%\LunchTray\settings.json`.
 3. Start the app again.
 
 ## Troubleshooting
 
 - Tray icon not visible: click the hidden-icons arrow near the clock and pin the app.
 - Menus look outdated: use refresh from the tray menu.
-- Data looks broken or stale: quit the app, clear `%LOCALAPPDATA%\compass-lunch\cache\`, and start again.
+- Data looks broken or stale: quit the app, clear `%LOCALAPPDATA%\LunchTray\cache\`, and start again.
 
 ## Privacy and network
 
@@ -93,4 +93,4 @@ To reset the app:
 
 1. Quit the app from the tray menu.
 2. Delete the `.exe`.
-3. (Optional) Delete `%LOCALAPPDATA%\compass-lunch\` to remove settings and cache.
+3. (Optional) Delete `%LOCALAPPDATA%\LunchTray\` to remove settings and cache.

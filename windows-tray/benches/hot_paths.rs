@@ -1,8 +1,8 @@
-use compass_lunch::bench_support::{
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use lunch_tray::bench_support::{
     bench_build_line_count, bench_favorite_match_range_count, bench_snapshot_clone,
     bench_split_component_suffix, parse_provider_fixture, provider_fixtures, sample_app_state,
 };
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
 fn bench_parse_cached_payload(c: &mut Criterion) {
     let mut group = c.benchmark_group("parse_cached_payload");

@@ -28,8 +28,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_SETTINGCHANGE, WM_THEMECHANGED, WM_TIMER, WNDCLASSEXW, WS_CAPTION,
 };
 
-pub const TRAY_WND_CLASS: &str = "CompassLunchTrayWindow";
-pub const POPUP_WND_CLASS: &str = "CompassLunchPopupWindow";
+pub const TRAY_WND_CLASS: &str = "LunchTrayTrayWindow";
+pub const POPUP_WND_CLASS: &str = "LunchTrayPopupWindow";
 
 pub const WM_TRAY_CALLBACK: u32 = WM_APP + 1;
 pub const WM_APP_FETCH_COMPLETE: u32 = WM_APP + 2;
