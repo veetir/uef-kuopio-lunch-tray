@@ -230,7 +230,7 @@ describe("provider normalization", () => {
     expect(parsed.offers).toHaveLength(3);
     expect(parsed.offers[0]).toMatchObject({
       id: "salad-lunch",
-      description: "SALAATTI, KAHVI"
+      description: "Salaatti, kahvi"
     });
     expect(
       parsed.groups[0]?.items.find(item =>
@@ -242,5 +242,15 @@ describe("provider normalization", () => {
         item.name.startsWith("Gnocchi Burro")
       )?.tags
     ).toEqual(["V", "G"]);
+  });
+
+  it("preserves mixed-case Sorrento offer descriptions", () => {
+    const parsed = parseSorrento(
+      `<h6><strong>SALAATTILOUNAS 10.90 € (SIS. Salaatti, focaccia)</strong></h6>`,
+      "fi",
+      "2026-03-20"
+    );
+
+    expect(parsed.offers[0]?.description).toBe("Salaatti, focaccia");
   });
 });

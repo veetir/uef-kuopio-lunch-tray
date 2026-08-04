@@ -97,6 +97,21 @@ export function parseSorrento(
       itemFromText(line, stableResponseId("item", index))
     )
     .filter((candidate): candidate is LunchItem => candidate !== undefined);
+  const offers = extractGeneralOffers(
+    html,
+    contentLanguage,
+    sorrentoOffers
+  ).map(offer => ({
+    ...offer,
+    ...(offer.description
+      ? {
+          description: sentenceCaseAllCaps(
+            offer.description,
+            contentLanguage
+          )
+        }
+      : {})
+  }));
 
   return {
     contentLanguage,
@@ -106,7 +121,7 @@ export function parseSorrento(
         : "noMenu"
       : "noMenu",
     ...(hours ? { hours } : {}),
-    offers: extractGeneralOffers(html, contentLanguage, sorrentoOffers),
+    offers,
     groups: items.length
       ? [
           {
@@ -118,6 +133,27 @@ export function parseSorrento(
         ]
       : []
   };
+}
+
+function sentenceCaseAllCaps(value: string, language: Language): string {
+  const letters = Array.from(value).filter(
+    character =>
+      character.toLocaleLowerCase(language) !==
+      character.toLocaleUpperCase(language)
+  );
+  if (
+    !letters.length ||
+    letters.some(
+      character => character !== character.toLocaleUpperCase(language)
+    )
+  ) {
+    return value;
+  }
+
+  const lower = value.toLocaleLowerCase(language);
+  return lower.replace(/\p{L}/u, character =>
+    character.toLocaleUpperCase(language)
+  );
 }
 
 function extractSorrentoHours(html: string): string | undefined {
