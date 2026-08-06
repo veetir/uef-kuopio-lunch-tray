@@ -175,6 +175,9 @@ pub(super) fn measure_lines_layout(
             Line::Spacer => {
                 wrapped_line_count += 1;
             }
+            // Costs no height: a band is painted behind rows that are laid out
+            // anyway, so turning banding on never resizes the popup.
+            Line::GroupStart { .. } => {}
         }
     }
 

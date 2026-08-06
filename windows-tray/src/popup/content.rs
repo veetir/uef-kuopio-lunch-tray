@@ -154,6 +154,10 @@ fn append_menus(lines: &mut Vec<Line>, menu: &TodayMenu, options: MenuRenderOpti
             continue;
         }
 
+        lines.push(Line::GroupStart {
+            offer: group.presentation == MenuGroupPresentation::GeneralOffer,
+        });
+
         let category = render_group.category;
         if group.presentation == MenuGroupPresentation::GeneralOffer {
             lines.push(Line::Heading(render_group.heading));
@@ -824,6 +828,7 @@ mod tests {
         options.provider = Provider::LunchApi;
         options.restaurant_code = "hyva-huomen-bioteknia";
         append_menus(&mut lines, &menu, options);
+        let lines = content_lines(lines);
 
         assert!(matches!(&lines[0], Line::Heading(text) if text == "Lunch - 12,90 €"));
         assert!(matches!(&lines[1], Line::Text(text) if text == "Tofu soup"));
@@ -891,6 +896,7 @@ mod tests {
         let mut options = test_options(LunchItemDisplayMode::Standard);
         options.provider = Provider::LunchApi;
         append_menus(&mut lines, &menu, options);
+        let lines = content_lines(lines);
 
         let mains: Vec<&str> = lines
             .iter()
@@ -935,6 +941,7 @@ mod tests {
             &menu,
             test_options(LunchItemDisplayMode::Standard),
         );
+        let lines = content_lines(lines);
 
         assert!(matches!(
             &lines[0],
@@ -1001,6 +1008,7 @@ mod tests {
             test_options(LunchItemDisplayMode::Standard),
         );
         super::super::interaction::set_expanded_recipe_key_for_test(None);
+        let lines = content_lines(lines);
 
         let recipe_details: Vec<&Vec<RecipeDetailRow>> = lines
             .iter()
@@ -1015,6 +1023,75 @@ mod tests {
         assert!(matches!(&lines[0], Line::MenuItem { main, .. } if main == "Rice"));
         assert!(matches!(&lines[1], Line::MenuItem { main, .. } if main == "Rice"));
         assert!(matches!(&lines[2], Line::RecipeDetail { .. }));
+    }
+
+    #[test]
+    fn every_group_is_marked_once_in_every_layout() {
+        // The marker is what a theme hangs a rule on, and it has to appear in
+        // Compact too, which emits neither a heading nor a caption of its own.
+        for mode in [
+            LunchItemDisplayMode::Classic,
+            LunchItemDisplayMode::Standard,
+            LunchItemDisplayMode::Compact,
+        ] {
+            let menu = TodayMenu {
+                date_iso: "2026-06-24".to_string(),
+                lunch_time: "10:30-14:00".to_string(),
+                menus: vec![
+                    test_group("Main course", "3,10 €", "Soup"),
+                    test_group("Dessert", "1,80 €", "Cake"),
+                ],
+            };
+            let mut lines = Vec::new();
+            append_menus(&mut lines, &menu, test_options(mode));
+            let markers: Vec<bool> = lines
+                .iter()
+                .filter_map(|line| match line {
+                    Line::GroupStart { offer } => Some(*offer),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(markers, vec![false, false], "{mode:?} mismarked its groups");
+        }
+    }
+
+    #[test]
+    fn offer_groups_are_the_ones_marked_for_banding() {
+        // Sorrento and Hyva Huomen carry their prices as general offers, and
+        // each offer arrives as its own group. The band has to key off the
+        // presentation so consecutive offers fill as one block instead of
+        // alternating between them.
+        let mut offer = test_group("Lounasbuffet", "14,00 €", "Salaatti, pizza, pasta");
+        offer.presentation = MenuGroupPresentation::GeneralOffer;
+        let menu = TodayMenu {
+            date_iso: "2026-06-24".to_string(),
+            lunch_time: "10:30-14:00".to_string(),
+            menus: vec![offer, test_group("Main course", "3,10 €", "Soup")],
+        };
+        let mut lines = Vec::new();
+        append_menus(
+            &mut lines,
+            &menu,
+            test_options(LunchItemDisplayMode::Classic),
+        );
+
+        let markers: Vec<bool> = lines
+            .iter()
+            .filter_map(|line| match line {
+                Line::GroupStart { offer } => Some(*offer),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(markers, vec![true, false]);
+    }
+
+    /// Drops the structural group markers. They carry no text, so every
+    /// assertion here is about the content lines around them.
+    fn content_lines(lines: Vec<Line>) -> Vec<Line> {
+        lines
+            .into_iter()
+            .filter(|line| !matches!(line, Line::GroupStart { .. }))
+            .collect()
     }
 
     fn render_test_lines(display_mode: LunchItemDisplayMode) -> Vec<Line> {
@@ -1033,7 +1110,7 @@ mod tests {
         };
         let mut lines = Vec::new();
         append_menus(&mut lines, &menu, test_options(display_mode));
-        lines
+        content_lines(lines)
     }
 
     fn all_groups_named(display_mode: LunchItemDisplayMode) -> MenuRenderOptions<'static> {

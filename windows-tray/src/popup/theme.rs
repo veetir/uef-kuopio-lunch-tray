@@ -34,6 +34,10 @@ pub(super) struct ThemePalette {
     /// which is the *content* ink and only coincidentally worked on the header.
     pub(super) button_text_color: COLORREF,
     pub(super) divider_color: COLORREF,
+    /// Optional fill behind every second menu group. The only structural
+    /// vocabulary a theme has inside the content area — everything else there is
+    /// differentiated by ink colour and font size alone.
+    pub(super) group_band_color: Option<COLORREF>,
     /// Colour of a flat chrome edge. Built-in themes reuse their divider; custom
     /// themes may name their own via `border_color` in `themes.json`.
     pub(super) border_color: COLORREF,
@@ -243,6 +247,8 @@ pub(super) fn theme_palette(theme: &str) -> ThemePalette {
             button_bg_color: rgb(0, 90, 158),
             button_text_color: rgb(255, 255, 255),
             divider_color: rgb(200, 200, 200),
+            // Light+'s widget grey, the same token the recipe panel uses. The theme already says regions look like this.
+            group_band_color: Some(rgb(243, 243, 243)),
             border_color: rgb(200, 200, 200),
         },
         // Dracula. Every value is from the published palette: the syntax
@@ -263,6 +269,8 @@ pub(super) fn theme_palette(theme: &str) -> ThemePalette {
             button_bg_color: rgb(68, 71, 90),
             button_text_color: rgb(248, 248, 242),
             divider_color: rgb(25, 26, 33),
+            // Dracula's darker background, which is also this theme's header. Recessed rather than lit, so the block reads as chrome.
+            group_band_color: Some(rgb(33, 34, 44)),
             border_color: rgb(25, 26, 33),
         },
         "grandpa" => ThemePalette {
@@ -278,6 +286,13 @@ pub(super) fn theme_palette(theme: &str) -> ThemePalette {
             button_bg_color: rgb(184, 184, 184),
             button_text_color: rgb(0, 0, 0),
             divider_color: rgb(128, 128, 128),
+            // A shade toward this theme's own #808080 divider, not a white field.
+            // White was tried first and read as a hole punched in the page: it
+            // was the one band here that advanced instead of receding, at nearly
+            // twice the strength of any other, and white already means "recipe
+            // panel" in this theme. A Win95 field is only white when it is also
+            // sunken, and the band carries no edge.
+            group_band_color: Some(rgb(180, 180, 180)),
             border_color: rgb(128, 128, 128),
         },
         // Grandpa's structure in pink. The face is deliberately mid-toned
@@ -297,6 +312,8 @@ pub(super) fn theme_palette(theme: &str) -> ThemePalette {
             button_bg_color: rgb(223, 178, 203),
             button_text_color: rgb(52, 16, 38),
             divider_color: rgb(154, 112, 133),
+            // Grandpa's move in this theme's pink: one step lighter than the page.
+            group_band_color: Some(rgb(246, 214, 230)),
             border_color: rgb(154, 112, 133),
         },
         // Windows PowerShell console. The background is the exact value the
@@ -319,6 +336,8 @@ pub(super) fn theme_palette(theme: &str) -> ThemePalette {
             button_bg_color: rgb(11, 61, 128),
             button_text_color: rgb(238, 237, 240),
             divider_color: rgb(31, 77, 131),
+            // A shade below the page, the same relationship the recipe panel already has to it.
+            group_band_color: Some(rgb(1, 24, 58)),
             border_color: rgb(31, 77, 131),
         },
         // Green phosphor terminal. A monochrome CRT has exactly one hue, so
@@ -340,6 +359,7 @@ pub(super) fn theme_palette(theme: &str) -> ThemePalette {
             button_bg_color: rgb(11, 74, 11),
             button_text_color: rgb(0, 212, 0),
             divider_color: rgb(31, 110, 31),
+            group_band_color: None,
             border_color: rgb(31, 110, 31),
         },
         "amber" => ThemePalette {
@@ -356,6 +376,7 @@ pub(super) fn theme_palette(theme: &str) -> ThemePalette {
             button_bg_color: rgb(110, 63, 18),
             button_text_color: rgb(255, 180, 24),
             divider_color: rgb(110, 63, 18),
+            group_band_color: None,
             border_color: rgb(110, 63, 18),
         },
         "teletext1" => ThemePalette {
@@ -374,6 +395,8 @@ pub(super) fn theme_palette(theme: &str) -> ThemePalette {
             button_bg_color: rgb(48, 48, 208),
             button_text_color: rgb(255, 255, 255),
             divider_color: rgb(255, 0, 0),
+            // Teletext drew solid background blocks natively; a blue field behind a section is the format working as designed, not decoration added to it.
+            group_band_color: Some(rgb(0, 0, 180)),
             border_color: rgb(255, 0, 0),
         },
         "teletext2" => ThemePalette {
@@ -392,6 +415,8 @@ pub(super) fn theme_palette(theme: &str) -> ThemePalette {
             button_bg_color: rgb(0, 145, 0),
             button_text_color: rgb(255, 255, 255),
             divider_color: rgb(255, 0, 255),
+            // The same blue block, held darker so it does not fight the green header.
+            group_band_color: Some(rgb(0, 0, 128)),
             border_color: rgb(255, 0, 255),
         },
         _ => {
@@ -409,6 +434,7 @@ pub(super) fn theme_palette(theme: &str) -> ThemePalette {
                     button_bg_color: custom.button_bg_color,
                     button_text_color: custom.button_text_color,
                     divider_color: custom.divider_color,
+                    group_band_color: custom.group_band_color,
                     border_color: custom.divider_color,
                 }
             } else {
@@ -425,6 +451,7 @@ pub(super) fn theme_palette(theme: &str) -> ThemePalette {
                     button_bg_color: COLORREF(0x00202020),
                     button_text_color: COLORREF(0x00FFFFFF),
                     divider_color: COLORREF(0x00202020),
+                    group_band_color: None,
                     border_color: COLORREF(0x00202020),
                 }
             }
