@@ -248,7 +248,16 @@ pub unsafe extern "system" fn tray_wndproc(
                             popup::resize_popup_keep_position(app.hwnd_popup(), &state);
                         }
                     }
-                    FetchApplyOutcome::BackgroundSuccess => {}
+                    FetchApplyOutcome::BackgroundSuccess => {
+                        // A prefetch just rewrote another restaurant's cache
+                        // file, which is exactly the input the layout budget is
+                        // built from. Without this the budget keeps yesterday's
+                        // widths until some setting change happens to rebuild
+                        // it, and the popup is sized too narrow for whatever the
+                        // prefetch brought in. Deliberately no resize here: the
+                        // popup on screen is not the restaurant that changed.
+                        popup::invalidate_layout_budget_cache();
+                    }
                     FetchApplyOutcome::BackgroundFailure => {}
                 }
             }

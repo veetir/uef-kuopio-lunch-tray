@@ -502,11 +502,17 @@ fn build_context_menu(state: &AppState) -> HMENU {
             "Guest",
             state.settings.show_guest_price,
         );
-        append_menu_toggle(
+        // Standard and Compact draw the price inline ahead of the dish name and
+        // ignore this toggle, because the named form is wide enough to squeeze
+        // the dish name off the row. Greying it out says so, rather than leaving
+        // a switch that silently does nothing. The stored value is untouched, so
+        // it comes back when the user returns to Classic.
+        append_menu_toggle_enabled(
             price_menu,
             CMD_TOGGLE_PRICE_GROUP_NAMES,
             "Show names",
             state.settings.show_price_group_names,
+            state.settings.lunch_item_display_mode == LunchItemDisplayMode::Classic,
         );
         let _ = AppendMenuW(
             menu,

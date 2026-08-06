@@ -46,7 +46,7 @@ impl Default for Settings {
             show_prices: true,
             show_student_price: true,
             show_staff_price: true,
-            show_guest_price: true,
+            show_guest_price: false,
             show_price_group_names: false,
             lunch_item_display_mode: LunchItemDisplayMode::Classic,
             theme: "dark".to_string(),
@@ -307,7 +307,10 @@ mod tests {
         assert!(settings.show_prices);
         assert!(settings.show_student_price);
         assert!(settings.show_staff_price);
-        assert!(settings.show_guest_price);
+        // Guest is off out of the box: an outsider to UEF is very unlikely to be
+        // installing this, and the third price group is what pushes the price
+        // string wide enough to crowd the layout.
+        assert!(!settings.show_guest_price);
         assert!(!settings.show_price_group_names);
         assert!(!settings.show_restaurant_index_numbers);
         assert!(settings.show_allergens);

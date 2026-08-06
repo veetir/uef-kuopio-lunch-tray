@@ -272,12 +272,22 @@ fn renderable_group<'a>(
         options.show_prices,
         options.price_groups,
     );
+    // Standard and Compact draw the price inline, ahead of the dish name on the
+    // same row, so the prefix competes with the text it labels. Group names make
+    // it roughly three times wider ("Opiskelija 2,95 € / Henkilokunta 6,19 €
+    // / Vierailija 6,22 €"), which overruns the row: the renderer then floors the
+    // remaining width and clips the dish name away entirely. Classic puts the
+    // price on its own heading line and has room for the names.
+    let mut price_groups = options.price_groups;
+    if options.display_mode != crate::settings::LunchItemDisplayMode::Classic {
+        price_groups.names = false;
+    }
     let price_text = menu_price_for_restaurant_display(
         group,
         options.restaurant_code,
         options.provider,
         options.show_prices,
-        options.price_groups,
+        price_groups,
     );
     let price_prefix = if options.display_mode == crate::settings::LunchItemDisplayMode::Classic
         || group.presentation == MenuGroupPresentation::GeneralOffer
@@ -1024,6 +1034,48 @@ mod tests {
         let mut lines = Vec::new();
         append_menus(&mut lines, &menu, test_options(display_mode));
         lines
+    }
+
+    fn all_groups_named(display_mode: LunchItemDisplayMode) -> MenuRenderOptions<'static> {
+        let mut options = test_options(display_mode);
+        options.price_groups = PriceGroups {
+            student: true,
+            staff: true,
+            guest: true,
+            names: true,
+        };
+        options
+    }
+
+    #[test]
+    fn inline_price_prefix_drops_group_names_outside_classic() {
+        // Named prices for all three groups are wider than the popup, and the
+        // inline prefix competes with the dish name on the same row: the
+        // renderer floored the leftover width and clipped the name away.
+        for mode in [
+            LunchItemDisplayMode::Standard,
+            LunchItemDisplayMode::Compact,
+        ] {
+            let group = test_group("Lounas", "Opiskelija 2,95 € / Henkilökunta 6,19 €", "Soup");
+            let renderable =
+                renderable_group(0, &group, all_groups_named(mode)).expect("renderable group");
+            let prefix = renderable.price_prefix.expect("inline price prefix");
+            assert!(
+                !prefix.contains("Opiskelija"),
+                "{mode:?} kept group names in the inline prefix: {prefix}"
+            );
+        }
+    }
+
+    #[test]
+    fn classic_heading_still_shows_group_names() {
+        // Classic puts the price on its own heading line, so it has the room.
+        let group = test_group("Lounas", "Opiskelija 2,95 € / Henkilökunta 6,19 €", "Soup");
+        let renderable =
+            renderable_group(0, &group, all_groups_named(LunchItemDisplayMode::Classic))
+                .expect("renderable group");
+        assert!(renderable.price_prefix.is_none());
+        assert!(renderable.heading.contains("Opiskelija"));
     }
 
     fn test_options(display_mode: LunchItemDisplayMode) -> MenuRenderOptions<'static> {
