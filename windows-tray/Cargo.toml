@@ -1,6 +1,6 @@
 [package]
-name = "compass-lunch"
-version = "1.4.2"
+name = "lunch-tray"
+version = "1.4.3"
 edition = "2021"
 autobins = false
 
@@ -39,7 +39,7 @@ embed-resource = "3.0"
 criterion = "0.5"
 
 [[bin]]
-name = "compass-lunch"
+name = "LunchTray"
 path = "src/main.rs"
 test = false
 bench = false

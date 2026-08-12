@@ -28,8 +28,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_SETTINGCHANGE, WM_THEMECHANGED, WM_TIMER, WNDCLASSEXW, WS_CAPTION,
 };
 
-pub const TRAY_WND_CLASS: &str = "CompassLunchTrayWindow";
-pub const POPUP_WND_CLASS: &str = "CompassLunchPopupWindow";
+pub const TRAY_WND_CLASS: &str = "LunchTrayTrayWindow";
+pub const POPUP_WND_CLASS: &str = "LunchTrayPopupWindow";
 
 pub const WM_TRAY_CALLBACK: u32 = WM_APP + 1;
 pub const WM_APP_FETCH_COMPLETE: u32 = WM_APP + 2;
@@ -248,7 +248,16 @@ pub unsafe extern "system" fn tray_wndproc(
                             popup::resize_popup_keep_position(app.hwnd_popup(), &state);
                         }
                     }
-                    FetchApplyOutcome::BackgroundSuccess => {}
+                    FetchApplyOutcome::BackgroundSuccess => {
+                        // A prefetch just rewrote another restaurant's cache
+                        // file, which is exactly the input the layout budget is
+                        // built from. Without this the budget keeps yesterday's
+                        // widths until some setting change happens to rebuild
+                        // it, and the popup is sized too narrow for whatever the
+                        // prefetch brought in. Deliberately no resize here: the
+                        // popup on screen is not the restaurant that changed.
+                        popup::invalidate_layout_budget_cache();
+                    }
                     FetchApplyOutcome::BackgroundFailure => {}
                 }
             }
@@ -649,18 +658,6 @@ fn select_popup_restaurant_index(hwnd: HWND, app: &App, index: usize) {
 }
 
 fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
-    if let Some(code) = tray::restaurant_code_for_command(cmd) {
-        app.set_restaurant(code);
-        popup::clear_interaction_state(app.hwnd_popup());
-        let _ = app.load_cache_for_current();
-        app.maybe_refresh_on_selection();
-        if popup_is_visible(app.hwnd_popup()) {
-            let state = app.snapshot();
-            popup::resize_popup_keep_position(app.hwnd_popup(), &state);
-        }
-        return;
-    }
-
     match cmd {
         tray::CMD_LANGUAGE_FI => {
             app.set_language("fi");

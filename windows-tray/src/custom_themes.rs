@@ -21,6 +21,9 @@ pub struct CustomThemeEntry {
     pub bullet: Option<String>,
     #[serde(default)]
     pub border: Option<String>,
+    /// Fill painted behind every second menu group. Absent means no banding.
+    #[serde(default)]
+    pub group_band_color: Option<String>,
     #[serde(default)]
     pub border_color: Option<String>,
     #[serde(default)]
@@ -47,6 +50,7 @@ pub struct CustomThemeDef {
     pub font: CustomThemeFont,
     pub bullet: CustomThemeBullet,
     pub border: CustomThemeBorder,
+    pub group_band_color: Option<COLORREF>,
     /// Falls back to `divider_color` when the theme does not name one.
     pub border_color: COLORREF,
     pub shadow: bool,
@@ -188,6 +192,7 @@ fn parse_entry(entry: &CustomThemeEntry) -> Option<CustomThemeDef> {
         font: normalize_font_preset(entry.font.as_deref()),
         bullet: normalize_bullet_preset(entry.bullet.as_deref()),
         border: normalize_border_preset(entry.border.as_deref()),
+        group_band_color: entry.group_band_color.as_deref().and_then(parse_hex_color),
         border_color: entry
             .border_color
             .as_deref()
@@ -219,6 +224,7 @@ fn themes_path() -> std::path::PathBuf {
 
 fn default_themes_json() -> Vec<CustomThemeEntry> {
     vec![CustomThemeEntry {
+        group_band_color: None,
         name: "Custom1".to_string(),
         font: Some("default".to_string()),
         bullet: Some("triangle".to_string()),
@@ -300,6 +306,7 @@ mod tests {
             font: font.map(str::to_string),
             bullet: bullet.map(str::to_string),
             border: None,
+            group_band_color: None,
             border_color: None,
             shadow: None,
             bg_color: "#000000".to_string(),

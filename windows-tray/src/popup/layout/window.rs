@@ -261,7 +261,7 @@ pub(in crate::popup) fn header_title_y(
 pub(in crate::popup) fn header_title(state: &AppState) -> String {
     let list = available_restaurants(state.settings.enable_antell_restaurants);
     if list.is_empty() {
-        return "Compass Lunch".to_string();
+        return "LunchTray".to_string();
     }
 
     let index = list
@@ -278,7 +278,7 @@ pub(in crate::popup) fn header_title(state: &AppState) -> String {
 fn max_header_title_width(hdc: HDC, font: HFONT, settings: &Settings) -> i32 {
     let list = available_restaurants(settings.enable_antell_restaurants);
     if list.is_empty() {
-        return text_width_with_font(hdc, font, "Compass Lunch");
+        return text_width_with_font(hdc, font, "LunchTray");
     }
     let mut max_width = 0;
     for (idx, restaurant) in list.iter().enumerate() {
@@ -290,6 +290,32 @@ fn max_header_title_width(hdc: HDC, font: HFONT, settings: &Settings) -> i32 {
         max_width = max(max_width, text_width_with_font(hdc, font, &title));
     }
     max_width
+}
+
+/// Picks the content width the popup will be sized to.
+///
+/// The cached budget is the width that keeps the popup stable while the user
+/// switches restaurants, so it wins when it is the larger number. It cannot be
+/// allowed to win when it is *smaller* than what the restaurant on screen needs:
+/// the renderer clips a row that does not fit and appends an ellipsis, so a
+/// budget that lags behind the live menu silently truncates dish names. The
+/// budget lags whenever a background prefetch rewrites a cache file, so this is
+/// reachable in normal use rather than a theoretical case.
+///
+/// Taking the maximum can widen the popup on a switch, which is the thing the
+/// budget exists to prevent. That is the better trade: a resize is visible and
+/// harmless, a truncated dish name is neither. Wrapped line count and extra
+/// height already resolve the same way a few lines below.
+fn resolve_target_content_width(
+    budget_width: Option<i32>,
+    required_width: i32,
+    min_content_width: i32,
+    max_content_width: i32,
+) -> i32 {
+    budget_width
+        .unwrap_or(required_width)
+        .max(required_width)
+        .clamp(min_content_width, max_content_width)
 }
 
 fn desired_size(hwnd: HWND, state: &AppState) -> (i32, i32) {
@@ -333,10 +359,12 @@ fn desired_size(hwnd: HWND, state: &AppState) -> (i32, i32) {
             small_bold_font,
             dpi_y,
         );
-        let target_content_width = budget
-            .max_content_width_px
-            .unwrap_or(current_metrics.required_content_width)
-            .clamp(scale.min_content_width, scale.max_content_width);
+        let target_content_width = resolve_target_content_width(
+            budget.max_content_width_px,
+            current_metrics.required_content_width,
+            scale.min_content_width,
+            scale.max_content_width,
+        );
         let current_wrapped_metrics = measure_lines_layout(
             hdc,
             normal_font,
@@ -679,6 +707,27 @@ mod tests {
 
     fn scale() -> PopupScale {
         popup_scale_for_dpi(&Settings::default(), BASE_DPI)
+    }
+
+    #[test]
+    fn stale_budget_never_narrows_the_popup_below_the_live_menu() {
+        // A prefetch brought in a longer dish name than the cached budget knew
+        // about. Honouring the budget here is what truncated dish names with an
+        // ellipsis, so the wider live requirement has to win.
+        assert_eq!(resolve_target_content_width(Some(400), 470, 200, 900), 470);
+    }
+
+    #[test]
+    fn budget_still_wins_when_it_is_the_wider_number() {
+        // The ordinary case: some other restaurant needs more room, so the
+        // popup keeps that width and does not resize on every switch.
+        assert_eq!(resolve_target_content_width(Some(600), 470, 200, 900), 600);
+    }
+
+    #[test]
+    fn resolved_content_width_stays_inside_the_scale_bounds() {
+        assert_eq!(resolve_target_content_width(Some(50), 60, 200, 900), 200);
+        assert_eq!(resolve_target_content_width(None, 5000, 200, 900), 900);
     }
 
     #[test]

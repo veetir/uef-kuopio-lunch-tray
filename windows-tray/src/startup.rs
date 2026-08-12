@@ -10,12 +10,37 @@ use windows::Win32::System::Registry::{
 };
 
 const RUN_KEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
-const VALUE_NAME: &str = "CompassLunch";
+const VALUE_NAME: &str = "LunchTray";
+/// Value name written by releases up to 1.4.2, cleaned up on first run.
+const LEGACY_VALUE_NAME: &str = "CompassLunch";
 
 /// Reports whether the app is configured to start with the current user session.
 pub fn is_enabled() -> bool {
+    run_value_exists(VALUE_NAME)
+}
+
+/// Rewrites a pre-1.4.3 `CompassLunch` Run entry under the current name.
+///
+/// The old entry points at the old `compass-lunch.exe`, which no longer exists
+/// once the user replaces it with `LunchTray.exe`, so leaving it behind would
+/// mean a broken autostart on every sign-in. Called once at startup; a user who
+/// never enabled startup has nothing to migrate and this does nothing.
+pub fn migrate_legacy_run_value() {
+    if !run_value_exists(LEGACY_VALUE_NAME) {
+        return;
+    }
+    let was_enabled = !run_value_exists(VALUE_NAME);
+    let _ = remove_named_run_value(LEGACY_VALUE_NAME);
+    if was_enabled {
+        if let Some(path) = exe_path() {
+            let _ = set_run_value(&path);
+        }
+    }
+}
+
+fn run_value_exists(name: &str) -> bool {
     let subkey = to_wstring(RUN_KEY);
-    let value = to_wstring(VALUE_NAME);
+    let value = to_wstring(name);
     let mut size: u32 = 0;
     unsafe {
         RegGetValueW(
@@ -71,8 +96,12 @@ fn set_run_value(path: &str) -> anyhow::Result<()> {
 }
 
 fn remove_run_value() -> anyhow::Result<()> {
+    remove_named_run_value(VALUE_NAME)
+}
+
+fn remove_named_run_value(name: &str) -> anyhow::Result<()> {
     let subkey = to_wstring(RUN_KEY);
-    let value = to_wstring(VALUE_NAME);
+    let value = to_wstring(name);
     unsafe {
         let mut key = HKEY::default();
         if RegOpenKeyExW(

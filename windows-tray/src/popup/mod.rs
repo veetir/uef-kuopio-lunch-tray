@@ -203,6 +203,20 @@ struct PopupDesiredSizeCacheEntry {
 
 #[derive(Debug, Clone)]
 enum Line {
+    /// Zero-height marker emitted before each menu group's lines.
+    ///
+    /// Group boundaries are otherwise invisible to the renderer: Classic opens a
+    /// group with a `Heading`, Standard closes one with a `Subheading`, and
+    /// Compact emits neither, so there was no single signal a theme could hang
+    /// structure on.
+    ///
+    /// `offer` marks the general-offer groups — the "what the deals cost" block
+    /// that restaurants like Sorrento and Hyvä Huomen carry above the day's
+    /// dishes. A theme may band those, and since offers sort first and emit no
+    /// caption, consecutive ones fill into a single seamless block.
+    GroupStart {
+        offer: bool,
+    },
     Heading(String),
     DateTime {
         date: String,

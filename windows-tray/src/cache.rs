@@ -3,12 +3,11 @@
 use crate::restaurant::{provider_key, Provider};
 use anyhow::Context;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// Returns the cache directory used for fetched API responses.
 pub fn cache_dir() -> PathBuf {
-    let base = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| ".".to_string());
-    Path::new(&base).join("compass-lunch").join("cache")
+    crate::settings::settings_dir().join("cache")
 }
 
 /// Returns the cache file path for a provider, restaurant, and language combination.

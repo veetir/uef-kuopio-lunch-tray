@@ -516,7 +516,7 @@ pub fn format_report(batch_limit: Option<u32>) -> String {
         counters.dirty_pixels as f64 * 100.0 / counters.client_pixels as f64
     };
     let mut out = String::new();
-    let _ = writeln!(out, "=== Compass Lunch popup performance counters ===");
+    let _ = writeln!(out, "=== LunchTray popup performance counters ===");
     let _ = writeln!(
         out,
         "scope=popup paint API calls; executed calls, not syscalls"
@@ -663,10 +663,7 @@ pub fn format_report(batch_limit: Option<u32>) -> String {
 
 #[cfg(feature = "perf-counters")]
 pub fn report_path() -> PathBuf {
-    let base = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(base)
-        .join("compass-lunch")
-        .join("performance.log")
+    crate::settings::settings_dir().join("performance.log")
 }
 
 #[cfg(feature = "perf-counters")]

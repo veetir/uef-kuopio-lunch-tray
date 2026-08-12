@@ -34,6 +34,12 @@ pub(super) struct ThemePalette {
     /// which is the *content* ink and only coincidentally worked on the header.
     pub(super) button_text_color: COLORREF,
     pub(super) divider_color: COLORREF,
+    /// Optional fill behind the general-offer groups — the "what the deals cost"
+    /// block that Sorrento and Hyvä Huomen carry above the day's dishes. The only
+    /// structural vocabulary a theme has inside the content area; everything else
+    /// there is differentiated by ink colour and font size alone. `None` for
+    /// themes whose idiom groups with edges instead of fills.
+    pub(super) group_band_color: Option<COLORREF>,
     /// Colour of a flat chrome edge. Built-in themes reuse their divider; custom
     /// themes may name their own via `border_color` in `themes.json`.
     pub(super) border_color: COLORREF,
@@ -124,14 +130,17 @@ pub(super) fn recipe_detail_palette(theme: &str, palette: &ThemePalette) -> Reci
             ingredient_highlight_color: palette.favorite_highlight_color,
             selection_text_color: rgb(255, 255, 255),
         },
-        // A ruled white slip on the ledger sheet.
+        // An editor widget: the sidebar grey against the white page, ruled in the
+        // panel border. Ingredient matches take Light+'s function olive, which
+        // leaves the string red free to mean "favourite" and nothing else —
+        // the same division Dracula makes with yellow and pink.
         "light" => RecipeDetailPalette {
-            bg_color: rgb(250, 251, 253),
-            border_color: rgb(188, 199, 210),
+            bg_color: rgb(243, 243, 243),
+            border_color: rgb(200, 200, 200),
             label_color: palette.heading_color,
             text_color: palette.body_text_color,
-            ingredient_highlight_color: palette.favorite_highlight_color,
-            selection_text_color: rgb(255, 255, 255),
+            ingredient_highlight_color: rgb(121, 94, 38),
+            selection_text_color: rgb(0, 0, 0),
         },
         _ => RecipeDetailPalette {
             bg_color: lerp_color(palette.bg_color, palette.selection_bg_color, 0.55),
@@ -213,24 +222,36 @@ pub(super) fn marker_inactive_color(palette: &ThemePalette) -> COLORREF {
 
 pub(super) fn theme_palette(theme: &str) -> ThemePalette {
     match theme {
-        // An accountant's ledger: pale ruled stock, navy ink, and the one
-        // palette here whose accents carry meaning — green for credits on the
-        // diet tags, red for debits on the favourites. Georgia because the
-        // referent is print, not a screen.
+        // VS Code Light+, the counterpart to Dracula below. Text takes the Light+
+        // syntax colours — #0000FF keyword, #008000 comment, #267F99 type,
+        // #A31515 string — on the #FFFFFF editor background, and the chrome takes
+        // its UI tokens: #ADD6FF selection, #C8C8C8 panel border, #F3F3F3 widget.
+        //
+        // The header is the status bar (#007ACC) rather than the title bar, which
+        // is the one deliberate departure. Light+'s title bar is #DDDDDD, near
+        // enough to the page that the header would lose its edge and the rail
+        // markers their contrast; the status bar blue is also the colour anyone
+        // would name if asked what VS Code light looks like.
+        //
+        // The button face is that blue darkened rather than a borrowed token:
+        // Light+ sets button.background to the same #007ACC as the bar, so a
+        // faithful copy would leave the buttons invisible on it.
         "light" => ThemePalette {
-            bg_color: rgb(233, 237, 242),
-            body_text_color: rgb(35, 43, 51),
-            heading_color: rgb(27, 58, 107),
-            header_title_color: rgb(233, 237, 242),
-            suffix_color: rgb(94, 107, 120),
-            suffix_highlight_color: rgb(20, 90, 50),
-            favorite_highlight_color: rgb(155, 27, 27),
-            selection_bg_color: rgb(219, 227, 236),
-            header_bg_color: rgb(27, 58, 107),
-            button_bg_color: rgb(46, 84, 144),
-            button_text_color: rgb(233, 237, 242),
-            divider_color: rgb(188, 199, 210),
-            border_color: rgb(188, 199, 210),
+            bg_color: rgb(255, 255, 255),
+            body_text_color: rgb(0, 0, 0),
+            heading_color: rgb(0, 0, 255),
+            header_title_color: rgb(255, 255, 255),
+            suffix_color: rgb(0, 128, 0),
+            suffix_highlight_color: rgb(38, 127, 153),
+            favorite_highlight_color: rgb(163, 21, 21),
+            selection_bg_color: rgb(173, 214, 255),
+            header_bg_color: rgb(0, 122, 204),
+            button_bg_color: rgb(0, 90, 158),
+            button_text_color: rgb(255, 255, 255),
+            divider_color: rgb(200, 200, 200),
+            // Light+'s widget grey, the same token the recipe panel uses. The theme already says regions look like this.
+            group_band_color: Some(rgb(243, 243, 243)),
+            border_color: rgb(200, 200, 200),
         },
         // Dracula. Every value is from the published palette: the syntax
         // colours for text, and Dracula's own UI tokens for the chrome —
@@ -250,6 +271,8 @@ pub(super) fn theme_palette(theme: &str) -> ThemePalette {
             button_bg_color: rgb(68, 71, 90),
             button_text_color: rgb(248, 248, 242),
             divider_color: rgb(25, 26, 33),
+            // Dracula's darker background, which is also this theme's header. Recessed rather than lit, so the block reads as chrome.
+            group_band_color: Some(rgb(33, 34, 44)),
             border_color: rgb(25, 26, 33),
         },
         "grandpa" => ThemePalette {
@@ -265,6 +288,13 @@ pub(super) fn theme_palette(theme: &str) -> ThemePalette {
             button_bg_color: rgb(184, 184, 184),
             button_text_color: rgb(0, 0, 0),
             divider_color: rgb(128, 128, 128),
+            // No band. This theme groups with edges, never with fills: the face
+            // is one flat tone everywhere and structure comes from a bevel, so
+            // the other greys here are all edge tokens (#808080 shadow, #FFFFFF
+            // highlight) and white means a sunken field. An unedged tonal step
+            // is a later idiom, and the navy headings already separate the offer
+            // block on their own.
+            group_band_color: None,
             border_color: rgb(128, 128, 128),
         },
         // Grandpa's structure in pink. The face is deliberately mid-toned
@@ -284,6 +314,9 @@ pub(super) fn theme_palette(theme: &str) -> ThemePalette {
             button_bg_color: rgb(223, 178, 203),
             button_text_color: rgb(52, 16, 38),
             divider_color: rgb(154, 112, 133),
+            // No band, for the same reason as grandpa above: this theme inherits
+            // that structure, so it inherits the rule that structure is edges.
+            group_band_color: None,
             border_color: rgb(154, 112, 133),
         },
         // Windows PowerShell console. The background is the exact value the
@@ -306,6 +339,8 @@ pub(super) fn theme_palette(theme: &str) -> ThemePalette {
             button_bg_color: rgb(11, 61, 128),
             button_text_color: rgb(238, 237, 240),
             divider_color: rgb(31, 77, 131),
+            // A shade below the page, the same relationship the recipe panel already has to it.
+            group_band_color: Some(rgb(1, 24, 58)),
             border_color: rgb(31, 77, 131),
         },
         // Green phosphor terminal. A monochrome CRT has exactly one hue, so
@@ -327,6 +362,7 @@ pub(super) fn theme_palette(theme: &str) -> ThemePalette {
             button_bg_color: rgb(11, 74, 11),
             button_text_color: rgb(0, 212, 0),
             divider_color: rgb(31, 110, 31),
+            group_band_color: None,
             border_color: rgb(31, 110, 31),
         },
         "amber" => ThemePalette {
@@ -343,6 +379,7 @@ pub(super) fn theme_palette(theme: &str) -> ThemePalette {
             button_bg_color: rgb(110, 63, 18),
             button_text_color: rgb(255, 180, 24),
             divider_color: rgb(110, 63, 18),
+            group_band_color: None,
             border_color: rgb(110, 63, 18),
         },
         "teletext1" => ThemePalette {
@@ -361,6 +398,8 @@ pub(super) fn theme_palette(theme: &str) -> ThemePalette {
             button_bg_color: rgb(48, 48, 208),
             button_text_color: rgb(255, 255, 255),
             divider_color: rgb(255, 0, 0),
+            // Teletext drew solid background blocks natively; a blue field behind a section is the format working as designed, not decoration added to it.
+            group_band_color: Some(rgb(0, 0, 180)),
             border_color: rgb(255, 0, 0),
         },
         "teletext2" => ThemePalette {
@@ -379,6 +418,8 @@ pub(super) fn theme_palette(theme: &str) -> ThemePalette {
             button_bg_color: rgb(0, 145, 0),
             button_text_color: rgb(255, 255, 255),
             divider_color: rgb(255, 0, 255),
+            // The same blue block, held darker so it does not fight the green header.
+            group_band_color: Some(rgb(0, 0, 128)),
             border_color: rgb(255, 0, 255),
         },
         _ => {
@@ -396,6 +437,7 @@ pub(super) fn theme_palette(theme: &str) -> ThemePalette {
                     button_bg_color: custom.button_bg_color,
                     button_text_color: custom.button_text_color,
                     divider_color: custom.divider_color,
+                    group_band_color: custom.group_band_color,
                     border_color: custom.divider_color,
                 }
             } else {
@@ -412,6 +454,7 @@ pub(super) fn theme_palette(theme: &str) -> ThemePalette {
                     button_bg_color: COLORREF(0x00202020),
                     button_text_color: COLORREF(0x00FFFFFF),
                     divider_color: COLORREF(0x00202020),
+                    group_band_color: None,
                     border_color: COLORREF(0x00202020),
                 }
             }
@@ -427,7 +470,9 @@ pub(super) fn theme_font_family(theme: &str) -> &'static str {
     match theme {
         "amber" | "teletext1" | "teletext2" | "dark" | "blue" => "Consolas",
         "grandpa" | "grandma" => "Tahoma",
-        "light" => "Georgia",
+        // Consolas, matching Dark: both are editor themes now, so both take an
+        // editor's font. Light used Georgia when it was a print referent.
+        "light" => "Consolas",
         _ => crate::custom_themes::find_custom_theme(theme)
             .map(|custom| custom.font.family())
             .unwrap_or("Segoe UI"),

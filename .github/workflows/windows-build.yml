@@ -38,20 +38,20 @@ jobs:
             }
           }
           "WINDOWS_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "WINDOWS_ZIP=compass-lunch-windows-x64-v$version.zip" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "WINDOWS_ZIP=LunchTray-windows-x64-v$version.zip" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Package artifact
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item windows-tray/target/x86_64-pc-windows-msvc/release/compass-lunch.exe dist/
+          Copy-Item windows-tray/target/x86_64-pc-windows-msvc/release/LunchTray.exe dist/
           Copy-Item windows-tray/README_windows.md dist/
-          Compress-Archive -Path dist/compass-lunch.exe, dist/README_windows.md -DestinationPath "dist/${env:WINDOWS_ZIP}" -Force
+          Compress-Archive -Path dist/LunchTray.exe, dist/README_windows.md -DestinationPath "dist/${env:WINDOWS_ZIP}" -Force
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: compass-lunch-windows-x64
+          name: LunchTray-windows-x64
           path: dist/${{ env.WINDOWS_ZIP }}
 
       - name: Release asset

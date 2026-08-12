@@ -9,10 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 static LOG_ENABLED: AtomicBool = AtomicBool::new(false);
 
 fn log_path() -> PathBuf {
-    let base = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(base)
-        .join("compass-lunch")
-        .join("compass-lunch.log")
+    crate::settings::settings_dir().join("LunchTray.log")
 }
 
 /// Enables or disables diagnostic logging globally for the current process.

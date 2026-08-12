@@ -205,6 +205,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                             border_edge,
                             bullet_style,
                             bullet_color: layer_bullet,
+                            group_band_color: palette.group_band_color,
                             favorites: &favorites,
                             selection: None,
                             capture: None,
@@ -276,6 +277,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                             border_edge,
                             bullet_style,
                             bullet_color: layer_bullet,
+                            group_band_color: palette.group_band_color,
                             favorites: &favorites,
                             selection: None,
                             capture: None,
@@ -385,6 +387,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                             border_edge,
                             bullet_style,
                             bullet_color: old_bullet,
+                            group_band_color: palette.group_band_color,
                             favorites: &favorites,
                             selection: None,
                             capture: None,
@@ -429,6 +432,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                             border_edge,
                             bullet_style,
                             bullet_color: new_bullet,
+                            group_band_color: palette.group_band_color,
                             favorites: &favorites,
                             selection: None,
                             capture: None,
@@ -497,6 +501,7 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
                     border_edge,
                     bullet_style,
                     bullet_color: bullet_base_color,
+                    group_band_color: palette.group_band_color,
                     favorites: &favorites,
                     selection: selection.as_ref(),
                     capture: Some(&mut capture),
@@ -658,6 +663,7 @@ struct DrawLayerParams<'a> {
     small_bold_font: HFONT,
     bullet_style: BulletStyle,
     bullet_color: COLORREF,
+    group_band_color: Option<COLORREF>,
     border_edge: ChromeEdge,
     favorites: &'a FavoritesSnapshot,
     selection: Option<&'a SelectionRange>,
@@ -727,6 +733,25 @@ fn draw_switch_title(hdc: HDC, new_title: &str, ctx: &TitleContext<'_>) {
     draw_text_line(hdc, &placement.text, placement.x, placement.y);
 }
 
+/// Paints one row's slice of a group band, immediately before that row's text so
+/// the fill lands underneath it.
+///
+/// Rows are filled one at a time rather than the group in a single rect because
+/// the draw loop only learns a line's height by drawing it. That works out
+/// exactly: consecutive rows advance by `line_height` and so meet with no seam,
+/// and the only unfilled gaps are the ones that already separate groups.
+fn fill_band_row(hdc: HDC, band: Option<COLORREF>, width: i32, y: i32, line_height: i32) {
+    if let Some(color) = band {
+        let rect = RECT {
+            left: 0,
+            top: y,
+            right: width,
+            bottom: y + line_height,
+        };
+        fill_solid_rect(hdc, &rect, color);
+    }
+}
+
 fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerParams<'_>) {
     if params.draw_title {
         let placement = title_placement(
@@ -765,6 +790,7 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
     let mut y = params.scale.header_height + params.scale.padding_y + params.y_offset;
     let mut capture = params.capture;
     let mut after_status_break = false;
+    let mut band: Option<COLORREF> = None;
     for (line_index, line) in lines.iter().enumerate() {
         let dim_line = stale_mode
             && !after_status_break
@@ -773,6 +799,19 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                 Line::DateTime { .. } | Line::StaleNotice(_) | Line::StatusText(_) | Line::Spacer
             );
         match line {
+            // Only the offers block is banded. Alternating every other group was
+            // tried first and read as emphasis rather than structure: menu groups
+            // differ in height and kind, so a tint on every second one looks like
+            // one meal has been singled out. Offers are a real section — what the
+            // deals cost, above the day's dishes — so banding them says something
+            // true about the content.
+            //
+            // Rows are filled one at a time as they are drawn, which works
+            // because consecutive rows advance by exactly `line_height` and so
+            // meet with no seam.
+            Line::GroupStart { offer } => {
+                band = params.group_band_color.filter(|_| *offer && !dim_line);
+            }
             Line::Heading(text) => {
                 unsafe {
                     SelectObject(hdc, params.bold_font);
@@ -787,9 +826,11 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                 }
                 let wrapped = wrap_text_to_width(hdc, text, params.content_width);
                 if wrapped.is_empty() {
+                    fill_band_row(hdc, band, params.width, y, params.line_height);
                     y += params.line_height;
                 } else {
                     for row in wrapped {
+                        fill_band_row(hdc, band, params.width, y, params.line_height);
                         draw_text_line(hdc, &row, params.scale.padding_x, y);
                         y += params.line_height;
                     }
@@ -849,9 +890,11 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                     (params.content_width - bullet_width - prefix_width).max(24),
                 );
                 if wrapped.is_empty() {
+                    fill_band_row(hdc, band, params.width, y, params.line_height);
                     y += params.line_height;
                 } else {
                     for row in wrapped {
+                        fill_band_row(hdc, band, params.width, y, params.line_height);
                         draw_text_line(hdc, &row, indent, y + 1);
                         y += params.line_height;
                     }
@@ -872,9 +915,11 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                 }
                 let wrapped = wrap_text_to_width(hdc, text, params.content_width);
                 if wrapped.is_empty() {
+                    fill_band_row(hdc, band, params.width, y, params.line_height);
                     y += params.line_height;
                 } else {
                     for row in wrapped {
+                        fill_band_row(hdc, band, params.width, y, params.line_height);
                         draw_text_line(hdc, &row, params.scale.padding_x, y);
                         y += params.line_height;
                     }
@@ -944,6 +989,9 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                 recipe_key,
                 ingredient_alert,
             } => {
+                // The item's first row, filled before the bullet, price prefix
+                // or text go into it. Later rows fill themselves as they wrap.
+                fill_band_row(hdc, band, params.width, y, params.line_height);
                 let line_body_color = if dim_line {
                     stale_dim_color
                 } else {
@@ -1181,6 +1229,7 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                     y += params.line_height;
                 } else {
                     for (idx, row) in wrapped_main.iter().enumerate() {
+                        fill_band_row(hdc, band, params.width, y, params.line_height);
                         let line_x = params.scale.padding_x + bullet_width;
                         let main_x = line_x + prefix_width;
                         if idx == 0 {
@@ -1282,6 +1331,10 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                             (params.content_width - bullet_width - prefix_width).max(24),
                         );
                         if wrapped_suffix.len() == 1 {
+                            // Allergens pushed onto a row of their own. Missing
+                            // the fill here punched a hole through the middle of
+                            // the band, which is where it was most visible.
+                            fill_band_row(hdc, band, params.width, y, params.line_height);
                             draw_text_segments(
                                 hdc,
                                 suffix_segments,
@@ -1302,6 +1355,7 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                             );
                             y += params.line_height;
                         } else if wrapped_suffix.is_empty() {
+                            fill_band_row(hdc, band, params.width, y, params.line_height);
                             y += params.line_height;
                         } else {
                             unsafe {
@@ -1309,6 +1363,7 @@ fn draw_content_layer(hdc: HDC, title: &str, lines: &[Line], params: DrawLayerPa
                                 SetTextColor(hdc, line_suffix_color);
                             }
                             for row in wrapped_suffix {
+                                fill_band_row(hdc, band, params.width, y, params.line_height);
                                 draw_text_line(
                                     hdc,
                                     &row,
