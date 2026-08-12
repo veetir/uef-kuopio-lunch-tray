@@ -13,15 +13,19 @@ $zip  = "$env:TEMP\LunchTray.zip"
 $lnk  = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\LunchTray.lnk"
 
 Write-Host 'Looking up the latest LunchTray release...'
-$release = Invoke-RestMethod "https://api.github.com/repos/$repo/releases?per_page=100" -UseBasicParsing |
-    Where-Object { -not $_.draft -and -not $_.prerelease -and $_.tag_name -like 'windows-v*' } |
-    Select-Object -First 1
-if (-not $release) { throw "No published Windows release found in $repo." }
+# Assign before filtering. Invoke-RestMethod emits a JSON array as one
+# Object[] pipeline item, so piping it straight into Where-Object binds $_ to
+# the whole array and matches nothing. Piping a variable enumerates properly.
+$releases = Invoke-RestMethod "https://api.github.com/repos/$repo/releases?per_page=100" -UseBasicParsing
+$windows = @($releases | Where-Object { -not $_.draft -and -not $_.prerelease -and $_.tag_name -like 'windows-v*' })
+if ($windows.Count -eq 0) { throw "No published Windows release found in $repo." }
+$release = $windows[0]
 
 # Matches both LunchTray-windows-x64-v*.zip and the older
 # compass-lunch-windows-x64-v*.zip, so downgrades and reinstalls still work.
-$asset = $release.assets | Where-Object { $_.name -like '*windows-x64*.zip' } | Select-Object -First 1
-if (-not $asset) { throw "Release $($release.tag_name) has no Windows zip asset." }
+$assets = @($release.assets | Where-Object { $_.name -like '*windows-x64*.zip' })
+if ($assets.Count -eq 0) { throw "Release $($release.tag_name) has no Windows zip asset." }
+$asset = $assets[0]
 
 # 1.4.2 and earlier shipped compass-lunch.exe; 1.4.3 renamed it to LunchTray.exe.
 # The zip is named after the binary it carries, so it tells us which to expect.
