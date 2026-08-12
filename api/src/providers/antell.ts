@@ -13,6 +13,7 @@ import type {
   RecipeDetails
 } from "../types";
 import { parseDateNear } from "./dates";
+import { normalizeHoursRange } from "./hours";
 import {
   fetchOrDefault,
   responseText,
@@ -77,6 +78,7 @@ export function parseAntell(
 
   const groups = parseAntellGroups(printHtml);
   const details = parseAntellDetails(detailHtml, weekday);
+  const hours = extractAntellLunchHours(detailHtml);
   for (const group of groups) {
     for (const item of group.items) {
       const detail = details.get(mealKey(item.name));
@@ -86,9 +88,33 @@ export function parseAntell(
   return {
     contentLanguage,
     status: groups.length ? "serving" : "noMenu",
+    ...(hours ? { hours } : {}),
     offers: [],
     groups
   };
+}
+
+function extractAntellLunchHours(html: string): string | undefined {
+  for (const heading of html.matchAll(
+    /<h[1-6]\b[^>]*>([\s\S]*?)<\/h[1-6]>/gi
+  )) {
+    const label = htmlText(heading[1] ?? "").toLocaleLowerCase("fi");
+    if (label !== "lounas" && label !== "lunch") continue;
+    const following = html.slice((heading.index ?? 0) + heading[0].length);
+    const nextHeading = following.search(/<h[1-6]\b/i);
+    const section = following.slice(
+      0,
+      nextHeading >= 0 ? nextHeading : 2_000
+    );
+    const rawHours = htmlText(
+      capture(
+        section,
+        /<span\b[^>]*class=["'][^"']*\bhours\b[^"']*["'][^>]*>([\s\S]*?)<\/span>/i
+      ) ?? ""
+    );
+    return normalizeHoursRange(rawHours);
+  }
+  return undefined;
 }
 
 export function parseAntellGroups(html: string): MenuGroup[] {

@@ -1,7 +1,7 @@
 {
   "revision": "2026-08-02",
-  "cacheRevision": "2026-07-29.1",
-  "cacheFallbackRevisions": ["2026-07-28.1", "2026-07-27"],
+  "cacheRevision": "2026-08-03.1",
+  "cacheFallbackRevisions": ["2026-07-29.1", "2026-07-28.1", "2026-07-27"],
   "restaurants": [
     {
       "id": "snellmania",
