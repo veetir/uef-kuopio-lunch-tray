@@ -9,7 +9,13 @@
 
 ## Windows app
 
-See [Releases](https://github.com/veetir/uef-kuopio-lunch-tray/releases) for Windows downloads.
+### Install
+
+Run in PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/veetir/uef-kuopio-lunch-tray/master/install.ps1 | iex
+```
 
 ### Features
 
