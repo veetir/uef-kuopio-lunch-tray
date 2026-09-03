@@ -12,6 +12,7 @@ import {
   type ParsedProviderMenu,
   type ProviderRequest
 } from "./provider";
+import { normalizeHoursRange } from "./hours";
 
 export async function fetchCompassRssMenu(
   request: ProviderRequest
@@ -30,18 +31,27 @@ export async function fetchCompassRssMenu(
     request.restaurant.source.costNumber
   );
   endpoint.searchParams.set("language", language);
-  const xml = await responseText(
-    await fetchOrDefault(request.fetcher)(endpoint, {
+  const fetcher = fetchOrDefault(request.fetcher);
+  const [xml, pageHtml] = await Promise.all([
+    fetcher(endpoint, {
       headers: { Accept: "application/rss+xml, application/xml" }
-    })
-  );
-  return parseCompassRss(xml, language, request.date);
+    }).then(responseText),
+    request.restaurant.websiteUrl
+      ? fetcher(request.restaurant.websiteUrl, {
+          headers: { Accept: "text/html" }
+        })
+          .then(responseText)
+          .catch(() => "")
+      : Promise.resolve("")
+  ]);
+  return parseCompassRss(xml, language, request.date, pageHtml);
 }
 
 export function parseCompassRss(
   xml: string,
   contentLanguage: "fi" | "en",
-  date: string
+  date: string,
+  pageHtml = ""
 ): ParsedProviderMenu {
   const item = capture(xml, /<item\b[^>]*>([\s\S]*?)<\/item>/i) ?? "";
   const title = htmlText(capture(item, /<title\b[^>]*>([\s\S]*?)<\/title>/i) ?? "");
@@ -68,10 +78,12 @@ export function parseCompassRss(
       itemFromText(normalizeRssLine(line), stableResponseId("item", index))
     )
     .filter((candidate): candidate is LunchItem => candidate !== undefined);
+  const hours = extractCompassRssLunchHours(pageHtml, date);
 
   return {
     contentLanguage,
     status: items.length ? "serving" : "noMenu",
+    ...(hours ? { hours } : {}),
     offers: [],
     groups: items.length
       ? [
@@ -84,6 +96,28 @@ export function parseCompassRss(
         ]
       : []
   };
+}
+
+export function extractCompassRssLunchHours(
+  html: string,
+  date: string
+): string | undefined {
+  const dateMarker = [...html.matchAll(
+    /<time\b[^>]*datetime=["']([^"']+)["'][^>]*>[\s\S]*?<\/time>/gi
+  )].find(match => match[1] === date);
+  if (!dateMarker) return undefined;
+
+  const following = html.slice(
+    (dateMarker.index ?? 0) + dateMarker[0].length
+  );
+  const nextDate = following.search(/<time\b[^>]*datetime=["']/i);
+  const section = htmlText(
+    following.slice(0, nextDate >= 0 ? nextDate : 4_000)
+  );
+  const match = section.match(
+    /\b(?:lounas\s+tarjolla|lunch\s+served)\s+(\d{1,2}[.:]\d{2}\s*[-–—]\s*\d{1,2}[.:]\d{2})/i
+  );
+  return match?.[1] ? normalizeHoursRange(match[1]) : undefined;
 }
 
 function capture(value: string, expression: RegExp): string | undefined {

@@ -7,6 +7,7 @@ import huomenHours from "./fixtures/huomen-hours-snippet.html?raw";
 import pranzeria from "./fixtures/pranzeria-snippet.html?raw";
 import snellari from "./fixtures/snellari.rss?raw";
 import snellariNamedEntity from "./fixtures/snellari-named-entity.rss?raw";
+import snellariPage from "./fixtures/snellari-page-snippet.html?raw";
 import { restaurantConfiguration } from "../src/catalog";
 import { fetchRestaurantMenu } from "../src/menu";
 import { parseAntell } from "../src/providers/antell";
@@ -153,10 +154,20 @@ describe("provider normalization", () => {
       "fi",
       "2026-09-03",
       {
-        fetcher: vi.fn(async () => new Response(snellariNamedEntity)),
+        fetcher: vi.fn(async input =>
+          new Response(
+            String(input).includes("/menuapi/")
+              ? snellariNamedEntity
+              : snellariPage
+          )
+        ),
         now: new Date("2026-09-03T08:00:00.000Z")
       }
     );
+    expect(menu.service).toEqual({
+      status: "serving",
+      hours: "10:30–13:00"
+    });
     expect(menu.groups[0]?.items.at(-1)).toMatchObject({
       name: "Vönerlastuja",
       tags: ["A", "ILM", "L", "M", "Veg"]
