@@ -6,6 +6,9 @@ import antellHours from "./fixtures/antell-hours-snippet.html?raw";
 import huomenHours from "./fixtures/huomen-hours-snippet.html?raw";
 import pranzeria from "./fixtures/pranzeria-snippet.html?raw";
 import snellari from "./fixtures/snellari.rss?raw";
+import snellariNamedEntity from "./fixtures/snellari-named-entity.rss?raw";
+import { restaurantConfiguration } from "../src/catalog";
+import { fetchRestaurantMenu } from "../src/menu";
 import { parseAntell } from "../src/providers/antell";
 import {
   parseCompassGroups,
@@ -139,6 +142,24 @@ describe("provider normalization", () => {
     expect(parsed.groups[0]?.items[0]).toMatchObject({
       name: "Juustoista peruna-pinaattisosekeittoa",
       tags: ["*", "A", "G", "ILM", "L"]
+    });
+  });
+
+  it("decodes named HTML entities in a Compass RSS API menu", async () => {
+    const restaurant = restaurantConfiguration("cafe-snellari");
+    expect(restaurant).toBeDefined();
+    const menu = await fetchRestaurantMenu(
+      restaurant!,
+      "fi",
+      "2026-09-03",
+      {
+        fetcher: vi.fn(async () => new Response(snellariNamedEntity)),
+        now: new Date("2026-09-03T08:00:00.000Z")
+      }
+    );
+    expect(menu.groups[0]?.items.at(-1)).toMatchObject({
+      name: "Vönerlastuja",
+      tags: ["A", "ILM", "L", "M", "Veg"]
     });
   });
 

@@ -21,11 +21,17 @@ export function normalizeText(value: unknown): string {
 
 export function decodeHtml(value: string): string {
   const named: Record<string, string> = {
+    Auml: "Ä",
+    Aring: "Å",
+    Ouml: "Ö",
     amp: "&",
     apos: "'",
+    auml: "ä",
+    aring: "å",
     gt: ">",
     lt: "<",
     nbsp: " ",
+    ouml: "ö",
     quot: "\""
   };
   return value
@@ -37,7 +43,7 @@ export function decodeHtml(value: string): string {
       String.fromCodePoint(Number.parseInt(digits, 16))
     )
     .replace(/&([a-z]+);/gi, (entity, name: string) =>
-      named[name.toLowerCase()] ?? entity
+      named[name] ?? named[name.toLowerCase()] ?? entity
     );
 }
 
