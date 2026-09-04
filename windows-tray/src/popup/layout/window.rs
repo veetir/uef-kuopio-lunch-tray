@@ -23,18 +23,22 @@ use super::*;
 ///
 /// The shadow is composited by DWM out of process, so it costs the app no
 /// bitmap, no extra window, and nothing on the paint path.
-fn apply_popup_shadow(hwnd: HWND, theme: &str) {
+fn apply_popup_shadow(hwnd: HWND, settings: &Settings) -> bool {
     unsafe {
         let style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
         if style & WS_CAPTION.0 != 0 {
             // `--no-tray` builds a normal captioned window; leave its frame be.
-            return;
+            return false;
         }
 
-        // A sizing frame otherwise earns a 1px system border along every edge,
-        // drawn in the accent colour. Windows 11 lets us decline it; on Windows
-        // 10 the call fails harmlessly and the line stays.
-        let border = DWMWA_COLOR_NONE;
+        // Rounded Windows 11 windows normally carry a subtle compositor-drawn
+        // border. Keep it in rounded mode; suppress it for the original sharp
+        // popup, whose themes draw their own edge vocabulary.
+        let border = if settings.rounded_corners {
+            DWMWA_COLOR_DEFAULT
+        } else {
+            DWMWA_COLOR_NONE
+        };
         let _ = DwmSetWindowAttribute(
             hwnd,
             DWMWA_BORDER_COLOR,
@@ -42,19 +46,27 @@ fn apply_popup_shadow(hwnd: HWND, theme: &str) {
             std::mem::size_of_val(&border) as u32,
         );
 
-        // Windows 11 rounds the corners of any window with a sizing frame,
-        // which would be badly wrong on the retro themes.
-        let corner = DWMWCP_DONOTROUND;
-        let _ = DwmSetWindowAttribute(
+        let corner = if settings.rounded_corners {
+            DWMWCP_ROUND
+        } else {
+            DWMWCP_DONOTROUND
+        };
+        let native_rounding = DwmSetWindowAttribute(
             hwnd,
             DWMWA_WINDOW_CORNER_PREFERENCE,
             &corner as *const _ as *const _,
             std::mem::size_of_val(&corner) as u32,
-        );
+        )
+        .is_ok()
+            && settings.rounded_corners;
 
-        let wanted = theme_shadow_enabled(theme);
+        // Rounded mode deliberately opts into the complete Windows 11 chrome:
+        // a frame is required for reliable native rounding and supplies the
+        // matching compositor shadow. Sharp mode retains each theme's original
+        // shadow policy, including the shadowless retro themes.
+        let wanted = settings.rounded_corners || theme_shadow_enabled(&settings.theme);
         if wanted == (style & WS_THICKFRAME.0 != 0) {
-            return;
+            return native_rounding;
         }
         let updated = if wanted {
             style | WS_THICKFRAME.0
@@ -71,18 +83,62 @@ fn apply_popup_shadow(hwnd: HWND, theme: &str) {
             0,
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
         );
+        native_rounding
     }
+}
+
+fn apply_popup_shape(hwnd: HWND, rounded: bool, native_rounding: bool) {
+    unsafe {
+        let style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
+        if style & WS_CAPTION.0 != 0 {
+            return;
+        }
+        // A window region disables DWM's own anti-aliased rounded corners and
+        // shadow. Clear any old fallback region whenever native DWM rounding is
+        // available; retain the region only for Windows 10 compatibility.
+        if !rounded || native_rounding {
+            let _ = SetWindowRgn(hwnd, HRGN(0), true);
+            return;
+        }
+
+        let mut rect = RECT::default();
+        if GetClientRect(hwnd, &mut rect).is_err() {
+            return;
+        }
+        let dpi = GetDpiForWindow(hwnd).max(BASE_DPI as u32);
+        let radius = (10 * dpi as i32 / BASE_DPI).max(8);
+        let region = CreateRoundRectRgn(
+            rect.left,
+            rect.top,
+            rect.right + 1,
+            rect.bottom + 1,
+            radius * 2,
+            radius * 2,
+        );
+        if region.0 == 0 {
+            return;
+        }
+        if SetWindowRgn(hwnd, region, true) == 0 {
+            let _ = DeleteObject(HGDIOBJ(region.0));
+        }
+    }
+}
+
+pub(in crate::popup) fn refresh_popup_chrome(hwnd: HWND, state: &AppState) {
+    let native_rounding = apply_popup_shadow(hwnd, &state.settings);
+    apply_popup_shape(hwnd, state.settings.rounded_corners, native_rounding);
 }
 
 pub(in crate::popup) fn show_popup(hwnd: HWND, state: &AppState) {
     unsafe {
-        apply_popup_shadow(hwnd, &state.settings.theme);
+        let native_rounding = apply_popup_shadow(hwnd, &state.settings);
         let (width, height) = desired_size(hwnd, state);
         let mut cursor = POINT::default();
         let _ = GetCursorPos(&mut cursor);
         let (width, height) = constrain_size_to_work_area_near_point(width, height, cursor);
         let (x, y) = position_near_point(width, height, cursor);
         let _ = SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, SWP_SHOWWINDOW);
+        apply_popup_shape(hwnd, state.settings.rounded_corners, native_rounding);
         begin_open_animation(hwnd, state);
         request_repaint(hwnd);
     }
@@ -90,11 +146,12 @@ pub(in crate::popup) fn show_popup(hwnd: HWND, state: &AppState) {
 
 pub(in crate::popup) fn show_popup_at(hwnd: HWND, state: &AppState, anchor: POINT) {
     unsafe {
-        apply_popup_shadow(hwnd, &state.settings.theme);
+        let native_rounding = apply_popup_shadow(hwnd, &state.settings);
         let (width, height) = desired_size(hwnd, state);
         let (width, height) = constrain_size_to_work_area_near_point(width, height, anchor);
         let (x, y) = position_near_point(width, height, anchor);
         let _ = SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, SWP_SHOWWINDOW);
+        apply_popup_shape(hwnd, state.settings.rounded_corners, native_rounding);
         begin_open_animation(hwnd, state);
         request_repaint(hwnd);
     }
@@ -102,7 +159,7 @@ pub(in crate::popup) fn show_popup_at(hwnd: HWND, state: &AppState, anchor: POIN
 
 pub(in crate::popup) fn show_popup_for_tray_icon(hwnd: HWND, state: &AppState, tray_rect: RECT) {
     unsafe {
-        apply_popup_shadow(hwnd, &state.settings.theme);
+        let native_rounding = apply_popup_shadow(hwnd, &state.settings);
         let (width, height) = desired_size(hwnd, state);
         let hdc = windows::Win32::Graphics::Gdi::GetDC(hwnd);
         let dpi_y = GetDeviceCaps(hdc, LOGPIXELSY);
@@ -111,6 +168,7 @@ pub(in crate::popup) fn show_popup_for_tray_icon(hwnd: HWND, state: &AppState, t
         let (width, height) = constrain_size_to_work_area_near_tray_rect(width, height, tray_rect);
         let (x, y) = position_near_tray_rect(width, height, tray_rect, scale.anchor_gap);
         let _ = SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, SWP_SHOWWINDOW);
+        apply_popup_shape(hwnd, state.settings.rounded_corners, native_rounding);
         begin_open_animation(hwnd, state);
         request_repaint(hwnd);
     }
@@ -118,6 +176,7 @@ pub(in crate::popup) fn show_popup_for_tray_icon(hwnd: HWND, state: &AppState, t
 
 pub(in crate::popup) fn resize_popup_keep_position(hwnd: HWND, state: &AppState) {
     unsafe {
+        let native_rounding = apply_popup_shadow(hwnd, &state.settings);
         let mut rect = RECT::default();
         if GetWindowRect(hwnd, &mut rect).is_err() {
             show_popup(hwnd, state);
@@ -135,10 +194,12 @@ pub(in crate::popup) fn resize_popup_keep_position(hwnd: HWND, state: &AppState)
             && (rect.right - rect.left) == width
             && (rect.bottom - rect.top) == height
         {
+            apply_popup_shape(hwnd, state.settings.rounded_corners, native_rounding);
             request_repaint(hwnd);
             return;
         }
         let _ = SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, SWP_SHOWWINDOW);
+        apply_popup_shape(hwnd, state.settings.rounded_corners, native_rounding);
         request_repaint(hwnd);
     }
 }

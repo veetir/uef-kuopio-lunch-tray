@@ -34,6 +34,7 @@ Only do this for binaries downloaded from the official GitHub Releases page of t
 - Drag-select text on a dish row: toggle it as a favorite highlight
 - Right-click tray icon: open settings, refresh, and quit
 - Right-click tray icon > Theme > Layout > Lunch items: choose Classic, Standard, or Compact menu rows
+- Right-click tray icon > Theme > Rounded corners: use native Windows 11 widget corners and rounded header buttons
 
 ## First-time setup
 
@@ -55,6 +56,11 @@ The `settings.json` key for the menu row layout is `lunch_item_display_mode`.
 Supported values are `"classic"`, `"standard"`, and `"compact"`. New installs
 default to `"classic"` with prices shown; upgraded installs without this key keep
 the classic layout until changed from the tray menu.
+
+The `rounded_corners` setting controls both the popup outline and its header
+buttons. It defaults to `false`, preserving the original sharp appearance. On
+Windows 11 the popup uses native DWM corners and border; Windows 10 uses a
+compatibility fallback because that native compositor feature is unavailable.
 
 The app creates `themes.json` on first run. Add custom themes there to show them
 in the tray menu. Supported font presets are `"default"` (Segoe UI), `"classic"` (Tahoma),

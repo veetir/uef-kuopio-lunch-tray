@@ -38,8 +38,8 @@ pub(super) use text::{
 };
 pub(super) use window::{
     create_fonts, header_layout, header_marker_rects, header_marker_sizes, header_rail_top,
-    header_title, header_title_y, hide_popup, resize_popup_keep_position, show_popup,
-    show_popup_at, show_popup_for_tray_icon,
+    header_title, header_title_y, hide_popup, refresh_popup_chrome, resize_popup_keep_position,
+    show_popup, show_popup_at, show_popup_for_tray_icon,
 };
 
 pub(super) fn scale_px(base: i32, factor: f32) -> i32 {

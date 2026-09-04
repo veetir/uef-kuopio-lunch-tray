@@ -635,10 +635,12 @@ pub(super) fn draw_header_button(
     rect: &RECT,
     glyph: HeaderGlyph,
     bg_color: COLORREF,
+    surrounding_bg_color: COLORREF,
     glyph_color: COLORREF,
     pressed: bool,
     hovered: bool,
     edge: ChromeEdge,
+    rounded: bool,
 ) {
     let mut button_rect = *rect;
     let bg = if pressed && edge.style.press_shifts_fill() {
@@ -660,8 +662,12 @@ pub(super) fn draw_header_button(
         button_rect.right -= 1;
         button_rect.bottom -= 1;
     }
-    fill_solid_rect(hdc, &button_rect, bg);
-    draw_edge(hdc, &button_rect, edge.button(pressed), bg);
+    if rounded {
+        draw_rounded_button_surface(hdc, &button_rect, bg, surrounding_bg_color);
+    } else {
+        fill_solid_rect(hdc, &button_rect, bg);
+        draw_edge(hdc, &button_rect, edge.button(pressed), bg);
+    }
     let nudge = if pressed { 1 } else { 0 };
     let glyph_rect = RECT {
         left: button_rect.left + nudge,
@@ -672,12 +678,127 @@ pub(super) fn draw_header_button(
     draw_header_glyph(hdc, glyph, &glyph_rect, glyph_color);
 }
 
+const BUTTON_CORNER_SAMPLE_GRID: i32 = 8;
+
+fn rounded_corner_coverage(x: i32, y: i32, radius: i32) -> f32 {
+    let mut inside = 0;
+    let center = radius as f32;
+    let radius_squared = center * center;
+    for sample_y in 0..BUTTON_CORNER_SAMPLE_GRID {
+        for sample_x in 0..BUTTON_CORNER_SAMPLE_GRID {
+            let point_x =
+                x as f32 + (sample_x as f32 + 0.5) / BUTTON_CORNER_SAMPLE_GRID as f32 - center;
+            let point_y =
+                y as f32 + (sample_y as f32 + 0.5) / BUTTON_CORNER_SAMPLE_GRID as f32 - center;
+            if point_x * point_x + point_y * point_y <= radius_squared {
+                inside += 1;
+            }
+        }
+    }
+    inside as f32 / (BUTTON_CORNER_SAMPLE_GRID * BUTTON_CORNER_SAMPLE_GRID) as f32
+}
+
+fn fill_corner_pixel_pair(hdc: HDC, rect: &RECT, x: i32, y: i32, color: COLORREF) {
+    for (pixel_x, pixel_y) in [
+        (rect.left + x, rect.top + y),
+        (rect.right - 1 - x, rect.top + y),
+        (rect.left + x, rect.bottom - 1 - y),
+        (rect.right - 1 - x, rect.bottom - 1 - y),
+    ] {
+        fill_solid_rect(
+            hdc,
+            &RECT {
+                left: pixel_x,
+                top: pixel_y,
+                right: pixel_x + 1,
+                bottom: pixel_y + 1,
+            },
+            color,
+        );
+    }
+}
+
+fn draw_rounded_button_surface(
+    hdc: HDC,
+    rect: &RECT,
+    color: COLORREF,
+    surrounding_color: COLORREF,
+) {
+    let width = rect.right - rect.left;
+    let height = rect.bottom - rect.top;
+    let radius = (height / 4).max(4).min(width / 2).min(height / 2);
+    fill_solid_rect(
+        hdc,
+        &RECT {
+            left: rect.left + radius,
+            right: rect.right - radius,
+            ..*rect
+        },
+        color,
+    );
+    fill_solid_rect(
+        hdc,
+        &RECT {
+            top: rect.top + radius,
+            bottom: rect.bottom - radius,
+            ..*rect
+        },
+        color,
+    );
+
+    for y in 0..radius {
+        let mut first_solid = radius;
+        for x in 0..radius {
+            let coverage = rounded_corner_coverage(x, y, radius);
+            if coverage >= 1.0 {
+                first_solid = x;
+                break;
+            }
+            if coverage > 0.0 {
+                fill_corner_pixel_pair(
+                    hdc,
+                    rect,
+                    x,
+                    y,
+                    lerp_color(surrounding_color, color, coverage),
+                );
+            }
+        }
+        if first_solid < radius {
+            let top = rect.top + y;
+            let bottom = rect.bottom - 1 - y;
+            for row in [top, bottom] {
+                fill_solid_rect(
+                    hdc,
+                    &RECT {
+                        left: rect.left + first_solid,
+                        top: row,
+                        right: rect.left + radius,
+                        bottom: row + 1,
+                    },
+                    color,
+                );
+                fill_solid_rect(
+                    hdc,
+                    &RECT {
+                        left: rect.right - radius,
+                        top: row,
+                        right: rect.right - first_solid,
+                        bottom: row + 1,
+                    },
+                    color,
+                );
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         cached_row_boundaries, clear_row_boundary_cache, cross_stroke, favorite_match_ranges,
-        pressed_fill, ranges_overlap, segments_for_row, Arc, RowBoundaryKey, SelectableBoundary,
-        ROW_BOUNDARY_CACHE_LIMIT,
+        pressed_fill, ranges_overlap, rounded_corner_coverage, segments_for_row, Arc,
+        RowBoundaryKey, SelectableBoundary, ROW_BOUNDARY_CACHE_LIMIT,
     };
     use crate::popup::theme::{contrast_ratio, rgb};
 
@@ -695,6 +816,17 @@ mod tests {
             fonts: (normal, highlight),
             text: text.to_string(),
         }
+    }
+
+    #[test]
+    fn rounded_corner_coverage_antialiases_the_arc() {
+        let outside = rounded_corner_coverage(0, 0, 8);
+        let edge = rounded_corner_coverage(2, 2, 8);
+        let inside = rounded_corner_coverage(7, 7, 8);
+
+        assert_eq!(outside, 0.0);
+        assert!(edge > 0.0 && edge < 1.0);
+        assert_eq!(inside, 1.0);
     }
 
     /// The whole point: an unchanged row measured once is reused, and the reuse

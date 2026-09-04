@@ -102,30 +102,36 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
             &layout.prev,
             HeaderGlyph::Prev,
             palette.button_bg_color,
+            palette.header_bg_color,
             palette.button_text_color,
             pressed_button == Some(HeaderButtonAction::Prev),
             hovered_button == Some(HeaderButtonAction::Prev),
             border_edge,
+            state.settings.rounded_corners,
         );
         draw_header_button(
             hdc,
             &layout.next,
             HeaderGlyph::Next,
             palette.button_bg_color,
+            palette.header_bg_color,
             palette.button_text_color,
             pressed_button == Some(HeaderButtonAction::Next),
             hovered_button == Some(HeaderButtonAction::Next),
             border_edge,
+            state.settings.rounded_corners,
         );
         draw_header_button(
             hdc,
             &layout.close,
             HeaderGlyph::Close,
             palette.button_bg_color,
+            palette.header_bg_color,
             palette.button_text_color,
             false,
             hovered_button == Some(HeaderButtonAction::Close),
             border_edge,
+            state.settings.rounded_corners,
         );
         draw_header_marker_rail(
             hdc,
@@ -511,14 +517,19 @@ pub(in crate::popup) fn paint_popup(hwnd: HWND, state: &AppState) {
             store_selection_layout(capture.layout);
         }
 
-        // Frame last, over the header fill and content, so the edge is unbroken.
-        let frame_rect = RECT {
-            left: rect.left,
-            top: rect.top,
-            right: rect.right,
-            bottom: rect.bottom,
-        };
-        draw_edge(hdc, &frame_rect, border_edge, palette.bg_color);
+        // The theme frames are deliberately rectangular bevel/line systems.
+        // Clipping one into a rounded window leaves broken light/dark segments
+        // at the arcs. Rounded mode instead uses DWM's native border and shadow;
+        // sharp mode keeps the theme's exact original frame vocabulary.
+        if !state.settings.rounded_corners {
+            let frame_rect = RECT {
+                left: rect.left,
+                top: rect.top,
+                right: rect.right,
+                bottom: rect.bottom,
+            };
+            draw_edge(hdc, &frame_rect, border_edge, palette.bg_color);
+        }
 
         SelectObject(hdc, _old_font);
         // The fonts are shared and outlive this paint; see `create_fonts`.

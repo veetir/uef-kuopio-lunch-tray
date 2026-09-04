@@ -802,6 +802,14 @@ fn handle_command(hwnd: HWND, app: &App, cmd: u16) {
                 popup::resize_popup_keep_position(app.hwnd_popup(), &state);
             }
         }
+        tray::CMD_TOGGLE_ROUNDED_CORNERS => {
+            app.toggle_rounded_corners();
+            let state = app.snapshot();
+            popup::refresh_popup_chrome(app.hwnd_popup(), &state);
+            if popup_is_visible(app.hwnd_popup()) {
+                popup::request_repaint(app.hwnd_popup());
+            }
+        }
         tray::CMD_RESTAURANT_INDEX_DOTS => {
             app.set_restaurant_index_numbers(false);
             if popup_is_visible(app.hwnd_popup()) {

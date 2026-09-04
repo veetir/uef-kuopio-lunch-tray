@@ -25,6 +25,7 @@ pub struct Settings {
     pub show_price_group_names: bool,
     pub lunch_item_display_mode: LunchItemDisplayMode,
     pub theme: String,
+    pub rounded_corners: bool,
     pub show_restaurant_index_numbers: bool,
     pub widget_scale: String,
     pub show_allergens: bool,
@@ -50,6 +51,7 @@ impl Default for Settings {
             show_price_group_names: false,
             lunch_item_display_mode: LunchItemDisplayMode::Classic,
             theme: "dark".to_string(),
+            rounded_corners: false,
             show_restaurant_index_numbers: false,
             widget_scale: "normal".to_string(),
             show_allergens: true,
@@ -146,6 +148,7 @@ struct RawSettings {
     show_price_group_names: Option<bool>,
     lunch_item_display_mode: Option<String>,
     theme: Option<String>,
+    rounded_corners: Option<bool>,
     show_restaurant_index_numbers: Option<bool>,
     widget_scale: Option<String>,
     dark_mode: Option<bool>,
@@ -217,6 +220,7 @@ fn decode_settings(data: &str) -> anyhow::Result<Settings> {
             .map(normalize_lunch_item_display_mode)
             .unwrap_or(LunchItemDisplayMode::Classic),
         theme,
+        rounded_corners: raw.rounded_corners.unwrap_or(defaults.rounded_corners),
         show_restaurant_index_numbers: raw
             .show_restaurant_index_numbers
             .unwrap_or(defaults.show_restaurant_index_numbers),
@@ -312,6 +316,7 @@ mod tests {
         // string wide enough to crowd the layout.
         assert!(!settings.show_guest_price);
         assert!(!settings.show_price_group_names);
+        assert!(!settings.rounded_corners);
         assert!(!settings.show_restaurant_index_numbers);
         assert!(settings.show_allergens);
     }
@@ -327,6 +332,15 @@ mod tests {
             settings.lunch_item_display_mode,
             LunchItemDisplayMode::Classic
         );
+    }
+
+    #[test]
+    fn rounded_corners_are_persisted_and_default_to_sharp() {
+        let rounded = decode_settings(r#"{"rounded_corners":true}"#).unwrap();
+        let existing = decode_settings(r#"{"theme":"dark"}"#).unwrap();
+
+        assert!(rounded.rounded_corners);
+        assert!(!existing.rounded_corners);
     }
 
     #[test]

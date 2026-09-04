@@ -55,6 +55,7 @@ pub const CMD_TOGGLE_ANIMATIONS: u16 = 2228;
 pub const CMD_LUNCH_LAYOUT_CLASSIC: u16 = 2229;
 pub const CMD_LUNCH_LAYOUT_STANDARD: u16 = 2230;
 pub const CMD_LUNCH_LAYOUT_COMPACT: u16 = 2231;
+pub const CMD_TOGGLE_ROUNDED_CORNERS: u16 = 2232;
 pub const CMD_RESTAURANT_INDEX_DOTS: u16 = 2235;
 pub const CMD_RESTAURANT_INDEX_NUMBERS: u16 = 2236;
 pub const CMD_CUSTOM_THEME_BASE: u16 = 2600;
@@ -386,6 +387,12 @@ fn build_context_menu(state: &AppState) -> HMENU {
             }
         }
         let _ = AppendMenuW(theme_menu, MF_SEPARATOR, 0, PCWSTR::null());
+        append_menu_toggle(
+            theme_menu,
+            CMD_TOGGLE_ROUNDED_CORNERS,
+            "Rounded corners",
+            state.settings.rounded_corners,
+        );
         append_menu_toggle(
             theme_menu,
             CMD_TOGGLE_ANIMATIONS,

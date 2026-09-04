@@ -223,6 +223,13 @@ impl App {
         let _ = save_settings(&state.settings);
     }
 
+    /// Toggles rounded popup and header-button corners.
+    pub fn toggle_rounded_corners(&self) {
+        let mut state = self.state.lock().unwrap();
+        state.settings.rounded_corners = !state.settings.rounded_corners;
+        let _ = save_settings(&state.settings);
+    }
+
     /// Changes the popup scale preset.
     pub fn set_widget_scale(&self, value: &str) {
         let mut state = self.state.lock().unwrap();

@@ -107,6 +107,7 @@ fn sample_settings() -> Settings {
         show_price_group_names: false,
         lunch_item_display_mode: LunchItemDisplayMode::Standard,
         theme: "dark".to_string(),
+        rounded_corners: false,
         show_restaurant_index_numbers: false,
         widget_scale: "normal".to_string(),
         show_allergens: true,

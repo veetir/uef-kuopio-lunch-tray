@@ -22,13 +22,15 @@ use time::OffsetDateTime;
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{COLORREF, HWND, POINT, RECT};
 use windows::Win32::Graphics::Dwm::{
-    DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE, DWMWA_WINDOW_CORNER_PREFERENCE,
-    DWMWCP_DONOTROUND,
+    DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_COLOR_DEFAULT, DWMWA_COLOR_NONE,
+    DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND, DWMWCP_ROUND,
 };
 use windows::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, InvalidateRect, MonitorFromPoint, HDC, HFONT, LOGPIXELSY, MONITORINFO,
-    MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, SRCCOPY, TEXTMETRICW, TRANSPARENT,
+    CreateRoundRectRgn, GetMonitorInfoW, InvalidateRect, MonitorFromPoint, SetWindowRgn, HDC,
+    HFONT, HRGN, LOGPIXELSY, MONITORINFO, MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, SRCCOPY,
+    TEXTMETRICW, TRANSPARENT,
 };
+use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
     GetClientRect, GetCursorPos, GetWindowLongPtrW, GetWindowRect, KillTimer, SetTimer,
     SetWindowLongPtrW, SetWindowPos, ShowWindow, GWL_STYLE, HWND_TOPMOST, SWP_FRAMECHANGED,
@@ -471,6 +473,11 @@ pub fn show_popup_for_tray_icon(hwnd: HWND, state: &AppState, tray_rect: RECT) {
 /// Recomputes popup size while keeping the current anchored position.
 pub fn resize_popup_keep_position(hwnd: HWND, state: &AppState) {
     layout::resize_popup_keep_position(hwnd, state);
+}
+
+/// Reapplies the popup shape and DWM chrome after a setting changes.
+pub fn refresh_popup_chrome(hwnd: HWND, state: &AppState) {
+    layout::refresh_popup_chrome(hwnd, state);
 }
 
 /// Clears cached layout budgets after a settings change that affects wrapping.
