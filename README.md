@@ -1,5 +1,19 @@
 # UEF Kuopio Lunch Tray App
 
+## Install / update
+
+macOS (Terminal):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/veetir/uef-kuopio-lunch-tray/master/install.sh | bash
+```
+
+Windows (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/veetir/uef-kuopio-lunch-tray/master/install.ps1 | iex
+```
+
 ## Supported restaurants
 
 - Compass: Snellmania, Snellari, Canthia, Tietoteknia, Mediteknia, Caari
@@ -8,14 +22,6 @@
 - Sorrento: Pranzeria
 
 ## Windows app
-
-### Install
-
-Run in PowerShell:
-
-```powershell
-irm https://raw.githubusercontent.com/veetir/uef-kuopio-lunch-tray/master/install.ps1 | iex
-```
 
 ### Features
 
@@ -29,7 +35,7 @@ irm https://raw.githubusercontent.com/veetir/uef-kuopio-lunch-tray/master/instal
 
 ## macOS app
 
-See [Releases](https://github.com/veetir/uef-kuopio-lunch-tray/releases) for macOS downloads.
+Manual download: [GitHub Releases](https://github.com/veetir/uef-kuopio-lunch-tray/releases).
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="macos/assets/macos-dark.png">

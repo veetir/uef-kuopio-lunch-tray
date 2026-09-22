@@ -21,6 +21,9 @@ jobs:
           cache: npm
           cache-dependency-path: api/package-lock.json
 
+      - name: Check macOS installer shell syntax
+        run: bash -n install.sh
+
       - name: Install API dependencies
         working-directory: api
         run: npm ci
