@@ -330,6 +330,8 @@ function mealKey(value: string): string {
   return normalizeText(value)
     .normalize("NFD")
     .replace(/\p{Diacritic}/gu, "")
+    .replace(/[\p{Pd}\u2212]+/gu, "-")
+    .replace(/\s*-\s*/g, " - ")
     .toLocaleLowerCase("en");
 }
 

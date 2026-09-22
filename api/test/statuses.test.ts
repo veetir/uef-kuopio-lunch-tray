@@ -387,6 +387,69 @@ describe("service states", () => {
     expect(cache.puts).toBe(0);
   });
 
+  it("refreshes an early Compass menu once recipe details have settled", () => {
+    const restaurant = restaurantConfiguration("tietoteknia");
+    expect(restaurant).toBeDefined();
+    if (!restaurant) return;
+    const earlyMenu = {
+      ...(contractMenu as RestaurantMenu),
+      freshness: {
+        fetchedAt: "2026-07-23T21:01:00.000Z",
+        isStale: false
+      }
+    };
+
+    expect(
+      shouldRefreshCachedMenu(
+        earlyMenu,
+        new Date("2026-07-23T23:59:59.999Z"),
+        restaurant
+      )
+    ).toBe(false);
+    expect(
+      shouldRefreshCachedMenu(
+        earlyMenu,
+        new Date("2026-07-24T00:00:00.000Z"),
+        restaurant
+      )
+    ).toBe(true);
+
+    expect(
+      shouldRefreshCachedMenu(
+        {
+          ...earlyMenu,
+          freshness: {
+            fetchedAt: "2026-07-24T00:01:00.000Z",
+            isStale: false
+          }
+        },
+        new Date("2026-07-24T01:00:00.000Z"),
+        restaurant
+      )
+    ).toBe(false);
+  });
+
+  it("does not apply the recipe-detail refresh to other providers", () => {
+    const restaurant = restaurantConfiguration("antell-round");
+    expect(restaurant).toBeDefined();
+    if (!restaurant) return;
+    const earlyMenu = {
+      ...(contractMenu as RestaurantMenu),
+      freshness: {
+        fetchedAt: "2026-07-23T21:01:00.000Z",
+        isStale: false
+      }
+    };
+
+    expect(
+      shouldRefreshCachedMenu(
+        earlyMenu,
+        new Date("2026-07-24T00:00:00.000Z"),
+        restaurant
+      )
+    ).toBe(false);
+  });
+
   it("retries an unpublished menu after thirty minutes", () => {
     const menu = {
       ...(contractMenu as RestaurantMenu),

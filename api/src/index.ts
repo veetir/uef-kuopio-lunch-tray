@@ -66,6 +66,7 @@ const cacheExpirationSeconds = 7 * 24 * 60 * 60;
 const refreshStartMinutes = 0;
 const refreshEndMinutes = 15 * 60;
 const refreshIntervalMinutes = 6;
+const compassRecipeRefreshMinutes = 3 * 60;
 
 function json(
   value: unknown,
@@ -381,7 +382,17 @@ export function shouldRefreshCachedMenu(
   restaurant?: RestaurantConfiguration
 ): boolean {
   if (menu.freshness.isStale) return true;
-  if (menu.service.status === "serving") return false;
+  if (menu.service.status === "serving") {
+    if (restaurant?.source.type !== "compass") return false;
+    const fetchedAt = new Date(menu.freshness.fetchedAt);
+    if (!Number.isFinite(fetchedAt.getTime())) return true;
+    return (
+      helsinkiDate(fetchedAt) === menu.date &&
+      helsinkiDate(now) === menu.date &&
+      helsinkiMinutes(fetchedAt) < compassRecipeRefreshMinutes &&
+      helsinkiMinutes(now) >= compassRecipeRefreshMinutes
+    );
+  }
   if (menu.service.status === "closed") {
     if (
       restaurant &&

@@ -249,6 +249,31 @@ describe("provider normalization", () => {
     expect(parsed.hours).toBeUndefined();
   });
 
+  it("matches Antell recipe details across hyphen variants", () => {
+    const parsed = parseAntell(
+      `<div class="menu-date">Tiistai 22.9</div>
+       <section class="menu-section">
+         <h2 class="menu-title">Pääruoaksi</h2>
+         <ul><li>Butter chicken - kanaa intialaisittain (A, G, L)</li></ul>
+       </section>`,
+      `<section id="panel-Tuesday">
+         <li>
+           <button class="accordion__button">
+             Butter chicken &#8211; kanaa intialaisittain
+           </button>
+           <div class="tooltip__body">Broileri, tomaatti, kerma</div>
+         </li>
+       </section>`,
+      "fi",
+      "2026-09-22",
+      "tuesday"
+    );
+
+    expect(parsed.groups[0]?.items[0]?.recipe?.ingredients).toBe(
+      "Broileri, tomaatti, kerma"
+    );
+  });
+
   it("parses Sorrento dishes with standalone diet tags", () => {
     const parsed = parseSorrento(
       `<h6><strong>20SALAATTILOUNAS 10.90 € (SIS. SALAATTI, KAHVI)</strong></h6>
