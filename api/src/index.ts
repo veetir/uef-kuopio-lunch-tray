@@ -54,10 +54,12 @@ const securityHeaders = {
   "X-Robots-Tag": "noindex, nofollow, noarchive"
 };
 
+// Recipe enrichment can update a serving menu after its first publication.
+// Revalidate expired responses so clients receive those updates promptly.
 const jsonHeaders = {
   ...corsHeaders,
   ...securityHeaders,
-  "Cache-Control": "public, max-age=300, stale-while-revalidate=86400",
+  "Cache-Control": "public, max-age=300, must-revalidate",
   "Content-Type": "application/json; charset=utf-8"
 };
 
@@ -281,8 +283,8 @@ async function restaurantRoute(
     : unknownMenu(restaurant, language, date);
   return json(fallback, 200, {
     "Cache-Control": fallback.service.status === "unknown"
-      ? "public, max-age=60, stale-while-revalidate=300"
-      : "public, max-age=300, stale-while-revalidate=86400"
+      ? "public, max-age=60, must-revalidate"
+      : "public, max-age=300, must-revalidate"
   });
 }
 
@@ -305,8 +307,8 @@ async function snapshotRoute(
   );
   return json(snapshot, 200, {
     "Cache-Control": hasUnknown
-      ? "public, max-age=60, stale-while-revalidate=300"
-      : "public, max-age=300, stale-while-revalidate=86400"
+      ? "public, max-age=60, must-revalidate"
+      : "public, max-age=300, must-revalidate"
   });
 }
 

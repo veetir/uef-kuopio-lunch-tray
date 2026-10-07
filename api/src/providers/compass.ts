@@ -19,7 +19,6 @@ import {
 } from "./provider";
 
 interface CompassRoot {
-  RestaurantUrl?: unknown;
   MenusForDays?: CompassDay[] | null;
   ErrorText?: unknown;
 }
@@ -84,13 +83,13 @@ export async function fetchCompassMenu(
     request.restaurant.id
   );
   if (groups.length > 0) {
-    const pageUrl =
-      normalizeText(payload.RestaurantUrl) ||
-      request.restaurant.websiteUrl ||
-      "";
-    if (pageUrl) {
-      await enrichCompassRecipes(groups, pageUrl, language, fetcher);
-    }
+    await enrichCompassRecipes(
+      groups,
+      request.restaurant.source.costNumber,
+      request.date,
+      language,
+      fetcher
+    );
   }
 
   return {
@@ -160,28 +159,41 @@ function normalizedCompassTitle(
 
 async function enrichCompassRecipes(
   groups: MenuGroup[],
-  pageUrl: string,
+  costCenter: string,
+  date: string,
   language: string,
   fetcher: typeof fetch
 ): Promise<void> {
   try {
-    const html = await responseText(
-      await fetcher(pageUrl, { headers: { Accept: "text/html" } })
-    );
-    const references = compassRecipeReferences(html);
+    // The restaurant page defaults to its own date and language. Around
+    // midnight it can still contain yesterday's recipes (and always Finnish
+    // names on the Finnish page), even when the feed has today's menu.
+    const endpoint = new URL("https://www.compass-group.fi/menuapi/day-menus");
+    endpoint.searchParams.set("costCenter", costCenter);
+    endpoint.searchParams.set("date", date);
+    endpoint.searchParams.set("language", language);
+    const dayMenu = JSON.parse(await responseText(
+      await fetcher(endpoint, { headers: { Accept: "application/json" } })
+    )) as Record<string, unknown>;
+    if (!normalizeText(dayMenu.date).startsWith(date)) return;
+    const references = compassRecipeReferences(dayMenu);
     if (!references.length) return;
-    const wanted = new Map<string, RecipeReference>();
+    const wanted = new Map<number, RecipeReference>();
+    const itemRecipes = new Map<LunchItem, number>();
     for (const group of groups) {
       for (const item of group.items) {
         const reference = references.find(
           candidate => mealKey(candidate.name) === mealKey(item.name)
         );
-        if (reference) wanted.set(String(reference.id), reference);
+        if (reference) {
+          wanted.set(reference.id, reference);
+          itemRecipes.set(item, reference.id);
+        }
       }
     }
 
-    const details = new Map<string, RecipeDetails>();
-    const pending = [...wanted.values()].slice(0, 16);
+    const details = new Map<number, RecipeDetails>();
+    const pending = [...wanted.values()];
     for (let index = 0; index < pending.length; index += 4) {
       await Promise.all(pending.slice(index, index + 4).map(async reference => {
         try {
@@ -196,7 +208,7 @@ async function enrichCompassRecipes(
             )
           ) as Record<string, unknown>;
           const detail = parseCompassRecipe(payload, reference.id);
-          if (detail) details.set(mealKey(reference.name), detail);
+          if (detail) details.set(reference.id, detail);
         } catch {
           // Recipe enrichment is optional; the menu remains valid without it.
         }
@@ -205,69 +217,34 @@ async function enrichCompassRecipes(
 
     for (const group of groups) {
       for (const item of group.items) {
-        const detail = details.get(mealKey(item.name));
+        const id = itemRecipes.get(item);
+        const detail = id === undefined ? undefined : details.get(id);
         if (detail) item.recipe = detail;
       }
     }
   } catch {
-    // Restaurant pages occasionally fail independently of the JSON menu.
+    // Recipe references can fail independently of the JSON feed.
   }
 }
 
-export function compassRecipeReferences(html: string): RecipeReference[] {
-  const marker = html.indexOf("window.__INITIAL_MENU__");
-  if (marker < 0) return [];
-  const objectStart = html.indexOf("{", marker);
-  if (objectStart < 0) return [];
-  const json = balancedJsonObject(html, objectStart);
-  if (!json) return [];
-  try {
-    const root = JSON.parse(json) as Record<string, unknown>;
-    const dayMenu = root.dayMenu as Record<string, unknown> | undefined;
-    const packages = Array.isArray(dayMenu?.menuPackages)
-      ? dayMenu.menuPackages
-      : [];
-    const references: RecipeReference[] = [];
-    for (const rawPackage of packages) {
-      const menuPackage = rawPackage as Record<string, unknown>;
-      const meals = Array.isArray(menuPackage.meals)
-        ? menuPackage.meals
-        : [];
-      for (const rawMeal of meals) {
-        const meal = rawMeal as Record<string, unknown>;
-        const id = Number(meal.recipeId);
-        const name = normalizeText(meal.name);
-        if (Number.isInteger(id) && id > 0 && name) {
-          references.push({ id, name });
-        }
+function compassRecipeReferences(
+  dayMenu: Record<string, unknown>
+): RecipeReference[] {
+  const packages = Array.isArray(dayMenu.menuPackages)
+    ? dayMenu.menuPackages
+    : [];
+  const references: RecipeReference[] = [];
+  for (const menuPackage of packages) {
+    const meals = Array.isArray(menuPackage?.meals) ? menuPackage.meals : [];
+    for (const meal of meals) {
+      const id = Number(meal?.recipeId);
+      const name = normalizeText(meal?.name);
+      if (Number.isInteger(id) && id > 0 && name) {
+        references.push({ id, name });
       }
     }
-    return references;
-  } catch {
-    return [];
   }
-}
-
-function balancedJsonObject(value: string, start: number): string | undefined {
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  for (let index = start; index < value.length; index += 1) {
-    const character = value[index];
-    if (inString) {
-      if (escaped) escaped = false;
-      else if (character === "\\") escaped = true;
-      else if (character === "\"") inString = false;
-      continue;
-    }
-    if (character === "\"") inString = true;
-    else if (character === "{") depth += 1;
-    else if (character === "}") {
-      depth -= 1;
-      if (depth === 0) return value.slice(start, index + 1);
-    }
-  }
-  return undefined;
+  return references;
 }
 
 export function parseCompassRecipe(

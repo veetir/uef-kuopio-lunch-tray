@@ -387,6 +387,43 @@ describe("service states", () => {
     expect(cache.puts).toBe(0);
   });
 
+  it.each(["snapshot", "restaurants/tietoteknia/menu"])(
+    "requires revalidation of expired %s responses after recipes change",
+    async path => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-07-24T10:00:00Z"));
+      const cache = new MemoryKv();
+      const menu = structuredClone(contractMenu) as RestaurantMenu;
+      const key = menuCacheKey("tietoteknia", "fi", "2026-07-24");
+      const snapshot = {
+        ...restaurantCatalog(),
+        restaurants: [menu.restaurant],
+        requestedLanguage: "fi",
+        date: menu.date,
+        menus: [menu]
+      };
+      const store = () => {
+        cache.values.set(key, JSON.stringify(menu));
+        cache.values.set(snapshotCacheKey("fi", menu.date), JSON.stringify(snapshot));
+      };
+      store();
+      const url = `https://lunch.veeti.dev/v1/${path}?language=fi&date=2026-07-24`;
+      const env = { MENU_CACHE: cache as unknown as KVNamespace };
+      const before = await handleRequest(new Request(url), "test", env);
+      expect(before.headers.get("Cache-Control")).toBe("public, max-age=300, must-revalidate");
+      expect(before.headers.get("Cache-Control")).not.toContain("stale-while-revalidate");
+
+      menu.groups[0]!.items[0]!.recipe = { id: "compass-476", ingredients: "Onion" };
+      store();
+      const after = await handleRequest(new Request(url, {
+        headers: { "If-None-Match": before.headers.get("ETag")! }
+      }), "test", env);
+      expect(after.status).toBe(200);
+      expect(after.headers.get("ETag")).not.toBe(before.headers.get("ETag"));
+      expect(await after.text()).toContain("Onion");
+    }
+  );
+
   it("refreshes an early Compass menu once recipe details have settled", () => {
     const restaurant = restaurantConfiguration("tietoteknia");
     expect(restaurant).toBeDefined();
