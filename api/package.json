@@ -14,10 +14,11 @@
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
     "typescript": "^5.9.2",
-    "vitest": "^3.2.4",
+    "vitest": "^4.1.11",
     "wrangler": "^4.114.0"
   },
   "overrides": {
-    "undici": "7.29.0"
+    "undici": "7.30.0",
+    "sharp": "0.35.5"
   }
 }
